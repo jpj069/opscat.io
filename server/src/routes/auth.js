@@ -5,6 +5,7 @@ const { db, getSetting } = require('../db');
 const config = require('../config');
 const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError } = require('../util');
 const sec = require('../security');
+const mailer = require('../mailer');
 
 const router = express.Router();
 
@@ -34,14 +35,14 @@ router.post('/login', (req, res) => {
 
 // --- magic-link login (passwordless) ---
 // Always answers {ok:true} to prevent user enumeration. Token: 32 bytes,
-// 15 min TTL, single use; delivered via Resend.
+// 15 min TTL, single use; delivered via the configured mail transport.
 router.post('/magic-link', async (req, res) => {
   const ip = sec.clientIp(req);
   if (!sec.authLimiter.allow(`ml:${ip}`)) return httpError(res, 429, 'too many attempts, slow down');
   const { email } = req.body || {};
   if (!isEmail(email)) return httpError(res, 400, 'valid email required');
   const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.toLowerCase());
-  if (user && config.resendApiKey) {
+  if (user && mailer.mailConfigured()) {
     try {
       const token = crypto.randomBytes(32).toString('base64url');
       const t = now();
@@ -50,20 +51,17 @@ router.post('/magic-link', async (req, res) => {
         VALUES (?, ?, ?, ?)`).run(sha256(token), user.id, t, t + 15 * 60 * 1000);
       const url = `${config.baseUrl}/app/login?token=${token}`;
       const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
-      const resp = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          from, to: [user.email], subject: 'Your OpsCat sign-in link',
-          html: `<p style="font-family:sans-serif">Click to sign in to OpsCat (valid 15 minutes):</p>
+      // audit before the send so a delivery failure is still visible as a
+      // matched request (unknown addresses leave no trace on purpose)
+      sec.audit(user.id, 'magic_link_requested', ip);
+      await mailer.sendMail({
+        from, to: [user.email], subject: 'Your OpsCat sign-in link',
+        html: `<p style="font-family:sans-serif">Click to sign in to OpsCat (valid 15 minutes):</p>
 <p><a href="${url}" style="font-family:sans-serif;background:#388bfd;color:#fff;padding:10px 18px;
 border-radius:5px;text-decoration:none">Sign in to OpsCat</a></p>
 <p style="font-family:monospace;font-size:12px;color:#666">${url}</p>`,
-        }),
       });
-      if (!resp.ok) console.error('magic-link mail failed:', resp.status, (await resp.text()).slice(0, 200));
-      sec.audit(user.id, 'magic_link_requested', ip);
-    } catch (e) { console.error('magic-link error:', e.message); }
+    } catch (e) { console.error('magic-link mail failed:', e.message); }
   }
   res.json({ ok: true });
 });

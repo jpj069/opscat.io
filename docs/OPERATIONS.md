@@ -19,8 +19,14 @@ has no host port on purpose. Set your domain in `.env`:
 OPSCAT_DOMAIN=monitoring.example.com     # Caddy auto-provisions TLS
 OPSCAT_BASE_URL=https://monitoring.example.com
 OPSCAT_SECRET=<long random string>       # cookie/crypto secret; generate once
-# optional e-mail (alerts + magic-link login) via Resend:
+# optional e-mail (alerts + magic-link login) — EITHER the Resend API:
 RESEND_API_KEY=
+# OR any SMTP relay (SES, Mailgun, corporate smarthost, …):
+SMTP_HOST=
+SMTP_PORT=587                            # 587 submission (default); 465 with SMTP_SECURE=1
+SMTP_USER=
+SMTP_PASS=
+SMTP_SECURE=0                            # 1 = implicit TLS (port 465)
 OPSCAT_ALERT_FROM=alerts@example.com
 OPSCAT_AUTH_FROM=login@example.com
 OPSCAT_ADMIN_EMAIL=you@example.com       # first admin user (seeded on first boot)

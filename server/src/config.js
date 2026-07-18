@@ -16,6 +16,16 @@ module.exports = {
   // OPSCAT_SECRET encrypts SNMP communities and signs nothing else; generated+persisted if absent.
   secret: process.env.OPSCAT_SECRET || null,
   resendApiKey: process.env.RESEND_API_KEY || null,
+  // MAIL_TRANSPORT forces 'resend' or 'smtp'; unset = Resend when its key is
+  // set, otherwise SMTP when SMTP_HOST is set (see mailer.js).
+  mailTransport: process.env.MAIL_TRANSPORT || null,
+  smtp: {
+    host: process.env.SMTP_HOST || null,
+    port: int(process.env.SMTP_PORT, 587),
+    secure: bool(process.env.SMTP_SECURE, false), // true = implicit TLS (465)
+    user: process.env.SMTP_USER || null,
+    pass: process.env.SMTP_PASS || null,
+  },
   baseUrl: process.env.OPSCAT_BASE_URL || 'https://opscat.io',
   // --- Enterprise edition config (cloud) ---
   stripe: {
