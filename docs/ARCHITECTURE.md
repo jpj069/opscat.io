@@ -81,6 +81,23 @@ down interfaces generate pipeline events. Community strings are encrypted at res
 - Security headers via Caddy + app (CSP for the UI, no-sniff, frame-deny, HSTS).
 - Secrets only via environment (`OPSCAT_SECRET`, `RESEND_API_KEY`); never logged, never committed.
 
+## Multi-tenancy & editions
+
+- Every tenant table carries `org_id` (`organizations` is the root); **all** queries
+  are scoped by it. `requireSession` resolves the caller's org (`req.orgId`);
+  API keys, agent tokens and probe keys are org-bound, and the SSE stream plus the
+  ingest pipeline (event dedupe) operate per org. A missing `org_id` filter is a
+  security bug (see CONTRIBUTING.md).
+- `OPSCAT_EDITION` selects the runtime edition (`server/src/edition.js`):
+  `community` (default — single organization, no limits) or `cloud` (multi-tenant
+  SaaS: plan limits from `server/src/plans.js` enforced with `402`, Stripe billing,
+  self-service signup + Google OAuth, super-admin console). Enterprise modules live
+  in `server/src/ee/**` and the EE routes (`billing`, `superadmin`, `oauth`), loaded
+  via guarded `require` — the community tree runs without them (`docs/OPEN-CORE.md`).
+- Super-admins (`users.is_super_admin`) operate across organizations and may target
+  one explicitly via `?org=` / `X-OpsCat-Org`.
+- Public status pages are per-org: `/status` (default org) and `/status/:slug`.
+
 ## Scaling / HA path (documented now, executed when load demands)
 
 Current: 1 VPS ≈ everything. The seams are already cut so each step below is isolated:
@@ -99,10 +116,12 @@ Current: 1 VPS ≈ everything. The seams are already cut so each step below is i
 ## Repository layout
 
 ```
-server/   Express API + engines (this is the deployable unit)
-web/      React + Vite UI (built into server/public at docker build)
-sdk/js/   @opscat/sdk — dependency-free log SDK (Node + browser)
-agent/    opscat-agent.js — dependency-free server agent (+ --probe mode)
-deploy/   Caddyfile
-docs/     this file, API.md, OPERATIONS.md
+server/    Express API + engines (server/src/ee/** = Enterprise Edition)
+web/       React + Vite UI (built into server/public at docker build)
+sdk/js/    @opscat/sdk — dependency-free log SDK (Node + browser)
+agent/     opscat-agent.js — dependency-free server agent (+ --probe mode)
+marketing/ static marketing site served at opscat.io/ (private repo only)
+deploy/    sensor fleet provisioning — cloud-init, provider APIs, Terraform
+scripts/   publish-community.sh — filtered sync to the public repo
+docs/      this file, API.md, OPEN-CORE.md, OPERATIONS.md, SENSORS.md
 ```

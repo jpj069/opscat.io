@@ -9,7 +9,13 @@ Two surfaces:
   agent tokens (`oca_…`) or probe keys (`ocp_…`). Keys are created in the UI (Settings)
   and shown exactly once.
 
-Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HTML status page).
+Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HTML status
+page — per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
+(edition, public plan matrix, auth options for the login/pricing UI).
+
+**Multi-tenancy:** every session, API key, agent token and probe key is bound to one
+organization; all queries are scoped to it. Super-admins may target another org with
+`?org=<id>` or the `X-OpsCat-Org` header.
 
 ## Auth
 
@@ -21,6 +27,8 @@ Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HT
 | POST `/api/auth/change-password` | `{currentPassword, newPassword}` | min 12 chars |
 | GET `/api/auth/me` | — | current user + csrf |
 | POST `/api/auth/logout` | — | |
+| POST `/api/auth/signup` | `{orgName, name, email, password}` | cloud edition + signups open — creates organization + owner |
+| GET `/api/auth/google` | — | redirects to Google (login or signup); `GET /api/auth/google/callback` completes the flow |
 
 ## Ingest (`/v1`, API key scope `ingest`)
 
@@ -74,6 +82,30 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,lastSeenAt,online}`), POST (lead+) → `{token}` once, `GET /api/admin/agents/:id/metrics?hours=`
 - `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, alert_email_from, auth_email_from, teams_webhook_url, classifiers`
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
+
+## Billing (cloud edition, `/api/billing`)
+
+| Method & path | Notes |
+|---|---|
+| GET `/api/billing/status` | plan, subscription status, current period end, usage vs limits |
+| POST `/api/billing/checkout` | `{plan}` (admin) → `{url}` — Stripe Checkout session |
+| POST `/api/billing/portal` | (admin) → `{url}` — Stripe customer portal |
+| POST `/api/billing/webhook` | Stripe events; HMAC signature-verified, no session |
+| POST `/api/billing/setup` | (super-admin) idempotently creates products/prices in Stripe |
+
+Plan limits (`server/src/plans.js`) are enforced on create routes (users, API keys,
+agents, SNMP targets, checks, sensors): exceeding a limit returns
+`402 {error, limit, plan}`. Community edition enforces nothing.
+
+## Super-admin (cloud edition, `/api/superadmin` — requires `is_super_admin`)
+
+| Method & path | Notes |
+|---|---|
+| GET `/overview` | platform KPIs: orgs, users, MRR, ingest volume |
+| GET/POST `/orgs` · GET/PATCH/DELETE `/orgs/:id` | manage organizations (plan, status) |
+| POST `/orgs/:id/impersonate` | switch the session into that org (audited) |
+| POST `/users/:id/super-admin` | grant/revoke the platform role |
+| GET `/audit` | platform-wide audit trail |
 
 Errors are always JSON `{error}` with proper status codes. Rate limits: auth 10/min/IP,
 API 300/min/session, ingest 600/min/key → `429`.
