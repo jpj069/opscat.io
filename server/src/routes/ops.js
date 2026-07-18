@@ -240,6 +240,8 @@ router.get('/analytics', (req, res) => {
 });
 
 // ---- alert rules + notifications ----
+const RULE_CHANNELS = ['email', 'teams', 'webhook', 'slack', 'telegram', 'discord', 'ntfy', 'pushover'];
+
 router.get('/rules', (req, res) => {
   const rules = db.prepare('SELECT * FROM alert_rules WHERE org_id = ? ORDER BY id').all(req.orgId)
     .map((r) => ({ id: r.id, name: r.name, enabled: !!r.enabled, channel: r.channel,
@@ -251,7 +253,7 @@ router.get('/rules', (req, res) => {
 router.post('/rules', sec.requireRole('lead'), (req, res) => {
   const { name, channel, triggerName, severityMin, cooldownM, recipients } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  if (!['email', 'teams', 'webhook'].includes(channel)) return httpError(res, 400, 'bad channel');
+  if (!RULE_CHANNELS.includes(channel)) return httpError(res, 400, 'bad channel');
   const rec = Array.isArray(recipients) ? recipients.filter((r) => typeof r === 'string').slice(0, 20) : [];
   const info = db.prepare(`INSERT INTO alert_rules (org_id, name, enabled, channel, trigger_name, severity_min,
     cooldown_m, recipients, created_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`)
@@ -275,7 +277,7 @@ router.patch('/rules/:id', sec.requireRole('lead'), (req, res) => {
     WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null,
       typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
-      ['email', 'teams', 'webhook'].includes(b.channel) ? b.channel : null,
+      RULE_CHANNELS.includes(b.channel) ? b.channel : null,
       b.triggerName !== undefined ? 1 : 0, b.triggerName || null,
       Number.isFinite(b.severityMin) ? clampInt(b.severityMin, 0, 100, 60) : null,
       Number.isFinite(b.cooldownM) ? clampInt(b.cooldownM, 1, 1440, 15) : null,

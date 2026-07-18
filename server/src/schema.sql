@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   org_id        INTEGER NOT NULL DEFAULT 1,
   name          TEXT NOT NULL,
   enabled       INTEGER NOT NULL DEFAULT 1,
-  channel       TEXT NOT NULL CHECK (channel IN ('email','teams','webhook')),
+  channel       TEXT NOT NULL CHECK (channel IN
+                  ('email','teams','webhook','slack','telegram','discord','ntfy','pushover')),
   trigger_name  TEXT,                        -- null = any event name
   severity_min  INTEGER NOT NULL DEFAULT 60,
   cooldown_m    INTEGER NOT NULL DEFAULT 15,

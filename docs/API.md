@@ -80,7 +80,7 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET /api/logs?hours=&q=&limit=` → `[{ts,device,line,sev}]`
 - `GET /api/dashboard` → `{sevCounts, openCases, mttrMs, logs24, events24, casesByAnalyst}`
 - `GET /api/analytics?range=24h|7d|30d` → `{volume:[{d,c,h,m,l}], mttrDaily:[{d,v}], topTypes, topServers, totals:{events,mttrMs,resolutionRate,notifications,notificationsFailed}}`
-- `GET/POST/PATCH/DELETE /api/rules[/:id]` — `{name,enabled,channel:'email'|'teams'|'webhook',triggerName,severityMin,cooldownM,recipients:[]}` (lead+ to modify)
+- `GET/POST/PATCH/DELETE /api/rules[/:id]` — `{name,enabled,channel:'email'|'teams'|'webhook'|'slack'|'telegram'|'discord'|'ntfy'|'pushover',triggerName,severityMin,cooldownM,recipients:[]}` (lead+ to modify). `recipients` per channel: email addresses, webhook/Slack/Discord/ntfy URLs, Telegram chat ids, Pushover user keys; Telegram/Pushover need `telegram_bot_token`/`pushover_token` in settings
 - `GET /api/notifications` → `[{ts,rule,event,channel,ok,error}]`
 - `GET/POST /api/incidents`, `POST /api/incidents/:id/status` (`{status,message?}`), `PATCH /api/incidents/:id` (`{title?,severity?,published?,rca:{summary,impact,rootCause,resolution,actions}}`) — incident objects: `{id,label,title,severity,status,published,startedAt,resolvedAt,durationMs,updates:[{ts,status,message}],rca}`
 - `GET /api/admin/components` → `[{id,name,group,status,uptimePct,days:[{day,worst}]}]`; POST/PATCH/DELETE for lead+ (`status` ∈ operational|degraded|partial|major|maintenance)
@@ -89,7 +89,7 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET/POST/PATCH /api/admin/apikeys` (lead+) — POST → `{key}` shown once
 - `GET/POST/PATCH/DELETE /api/admin/snmp/targets` (lead+) — `{name,host,port,community,oids:[{oid,label}],intervalS}`
 - `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,lastSeenAt,online}`), POST (lead+) → `{token}` once, `GET /api/admin/agents/:id/metrics?hours=`
-- `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, alert_email_from, auth_email_from, teams_webhook_url, classifiers`
+- `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, alert_email_from, auth_email_from, teams_webhook_url, telegram_bot_token, pushover_token, classifiers`
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 
 ## Billing (cloud edition, `/api/billing`)

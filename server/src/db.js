@@ -91,9 +91,46 @@ const MIGRATIONS = [
         .run('admin', first.id);
     }
   },
+  // idx 2 -> version 3: more alert channels (slack, telegram, discord, ntfy,
+  // pushover). The channel CHECK is baked into the table, so rebuild it.
+  () => {
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alert_rules'").get();
+    if (!ddl || ddl.sql.includes("'slack'")) return; // fresh install already has the wide CHECK
+    db.exec(`
+      CREATE TABLE alert_rules_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        INTEGER NOT NULL DEFAULT 1,
+        name          TEXT NOT NULL,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        channel       TEXT NOT NULL CHECK (channel IN
+                        ('email','teams','webhook','slack','telegram','discord','ntfy','pushover')),
+        trigger_name  TEXT,
+        severity_min  INTEGER NOT NULL DEFAULT 60,
+        cooldown_m    INTEGER NOT NULL DEFAULT 15,
+        recipients    TEXT NOT NULL DEFAULT '[]',
+        created_at    INTEGER NOT NULL
+      );
+      INSERT INTO alert_rules_new (id, org_id, name, enabled, channel, trigger_name,
+        severity_min, cooldown_m, recipients, created_at)
+        SELECT id, org_id, name, enabled, channel, trigger_name,
+          severity_min, cooldown_m, recipients, created_at FROM alert_rules;
+      DROP TABLE alert_rules;
+      ALTER TABLE alert_rules_new RENAME TO alert_rules;
+      CREATE INDEX IF NOT EXISTS idx_rules_org ON alert_rules(org_id);
+    `);
+  },
 ];
-for (let v = getVersion(); v < MIGRATIONS.length; v++) {
-  db.transaction(() => { MIGRATIONS[v](); db.pragma(`user_version = ${v + 1}`); })();
+// Foreign keys are off while migrating so table rebuilds (drop + rename) do not
+// cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);
+// a foreign_key_check afterwards guards against real integrity breaks.
+if (getVersion() < MIGRATIONS.length) {
+  db.pragma('foreign_keys = OFF');
+  for (let v = getVersion(); v < MIGRATIONS.length; v++) {
+    db.transaction(() => { MIGRATIONS[v](); db.pragma(`user_version = ${v + 1}`); })();
+  }
+  db.pragma('foreign_keys = ON');
+  const fkErrors = db.pragma('foreign_key_check');
+  if (fkErrors.length) throw new Error(`migration left broken foreign keys: ${JSON.stringify(fkErrors.slice(0, 5))}`);
 }
 
 // --- settings helpers ---

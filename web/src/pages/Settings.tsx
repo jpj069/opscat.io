@@ -149,6 +149,10 @@ export default function Settings() {
                 { placeholder: 'OpsCat <auth@opscat.io>' })}
               {textRow('teams_webhook_url', 'Teams webhook URL',
                 { mono: true, placeholder: 'https://outlook.office.com/webhook/…' })}
+              {textRow('telegram_bot_token', 'Telegram bot token',
+                { type: 'password', mono: true, placeholder: '123456:ABC-DEF…' })}
+              {textRow('pushover_token', 'Pushover app token',
+                { type: 'password', mono: true, placeholder: 'azGDORePK8gMaC0QOYAMyEEuzJnyUi' })}
             </>}
       </div>
 
