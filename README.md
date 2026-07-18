@@ -25,7 +25,8 @@ edition with `OPSCAT_EDITION=community` (default).
   at `/status` with 45-day component uptime.
 - **UI** — React SPA (`/app`): live monitor with streaming logs (SSE), dashboard,
   cases, analytics, alert rules, synthetics, terminal-style Classic View, user & key
-  management. Dark/light themes. Password + magic-link login.
+  management. Dark/light themes. Password, magic-link and GitHub login (Google +
+  Microsoft on [OpsCat Cloud](https://opscat.io)).
 
 ## Repository layout
 

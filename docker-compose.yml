@@ -21,6 +21,10 @@ services:
       - OPSCAT_PROBE_CITY=${OPSCAT_PROBE_CITY:-Local}
       - OPSCAT_PROBE_CC=${OPSCAT_PROBE_CC:-XX}
       - OPSCAT_EDITION=community
+      # GitHub login (community feature) — create an OAuth app on GitHub with
+      # callback <OPSCAT_BASE_URL>/api/auth/github/callback
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
     volumes:
       - opscat_data:/data
     restart: always

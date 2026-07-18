@@ -76,11 +76,19 @@ export default function App() {
 
 type LoginMode = 'password' | 'magic' | 'signup';
 const OAUTH_ERRORS: Record<string, string> = {
-  oauth: 'Google sign-in failed. Please try again.',
-  email: 'We could not verify your Google account e-mail.',
+  oauth: 'Social sign-in failed. Please try again.',
+  email: 'We could not verify the e-mail address of that account.',
   disabled: 'Your account is disabled — contact your administrator.',
   nosignup: 'Sign-ups are currently closed for this instance.',
 };
+
+type AuthFlags = { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean };
+const NO_AUTH: AuthFlags = { google: false, microsoft: false, github: false, signupsOpen: false };
+const OAUTH_PROVIDERS: { key: 'google' | 'microsoft' | 'github'; label: string; icon: string }[] = [
+  { key: 'google', label: 'Continue with Google', icon: 'G' },
+  { key: 'microsoft', label: 'Continue with Microsoft', icon: '⊞' },
+  { key: 'github', label: 'Continue with GitHub', icon: '⌥' },
+];
 
 function Login() {
   const app = useApp();
@@ -92,12 +100,12 @@ function Login() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  const [auth, setAuth] = useState<{ google: boolean; signupsOpen: boolean }>({ google: false, signupsOpen: false });
+  const [auth, setAuth] = useState<AuthFlags>(NO_AUTH);
 
   // public plans/auth flags
   useEffect(() => {
     api.get<PlansResponse>('/api/plans')
-      .then((r) => setAuth(r.auth || { google: false, signupsOpen: false }))
+      .then((r) => setAuth({ ...NO_AUTH, ...(r.auth || {}) }))
       .catch(() => {});
   }, []);
 
@@ -187,18 +195,22 @@ function Login() {
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
           {busy ? '…' : mode === 'password' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send sign-in link'}
         </button>
-        {auth.google && (
+        {(auth.google || auth.microsoft || auth.github) && (
           <>
             <div className="row" style={{ gap: 8, margin: '14px 0 12px', color: 'var(--text3)', fontSize: 10 }}>
               <span style={{ flex: 1, height: 1, background: 'var(--bg3)' }} />
               <span>or</span>
               <span style={{ flex: 1, height: 1, background: 'var(--bg3)' }} />
             </div>
-            <button type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => { window.location.href = '/api/auth/google'; }}>
-              <span className="mono" style={{ fontWeight: 700 }}>G</span>
-              Continue with Google
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {OAUTH_PROVIDERS.filter((p) => auth[p.key]).map((p) => (
+                <button key={p.key} type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={() => { window.location.href = `/api/auth/${p.key}`; }}>
+                  <span className="mono" style={{ fontWeight: 700 }}>{p.icon}</span>
+                  {p.label}
+                </button>
+              ))}
+            </div>
           </>
         )}
       </form>

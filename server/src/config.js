@@ -30,6 +30,16 @@ module.exports = {
     clientId: process.env.GOOGLE_CLIENT_ID || null,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || null,
   },
+  microsoft: {
+    clientId: process.env.MICROSOFT_CLIENT_ID || null,
+    clientSecret: process.env.MICROSOFT_CLIENT_SECRET || null,
+    tenant: process.env.MICROSOFT_TENANT || 'common',
+  },
+  // --- community feature: GitHub login ---
+  github: {
+    clientId: process.env.GITHUB_CLIENT_ID || null,
+    clientSecret: process.env.GITHUB_CLIENT_SECRET || null,
+  },
   signupsOpen: (process.env.OPSCAT_SIGNUPS_OPEN || '1') === '1',
   cookieSecure: bool(process.env.OPSCAT_COOKIE_SECURE, true),
   trustProxy: bool(process.env.OPSCAT_TRUST_PROXY, true),
