@@ -240,6 +240,8 @@ router.get('/analytics', (req, res) => {
 });
 
 // ---- alert rules + notifications ----
+const RULE_CHANNELS = ['email', 'teams', 'webhook', 'slack', 'telegram', 'discord', 'ntfy', 'pushover'];
+
 router.get('/rules', (req, res) => {
   const rules = db.prepare('SELECT * FROM alert_rules WHERE org_id = ? ORDER BY id').all(req.orgId)
     .map((r) => ({ id: r.id, name: r.name, enabled: !!r.enabled, channel: r.channel,
@@ -251,7 +253,7 @@ router.get('/rules', (req, res) => {
 router.post('/rules', sec.requireRole('lead'), (req, res) => {
   const { name, channel, triggerName, severityMin, cooldownM, recipients } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  if (!['email', 'teams', 'webhook'].includes(channel)) return httpError(res, 400, 'bad channel');
+  if (!RULE_CHANNELS.includes(channel)) return httpError(res, 400, 'bad channel');
   const rec = Array.isArray(recipients) ? recipients.filter((r) => typeof r === 'string').slice(0, 20) : [];
   const info = db.prepare(`INSERT INTO alert_rules (org_id, name, enabled, channel, trigger_name, severity_min,
     cooldown_m, recipients, created_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`)
@@ -275,7 +277,7 @@ router.patch('/rules/:id', sec.requireRole('lead'), (req, res) => {
     WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null,
       typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
-      ['email', 'teams', 'webhook'].includes(b.channel) ? b.channel : null,
+      RULE_CHANNELS.includes(b.channel) ? b.channel : null,
       b.triggerName !== undefined ? 1 : 0, b.triggerName || null,
       Number.isFinite(b.severityMin) ? clampInt(b.severityMin, 0, 100, 60) : null,
       Number.isFinite(b.cooldownM) ? clampInt(b.cooldownM, 1, 1440, 15) : null,
@@ -294,6 +296,48 @@ router.get('/notifications', (req, res) => {
   const rows = db.prepare('SELECT * FROM notifications WHERE org_id = ? ORDER BY ts DESC LIMIT 50').all(req.orgId);
   res.json(rows.map((n) => ({ ts: n.ts, rule: n.rule_name, event: n.case_label || (n.event_id ? `E-${n.event_id}` : ''),
     channel: n.channel, ok: !!n.ok, error: n.error })));
+});
+
+// ---- inventory: every monitored counterparty in one list ----
+// Agents, SNMP targets and synthetic checks are configured objects; "sources"
+// are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
+router.get('/inventory', (req, res) => {
+  const t = now();
+  const rows = [];
+  const agents = db.prepare('SELECT * FROM agents WHERE org_id = ?').all(req.orgId);
+  const agentNames = new Set(agents.flatMap((a) => [a.name, a.hostname]).filter(Boolean));
+  for (const a of agents) {
+    rows.push({ kind: 'agent', id: a.id, name: a.name, detail: a.hostname || a.platform || '',
+      status: !a.active ? 'disabled'
+        : a.last_seen_at && t - a.last_seen_at < 3 * 60 * 1000 ? 'online' : 'offline',
+      lastSeen: a.last_seen_at || null });
+  }
+  for (const s of db.prepare('SELECT * FROM snmp_targets WHERE org_id = ?').all(req.orgId)) {
+    rows.push({ kind: 'snmp', id: s.id, name: s.name, detail: `${s.host}:${s.port}`,
+      status: !s.enabled ? 'disabled' : s.last_status === 'ok' ? 'ok' : (s.last_status || 'pending'),
+      lastSeen: s.last_seen_at || null });
+  }
+  const lastResult = db.prepare('SELECT ok, MAX(ts) AS ts FROM synthetic_results WHERE check_id = ?');
+  for (const c of db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ?').all(req.orgId)) {
+    const last = lastResult.get(c.id);
+    rows.push({ kind: 'check', id: c.id, name: `${c.type} ${c.target}`, detail: `every ${c.interval_s}s`,
+      status: !c.enabled ? 'disabled' : last && last.ts != null ? (last.ok ? 'ok' : 'failing') : 'pending',
+      lastSeen: last ? last.ts : null });
+  }
+  const sources = new Map();
+  for (const r of db.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {
+    sources.set(r.device, r.ls);
+  }
+  for (const r of db.prepare('SELECT device, MAX(last_seen) AS ls FROM events WHERE org_id = ? GROUP BY device').all(req.orgId)) {
+    if ((sources.get(r.device) || 0) < r.ls) sources.set(r.device, r.ls);
+  }
+  for (const [device, ls] of sources) {
+    if (agentNames.has(device)) continue; // agent hosts are already listed above
+    rows.push({ kind: 'source', id: null, name: device, detail: 'logs / events',
+      status: 'active', lastSeen: ls });
+  }
+  rows.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+  res.json(rows);
 });
 
 // ---- incidents ----

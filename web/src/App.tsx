@@ -8,6 +8,7 @@ import type { CaseRow, EventDetail, User } from './types';
 import Monitor from './pages/Monitor';
 import Classic from './pages/Classic';
 import Dashboard from './pages/Dashboard';
+import Inventory from './pages/Inventory';
 import Cases from './pages/Cases';
 import Incidents from './pages/Incidents';
 import StatusPageAdmin from './pages/StatusPageAdmin';
@@ -24,6 +25,7 @@ const NAV = [
   { id: 'monitor', label: 'Monitor', icon: '⬡' },
   { id: 'classic', label: 'Classic View', icon: '⌗', sub: true },
   { id: 'dashboard', label: 'Dashboard', icon: '▤' },
+  { id: 'inventory', label: 'Inventory', icon: '▦' },
   { id: 'cases', label: 'Cases', icon: '◻' },
   { id: 'incidents', label: 'Incidents', icon: '◈' },
   { id: 'statuspage', label: 'Status Page', icon: '▣' },
@@ -40,7 +42,7 @@ const PLATFORM_NAV = [
   { id: 'platform', label: 'Platform', icon: '◆' },
 ];
 const PAGES: Record<string, React.ComponentType> = {
-  monitor: Monitor, classic: Classic, dashboard: Dashboard, cases: Cases,
+  monitor: Monitor, classic: Classic, dashboard: Dashboard, inventory: Inventory, cases: Cases,
   incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics,
   logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, settings: Settings,
   platform: SuperAdmin,
@@ -443,28 +445,37 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
   const app = useApp();
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
   const [err, setErr] = useState('');
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr('');
+    if (next !== repeat) { setErr('passwords do not match'); return; }
     try {
-      await api.post('/api/auth/change-password', { currentPassword: cur, newPassword: next });
+      await api.post('/api/auth/change-password',
+        forced ? { newPassword: next } : { currentPassword: cur, newPassword: next });
       app.setUser({ ...app.user!, mustChangePassword: false });
       onClose();
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
   };
   return (
-    <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}>
+    <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}
+      hideClose={forced}>
       {forced && <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>
         Your password was issued by an administrator — please set your own before continuing.</div>}
       <form onSubmit={submit}>
-        <Field label="Current password">
+        {!forced && <Field label="Current password">
           <input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
-        </Field>
+        </Field>}
         <Field label="New password (min. 12 characters)">
           <input type="password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>
+        <Field label="Repeat new password">
+          <input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+        </Field>
         {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Save</button>
+        {forced && <button type="button" className="btn" onClick={app.logout}
+          style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>Sign out</button>}
       </form>
     </Modal>
   );

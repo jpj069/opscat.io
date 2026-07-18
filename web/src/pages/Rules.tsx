@@ -8,6 +8,7 @@ import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
   teams: '#5865f2', email: '#388bfd', sms: '#3fb950', webhook: '#3fb950',
+  slack: '#e01e5a', telegram: '#29a9eb', discord: '#7289da', ntfy: '#3fb950', pushover: '#249df1',
 };
 const chanColor = (ch: string) => CHAN_COLORS[ch] || SEV.info;
 const RULE_COLS = '1fr 90px 140px 70px 80px 60px 110px';
@@ -123,7 +124,16 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
   const [recipients, setRecipients] = useState((rule?.recipients ?? []).join('\n'));
   const [saving, setSaving] = useState(false);
 
-  const isUrl = channel === 'teams' || channel === 'webhook';
+  const RECIPIENTS_UI: Record<Rule['channel'], { label: string; placeholder: string }> = {
+    email: { label: 'Recipients — one email per line', placeholder: 'noc@opscat.io' },
+    teams: { label: 'Teams webhook URL (empty = Settings default)', placeholder: 'https://…' },
+    webhook: { label: 'Webhook URL', placeholder: 'https://…' },
+    slack: { label: 'Slack incoming-webhook URL(s) — one per line', placeholder: 'https://hooks.slack.com/services/…' },
+    telegram: { label: 'Telegram chat ID(s) — one per line (bot token in Settings)', placeholder: '-1001234567890' },
+    discord: { label: 'Discord webhook URL(s) — one per line', placeholder: 'https://discord.com/api/webhooks/…' },
+    ntfy: { label: 'ntfy topic URL(s) — one per line', placeholder: 'https://ntfy.sh/opscat-alerts' },
+    pushover: { label: 'Pushover user key(s) — one per line (app token in Settings)', placeholder: 'uQiRzpo4DXghDmr9…' },
+  };
   const save = async () => {
     if (!name.trim()) return;
     setSaving(true);
@@ -150,9 +160,8 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
       </Field>
       <Field label="Channel">
         <select value={channel} onChange={(e) => setChannel(e.target.value as Rule['channel'])}>
-          <option value="email">email</option>
-          <option value="teams">teams</option>
-          <option value="webhook">webhook</option>
+          {(['email', 'teams', 'slack', 'telegram', 'discord', 'ntfy', 'pushover', 'webhook'] as const)
+            .map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </Field>
       <Field label="Trigger Event (empty = any)">
@@ -176,9 +185,9 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
           </Field>
         </div>
       </div>
-      <Field label={isUrl ? 'Webhook URL(s) — one per line' : 'Recipients — one email per line'}>
+      <Field label={RECIPIENTS_UI[channel].label}>
         <textarea className="rca" value={recipients} onChange={(e) => setRecipients(e.target.value)}
-          placeholder={isUrl ? 'https://…' : 'noc@opscat.io'} />
+          placeholder={RECIPIENTS_UI[channel].placeholder} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
         <button className="btn" onClick={onClose}>Cancel</button>

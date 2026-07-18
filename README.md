@@ -53,7 +53,8 @@ docker compose up -d --build  # app (internal only) + Caddy (TLS on 80/443)
 ```
 
 Configuration via environment / `.env` (see `docker-compose.yml`): `OPSCAT_ADMIN_EMAIL`,
-`RESEND_API_KEY`, `OPSCAT_ALERT_FROM`, `OPSCAT_SECRET`, `OPSCAT_BASE_URL`.
+`RESEND_API_KEY` or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE` (e-mail
+via Resend API or any SMTP relay), `OPSCAT_ALERT_FROM`, `OPSCAT_SECRET`, `OPSCAT_BASE_URL`.
 Deploys run from GitHub Actions on push to `main` (SSH → `docker-compose up -d --build`).
 
 ## Drop your logs here

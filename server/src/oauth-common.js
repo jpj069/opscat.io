@@ -51,6 +51,14 @@ function finishLogin(req, res, row, { provider, email, name, emailVerified }) {
     // adopt the provider for password-less accounts created via invite
     db.prepare("UPDATE users SET auth_provider = ? WHERE id = ? AND auth_provider = 'password' AND pass_hash = ''")
       .run(provider, user.id);
+    // a pending forced change means the password is an admin-issued temporary
+    // one the user may never have seen; the provider just vouched for the
+    // address, so retire that password instead of forcing a change
+    if (user.must_change_password) {
+      db.prepare(`UPDATE users SET auth_provider = ?, pass_salt = '', pass_hash = '',
+        must_change_password = 0 WHERE id = ?`).run(provider, user.id);
+      sec.audit(user.id, 'temp_password_retired', provider, user.org_id);
+    }
   } else {
     // unknown e-mail → self-service signup (cloud edition + EE module only)
     if (!edition.isCloud() || !config.signupsOpen || !eeAccounts) {

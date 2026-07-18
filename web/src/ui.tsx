@@ -152,17 +152,17 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
   );
 }
 
-export function Modal({ title, onClose, children, width = 420 }:
-  { title: string; onClose: () => void; children: React.ReactNode; width?: number }) {
+export function Modal({ title, onClose, children, width = 420, hideClose = false }:
+  { title: string; onClose: () => void; children: React.ReactNode; width?: number; hideClose?: boolean }) {
   return (
     <>
-      <div className="overlay-dim" onClick={onClose} />
+      <div className="overlay-dim" onClick={hideClose ? undefined : onClose} />
       <div style={{ position: 'fixed', top: '15%', left: '50%', transform: 'translateX(-50%)',
         width, maxWidth: '94vw', background: 'var(--bg1)', border: '1px solid var(--border)',
         borderRadius: 10, zIndex: 120, padding: 18, boxShadow: '0 16px 48px rgba(0,0,0,0.45)' }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text0)' }}>{title}</span>
-          <button onClick={onClose} style={{ color: 'var(--text2)', fontSize: 16 }}>×</button>
+          {!hideClose && <button onClick={onClose} style={{ color: 'var(--text2)', fontSize: 16 }}>×</button>}
         </div>
         {children}
       </div>

@@ -15,7 +15,7 @@ interface SystemInfo {
   uptimeS?: number; dbBytes?: number; nodeVersion?: string;
   counts?: { logs?: number; events?: number; cases?: number; users?: number };
 }
-interface SecretInfo { title: string; note: string; value: string; extra?: React.ReactNode; }
+export interface SecretInfo { title: string; note: string; value: string; extra?: React.ReactNode; }
 
 // ---------------------------------------------------------------- page
 
@@ -149,6 +149,10 @@ export default function Settings() {
                 { placeholder: 'OpsCat <auth@opscat.io>' })}
               {textRow('teams_webhook_url', 'Teams webhook URL',
                 { mono: true, placeholder: 'https://outlook.office.com/webhook/…' })}
+              {textRow('telegram_bot_token', 'Telegram bot token',
+                { type: 'password', mono: true, placeholder: '123456:ABC-DEF…' })}
+              {textRow('pushover_token', 'Pushover app token',
+                { type: 'password', mono: true, placeholder: 'azGDORePK8gMaC0QOYAMyEEuzJnyUi' })}
             </>}
       </div>
 
@@ -562,7 +566,7 @@ function snmpStatusColor(s: string | null): string {
 
 // ---------------------------------------------------------------- create API key
 
-function CreateKeyModal({ onClose, onCreated, onSecret }:
+export function CreateKeyModal({ onClose, onCreated, onSecret }:
   { onClose: () => void; onCreated: () => void; onSecret: (s: SecretInfo) => void }) {
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<string[]>(['ingest']);
@@ -604,7 +608,7 @@ function CreateKeyModal({ onClose, onCreated, onSecret }:
 
 // ---------------------------------------------------------------- register agent
 
-function RegisterAgentModal({ onClose, onCreated, onSecret }:
+export function RegisterAgentModal({ onClose, onCreated, onSecret }:
   { onClose: () => void; onCreated: () => void; onSecret: (s: SecretInfo) => void }) {
   const [name, setName] = useState('');
   const [group, setGroup] = useState('default');
@@ -645,7 +649,7 @@ function RegisterAgentModal({ onClose, onCreated, onSecret }:
 
 // ---------------------------------------------------------------- add SNMP target
 
-function AddTargetModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [port, setPort] = useState('161');
@@ -691,7 +695,7 @@ function AddTargetModal({ onClose, onCreated }: { onClose: () => void; onCreated
 
 // ---------------------------------------------------------------- one-time secret
 
-function OnceSecretModal({ title, note, value, extra, onClose }: SecretInfo & { onClose: () => void }) {
+export function OnceSecretModal({ title, note, value, extra, onClose }: SecretInfo & { onClose: () => void }) {
   return (
     <Modal title={title} onClose={onClose}>
       <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>{note}</div>
