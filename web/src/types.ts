@@ -102,7 +102,7 @@ export interface PlanInfo {
 export interface PlansResponse {
   edition: 'community' | 'cloud';
   plans: PlanInfo[];
-  auth: { google: boolean; signupsOpen: boolean };
+  auth: { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean };
 }
 
 export interface BillingUsage {

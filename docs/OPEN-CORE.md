@@ -14,7 +14,7 @@ powers the hosted **OpsCat Cloud** SaaS.
 | Plan limits | None — unlimited | Enforced per org (Free / Pro / Business / Enterprise) |
 | Billing (Stripe) | — | Yes |
 | Super-admin console | — | Yes |
-| SSO (Google/SAML) | — | Per plan |
+| Social login | GitHub | GitHub + Google + Microsoft (SAML planned) |
 | Sensor auto-provisioning | Manual (agent installer) | Automated per plan |
 | Selected by | `OPSCAT_EDITION=community` | `OPSCAT_EDITION=cloud` |
 

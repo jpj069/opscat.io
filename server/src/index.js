@@ -28,13 +28,20 @@ app.use('/v1', require('./routes/ingest'));
 // whose requireSession applies to everything under it. Public routes (plans,
 // signup, Google OAuth, the Stripe webhook) must be reachable without a session.
 app.use('/api/auth', require('./routes/auth'));
-try { app.use('/api/auth', require('./routes/oauth')); } catch (e) { /* EE module absent */ }
+app.use('/api/auth', require('./routes/oauth-github')); // community: GitHub login
+let eeOAuth = false;
+try { app.use('/api/auth', require('./routes/oauth')); eeOAuth = true; } catch (e) { /* EE module absent */ }
 
 // public config for the login/pricing UI (no auth): plans, edition, auth options
 app.get('/api/plans', (req, res) => res.json({
   edition: edition.EDITION,
   plans: require('./plans').publicPlans(),
-  auth: { google: !!config.google.clientId, signupsOpen: config.signupsOpen && edition.isCloud() },
+  auth: {
+    google: eeOAuth && !!config.google.clientId,
+    microsoft: eeOAuth && !!config.microsoft.clientId,
+    github: !!config.github.clientId,
+    signupsOpen: config.signupsOpen && edition.isCloud(),
+  },
 }));
 
 // Enterprise-edition routes (billing / super-admin). Self-guard by edition + role.

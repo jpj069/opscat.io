@@ -28,7 +28,13 @@ organization; all queries are scoped to it. Super-admins may target another org 
 | GET `/api/auth/me` | — | current user + csrf |
 | POST `/api/auth/logout` | — | |
 | POST `/api/auth/signup` | `{orgName, name, email, password}` | cloud edition + signups open — creates organization + owner |
-| GET `/api/auth/google` | — | redirects to Google (login or signup); `GET /api/auth/google/callback` completes the flow |
+| GET `/api/auth/github` | — | GitHub login (community feature); `…/github/callback` completes — requires a verified GitHub e-mail |
+| GET `/api/auth/google` | — | Google login (cloud); `…/google/callback` completes the flow |
+| GET `/api/auth/microsoft` | — | Microsoft / Entra ID login (cloud); `…/microsoft/callback` completes the flow |
+
+Each social route 404s until its client id/secret env vars are set; `/api/plans`
+reports which providers are active. In the community edition social login signs in
+existing users only — self-service signup for unknown e-mails is cloud-edition.
 
 ## Ingest (`/v1`, API key scope `ingest`)
 
