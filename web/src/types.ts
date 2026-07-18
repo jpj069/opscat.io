@@ -45,6 +45,11 @@ export interface Rule {
 }
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
+export interface InventoryRow {
+  kind: 'agent' | 'snmp' | 'check' | 'source';
+  id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
+}
+
 export interface IncidentUpdate { ts: number; status: string; message: string; }
 export interface Incident {
   id: number; label: string; title: string; severity: number;

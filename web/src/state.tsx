@@ -25,7 +25,7 @@ export interface AppState {
 const Ctx = createContext<AppState>(null as unknown as AppState);
 export const useApp = () => useContext(Ctx);
 
-const PAGES = ['monitor', 'classic', 'dashboard', 'cases', 'incidents', 'statuspage',
+const PAGES = ['monitor', 'classic', 'dashboard', 'inventory', 'cases', 'incidents', 'statuspage',
   'synthetics', 'logs', 'rules', 'analytics', 'users', 'settings', 'platform'];
 
 function navFromPath(): string {

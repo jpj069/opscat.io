@@ -298,6 +298,48 @@ router.get('/notifications', (req, res) => {
     channel: n.channel, ok: !!n.ok, error: n.error })));
 });
 
+// ---- inventory: every monitored counterparty in one list ----
+// Agents, SNMP targets and synthetic checks are configured objects; "sources"
+// are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
+router.get('/inventory', (req, res) => {
+  const t = now();
+  const rows = [];
+  const agents = db.prepare('SELECT * FROM agents WHERE org_id = ?').all(req.orgId);
+  const agentNames = new Set(agents.flatMap((a) => [a.name, a.hostname]).filter(Boolean));
+  for (const a of agents) {
+    rows.push({ kind: 'agent', id: a.id, name: a.name, detail: a.hostname || a.platform || '',
+      status: !a.active ? 'disabled'
+        : a.last_seen_at && t - a.last_seen_at < 3 * 60 * 1000 ? 'online' : 'offline',
+      lastSeen: a.last_seen_at || null });
+  }
+  for (const s of db.prepare('SELECT * FROM snmp_targets WHERE org_id = ?').all(req.orgId)) {
+    rows.push({ kind: 'snmp', id: s.id, name: s.name, detail: `${s.host}:${s.port}`,
+      status: !s.enabled ? 'disabled' : s.last_status === 'ok' ? 'ok' : (s.last_status || 'pending'),
+      lastSeen: s.last_seen_at || null });
+  }
+  const lastResult = db.prepare('SELECT ok, MAX(ts) AS ts FROM synthetic_results WHERE check_id = ?');
+  for (const c of db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ?').all(req.orgId)) {
+    const last = lastResult.get(c.id);
+    rows.push({ kind: 'check', id: c.id, name: `${c.type} ${c.target}`, detail: `every ${c.interval_s}s`,
+      status: !c.enabled ? 'disabled' : last && last.ts != null ? (last.ok ? 'ok' : 'failing') : 'pending',
+      lastSeen: last ? last.ts : null });
+  }
+  const sources = new Map();
+  for (const r of db.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {
+    sources.set(r.device, r.ls);
+  }
+  for (const r of db.prepare('SELECT device, MAX(last_seen) AS ls FROM events WHERE org_id = ? GROUP BY device').all(req.orgId)) {
+    if ((sources.get(r.device) || 0) < r.ls) sources.set(r.device, r.ls);
+  }
+  for (const [device, ls] of sources) {
+    if (agentNames.has(device)) continue; // agent hosts are already listed above
+    rows.push({ kind: 'source', id: null, name: device, detail: 'logs / events',
+      status: 'active', lastSeen: ls });
+  }
+  rows.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+  res.json(rows);
+});
+
 // ---- incidents ----
 function incidentView(i) {
   const updates = db.prepare(
