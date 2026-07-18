@@ -1,0 +1,36 @@
+[Unit]
+Description=OpsCat host agent (heartbeat, metrics, journald logs, synthetic probes)
+Documentation=https://opscat.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root so journald (--logs) and ICMP ping (--probe) work.
+# DynamicUser is intentionally disabled — it would break journal access.
+User=root
+DynamicUser=no
+
+EnvironmentFile=/etc/opscat-agent.env
+ExecStart=/usr/bin/node /opt/opscat-agent/opscat-agent.js $OPSCAT_AGENT_FLAGS
+
+Restart=always
+RestartSec=10
+# Final flush on stop; SIGTERM triggers graceful shutdown in the agent.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# --- hardening ---
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+
+# keep memory small / restart if it ever balloons
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

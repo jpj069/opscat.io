@@ -1,0 +1,11 @@
+{
+  "name": "opscat",
+  "version": "2.0.0",
+  "private": true,
+  "description": "OpsCat — Infrastructure Ops Platform for NOC/SRE teams",
+  "scripts": {
+    "start": "node server/src/index.js",
+    "build": "cd web && npm run build",
+    "setup": "cd server && npm install && cd ../web && npm install"
+  }
+}

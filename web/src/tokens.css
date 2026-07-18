@@ -1,0 +1,133 @@
+/* OpsCat design tokens — from the design handoff. Dual theme via body[data-theme]. */
+:root { color-scheme: dark; }
+
+body[data-theme="dark"] {
+  --bg0: #0b0e14; --bg1: #0d1117; --bg2: #161b22; --bg3: #21262d;
+  --border: #30363d; --text0: #f0f6fc; --text1: #c9d1d9; --text2: #8b949e; --text3: #484f58;
+  --low: #388bfd;
+}
+body[data-theme="light"] {
+  color-scheme: light;
+  --bg0: #f3f5f8; --bg1: #ffffff; --bg2: #ffffff; --bg3: #eaeef1;
+  --border: #d3d9e0; --text0: #1f2328; --text1: #3d444d; --text2: #5b6570; --text3: #838c96;
+  --low: #1a6feb;
+}
+
+body[data-density="comfortable"] { --row-py: 11px; --log-py: 6px; }
+body[data-density="compact"] { --row-py: 5px; --log-py: 3px; }
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0; background: var(--bg0); color: var(--text1);
+  font: 400 12px/1.5 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea {
+  font: inherit; color: var(--text0); background: var(--bg3);
+  border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; outline: none;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--low); }
+a { color: var(--low); text-decoration: none; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* layout primitives */
+.card { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 8px; padding: 14px 16px; }
+.card-title {
+  font-size: 12px; font-weight: 600; color: var(--text0); margin: 0 0 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.page { padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; height: 100%; }
+.page-title { font-size: 16px; font-weight: 700; color: var(--text0); margin: 0; }
+.micro {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text2);
+}
+.row { display: flex; align-items: center; gap: 8px; }
+
+/* buttons */
+.btn {
+  padding: 6px 12px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--bg3); color: var(--text1);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { color: var(--text0); border-color: var(--text3); }
+.btn-primary { background: #388bfd; border-color: #388bfd; color: #fff; }
+.btn-primary:hover { background: #2f7de6; color: #fff; }
+.btn-sm { padding: 3px 8px; font-size: 10px; border-radius: 3px; }
+
+/* pills + badges */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
+}
+.sev-badge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 3px;
+  font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
+  white-space: nowrap;
+}
+.sev-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+/* tables */
+.tbl { width: 100%; }
+.tbl-head {
+  display: grid; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--bg3);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text2); align-items: center;
+}
+.tbl-row {
+  display: grid; gap: 8px; padding: var(--row-py) 16px; border-bottom: 1px solid var(--bg3);
+  font-size: 11px; align-items: center;
+}
+.tbl-row:hover { background: color-mix(in srgb, var(--bg3) 40%, transparent); }
+
+/* toggle switch */
+.toggle { width: 32px; height: 18px; border-radius: 9px; position: relative; flex-shrink: 0;
+  border: 1px solid var(--border); background: var(--bg3); transition: background 0.15s; }
+.toggle.on { background: #3fb950; border-color: #3fb950; }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; transition: left 0.15s; }
+.toggle.on .knob { left: 14px; }
+
+/* nav */
+.nav-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px;
+  font-size: 12px; color: var(--text2); border: 1px solid transparent; width: 100%;
+  text-align: left; margin-bottom: 1px;
+}
+.nav-item:hover { color: var(--text0); background: color-mix(in srgb, var(--bg3) 50%, transparent); }
+.nav-item.active { background: var(--bg3); border-color: var(--border); color: var(--text0); }
+.nav-item.sub { padding-left: 30px; font-size: 11px; }
+
+/* overlays */
+.overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 90; }
+@keyframes slideIn { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+.slide-over {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; z-index: 100;
+  background: var(--bg1); border-left: 1px solid var(--border);
+  animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); overflow-y: auto;
+}
+.palette {
+  position: fixed; top: 90px; left: 50%; transform: translateX(-50%); width: 560px; max-width: 92vw;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; z-index: 110;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.45); overflow: hidden;
+}
+
+/* filter chips */
+.chip {
+  padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 600;
+  border: 1px solid var(--border); color: var(--text2); font-family: 'JetBrains Mono', monospace;
+}
+.chip.active { color: var(--text0); background: var(--bg3); }
+
+kbd {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px; padding: 1px 5px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--bg3); color: var(--text2);
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.pulse { animation: pulse 1.6s ease infinite; }
+textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width: 100%; }
