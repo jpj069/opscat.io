@@ -1,0 +1,128 @@
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const Database = require('better-sqlite3');
+const config = require('./config');
+
+fs.mkdirSync(config.dataDir, { recursive: true });
+const db = new Database(config.dbFile);
+db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
+
+db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+
+// --- versioned migrations (schema.sql covers a fresh v-latest install; these
+// bring older databases forward). Each is idempotent/guarded so it is a no-op
+// on a database that already has the target shape. ---
+const getVersion = () => db.pragma('user_version', { simple: true });
+
+function hasColumn(table, col) {
+  return db.pragma(`table_info(${table})`).some((c) => c.name === col);
+}
+function addColumn(table, col, ddl) {
+  if (!hasColumn(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+}
+
+const MIGRATIONS = [
+  // idx 0 -> version 1: baseline (schema.sql)
+  () => {},
+  // idx 1 -> version 2: multi-tenancy. Add org_id to every tenant table, seed
+  // the default organization, and promote the first user to super-admin/owner.
+  () => {
+    // organizations / org_settings / oauth_states are created by schema.sql
+    // (CREATE IF NOT EXISTS), so they already exist here. Ensure a default org.
+    const orgCount = db.prepare('SELECT COUNT(*) c FROM organizations').get().c;
+    if (orgCount === 0) {
+      const name = (() => {
+        try { const r = db.prepare("SELECT value FROM settings WHERE key='org_name'").get(); return r ? r.value : 'OpsCat'; }
+        catch { return 'OpsCat'; }
+      })();
+      db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+        VALUES (1, ?, 'default', 'enterprise', 'active', ?)`).run(name, Date.now());
+    }
+    // users: org membership + platform flag + oauth
+    addColumn('users', 'org_id', 'INTEGER NOT NULL DEFAULT 1');
+    addColumn('users', 'is_super_admin', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('users', 'auth_provider', "TEXT NOT NULL DEFAULT 'password'");
+    // tenant tables get an org_id defaulting to the legacy single tenant (1)
+    for (const t of ['api_keys', 'logs', 'events', 'cases', 'agents', 'synthetic_locations',
+      'synthetic_checks', 'snmp_targets', 'alert_rules', 'notifications', 'incidents',
+      'components', 'audit_log']) {
+      addColumn(t, 'org_id', 'INTEGER NOT NULL DEFAULT 1');
+    }
+    addColumn('synthetic_locations', 'provider', 'TEXT');
+    addColumn('synthetic_locations', 'provider_ref', 'TEXT');
+    // org_id indexes live here (not schema.sql) so they are created AFTER the
+    // columns exist — works for both fresh installs and migrated legacy DBs.
+    db.exec('DROP INDEX IF EXISTS idx_events_dedupe_active');
+    for (const idx of [
+      'CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_apikeys_org ON api_keys(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_logs_org_ts ON logs(org_id, ts)',
+      'CREATE INDEX IF NOT EXISTS idx_logs_org_device_ts ON logs(org_id, device, ts)',
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe_active ON events(org_id, dedupe_key) WHERE status = 'active'",
+      'CREATE INDEX IF NOT EXISTS idx_events_org_status_sev ON events(org_id, status, severity DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_cases_org_status ON cases(org_id, status)',
+      'CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_synthloc_org ON synthetic_locations(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_synthchk_org ON synthetic_checks(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_snmp_org ON snmp_targets(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_rules_org ON alert_rules(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_notifications_org_ts ON notifications(org_id, ts)',
+      'CREATE INDEX IF NOT EXISTS idx_incidents_org ON incidents(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_components_org ON components(org_id)',
+      'CREATE INDEX IF NOT EXISTS idx_audit_org_ts ON audit_log(org_id, ts)',
+    ]) db.exec(idx);
+    // migrate legacy global org_* settings into org_settings for org 1
+    for (const key of ['org_name', 'backend_label', 'status_published', 'alert_email_from',
+      'auth_email_from', 'teams_webhook_url', 'retention_logs_days', 'classifiers']) {
+      const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+      if (r) {
+        db.prepare(`INSERT INTO org_settings (org_id, key, value) VALUES (1, ?, ?)
+          ON CONFLICT(org_id, key) DO NOTHING`).run(key, r.value);
+      }
+    }
+    // first user becomes the platform super-admin and owner of the default org
+    const first = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get();
+    if (first) {
+      db.prepare('UPDATE users SET is_super_admin = 1, role = ?, org_id = 1 WHERE id = ?')
+        .run('admin', first.id);
+    }
+  },
+];
+for (let v = getVersion(); v < MIGRATIONS.length; v++) {
+  db.transaction(() => { MIGRATIONS[v](); db.pragma(`user_version = ${v + 1}`); })();
+}
+
+// --- settings helpers ---
+const settingGetStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
+const settingSetStmt = db.prepare(
+  'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+
+function getSetting(key, def = null) {
+  const row = settingGetStmt.get(key);
+  return row ? row.value : def;
+}
+function setSetting(key, value) { settingSetStmt.run(key, String(value)); }
+
+// per-organization settings
+const orgSettingGetStmt = db.prepare('SELECT value FROM org_settings WHERE org_id = ? AND key = ?');
+const orgSettingSetStmt = db.prepare(
+  `INSERT INTO org_settings (org_id, key, value) VALUES (?, ?, ?)
+   ON CONFLICT(org_id, key) DO UPDATE SET value = excluded.value`);
+function getOrgSetting(orgId, key, def = null) {
+  const row = orgSettingGetStmt.get(orgId, key);
+  return row ? row.value : def;
+}
+function setOrgSetting(orgId, key, value) { orgSettingSetStmt.run(orgId, key, String(value)); }
+
+// Persist an app secret if none provided via env (used for SNMP community encryption).
+if (!config.secret) {
+  let s = getSetting('app_secret');
+  if (!s) { s = require('crypto').randomBytes(32).toString('hex'); setSetting('app_secret', s); }
+  config.secret = s;
+}
+
+module.exports = { db, getSetting, setSetting, getOrgSetting, setOrgSetting };

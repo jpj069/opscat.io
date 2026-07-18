@@ -1,0 +1,19 @@
+# OpsCat Community Edition Caddyfile.
+# In the public opscat.io repo this file is published as `Caddyfile`.
+# Set OPSCAT_DOMAIN in .env (defaults to localhost for local testing).
+{$OPSCAT_DOMAIN:localhost} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+	# SSE live stream must not be buffered
+	@sse path /api/stream
+	reverse_proxy @sse app:3000 {
+		flush_interval -1
+	}
+	reverse_proxy app:3000
+}

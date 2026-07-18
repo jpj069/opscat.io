@@ -1,0 +1,46 @@
+# OpsCat Community Edition — self-hosted deployment.
+# In the public opscat.io repo this file is published as `docker-compose.yml`.
+# Set OPSCAT_DOMAIN (and the mail settings if you want alert e-mails) in a .env
+# file next to this compose file; Caddy obtains TLS certificates automatically.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.community
+    # No host port mapping on purpose: the app is only reachable through Caddy
+    # on the internal compose network.
+    expose:
+      - "3000"
+    environment:
+      - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
+      - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
+      - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
+      - OPSCAT_AUTH_FROM=${OPSCAT_AUTH_FROM:-}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - OPSCAT_SECRET=${OPSCAT_SECRET:-}
+      - OPSCAT_PROBE_CITY=${OPSCAT_PROBE_CITY:-Local}
+      - OPSCAT_PROBE_CC=${OPSCAT_PROBE_CC:-XX}
+      - OPSCAT_EDITION=community
+    volumes:
+      - opscat_data:/data
+    restart: always
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - OPSCAT_DOMAIN=${OPSCAT_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: always
+
+volumes:
+  opscat_data:
+  caddy_data:
+  caddy_config:
