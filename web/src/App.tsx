@@ -443,9 +443,11 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
   const app = useApp();
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
   const [err, setErr] = useState('');
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr('');
+    if (next !== repeat) { setErr('passwords do not match'); return; }
     try {
       await api.post('/api/auth/change-password',
         forced ? { newPassword: next } : { currentPassword: cur, newPassword: next });
@@ -454,7 +456,8 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
   };
   return (
-    <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}>
+    <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}
+      hideClose={forced}>
       {forced && <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>
         Your password was issued by an administrator — please set your own before continuing.</div>}
       <form onSubmit={submit}>
@@ -464,8 +467,13 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
         <Field label="New password (min. 12 characters)">
           <input type="password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>
+        <Field label="Repeat new password">
+          <input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+        </Field>
         {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Save</button>
+        {forced && <button type="button" className="btn" onClick={app.logout}
+          style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>Sign out</button>}
       </form>
     </Modal>
   );
