@@ -35,6 +35,9 @@ organization; all queries are scoped to it. Super-admins may target another org 
 Each social route 404s until its client id/secret env vars are set; `/api/plans`
 reports which providers are active. In the community edition social login signs in
 existing users only — self-service signup for unknown e-mails is cloud-edition.
+A verified social login retires a pending admin-issued temporary password: the
+account adopts the provider, `mustChangePassword` is cleared and password login
+stays disabled until an admin issues a new reset.
 
 ## Ingest (`/v1`, API key scope `ingest`)
 
