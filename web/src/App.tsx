@@ -447,7 +447,8 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr('');
     try {
-      await api.post('/api/auth/change-password', { currentPassword: cur, newPassword: next });
+      await api.post('/api/auth/change-password',
+        forced ? { newPassword: next } : { currentPassword: cur, newPassword: next });
       app.setUser({ ...app.user!, mustChangePassword: false });
       onClose();
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
@@ -457,9 +458,9 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
       {forced && <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>
         Your password was issued by an administrator — please set your own before continuing.</div>}
       <form onSubmit={submit}>
-        <Field label="Current password">
+        {!forced && <Field label="Current password">
           <input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
-        </Field>
+        </Field>}
         <Field label="New password (min. 12 characters)">
           <input type="password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>

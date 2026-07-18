@@ -24,7 +24,7 @@ organization; all queries are scoped to it. Super-admins may target another org 
 | POST `/api/auth/login` | `{email, password}` | → `{user, csrf}`; sets session cookie |
 | POST `/api/auth/magic-link` | `{email}` | always `{ok:true}`; sends sign-in link via Resend |
 | POST `/api/auth/magic-login` | `{token}` | consumes link token → `{user, csrf}` |
-| POST `/api/auth/change-password` | `{currentPassword, newPassword}` | min 12 chars |
+| POST `/api/auth/change-password` | `{currentPassword?, newPassword}` | min 12 chars; `currentPassword` not required while a forced change (`mustChangePassword`) is pending |
 | GET `/api/auth/me` | — | current user + csrf |
 | POST `/api/auth/logout` | — | |
 | POST `/api/auth/signup` | `{orgName, name, email, password}` | cloud edition + signups open — creates organization + owner |

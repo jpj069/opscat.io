@@ -106,13 +106,17 @@ router.get('/me', sec.requireSession, (req, res) => {
 
 router.post('/change-password', sec.requireSession, (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!isStr(currentPassword, 200) || !isStr(newPassword, 200)) {
-    return httpError(res, 400, 'currentPassword and newPassword required');
-  }
+  if (!isStr(newPassword, 200)) return httpError(res, 400, 'newPassword required');
   if (newPassword.length < 12) return httpError(res, 400, 'new password must be at least 12 characters');
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(currentPassword, user.pass_salt, user.pass_hash)) {
-    return httpError(res, 401, 'current password incorrect');
+  // A forced change replaces an admin-issued password the user may never have
+  // seen (e.g. after an SSO or magic-link login) — only voluntary changes must
+  // prove knowledge of the old password.
+  if (!user.must_change_password) {
+    if (!isStr(currentPassword, 200)) return httpError(res, 400, 'currentPassword and newPassword required');
+    if (!verifyPassword(currentPassword, user.pass_salt, user.pass_hash)) {
+      return httpError(res, 401, 'current password incorrect');
+    }
   }
   const { salt, hash } = hashPassword(newPassword);
   db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 0 WHERE id = ?')
