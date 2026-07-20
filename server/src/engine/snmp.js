@@ -1,6 +1,6 @@
 'use strict';
-// SNMP poller (v2c): polls each enabled target on its interval for sysUpTime,
-// sysName + any custom OIDs. Unreachable targets raise pipeline events.
+// SNMP poller (v2c + v3): polls each enabled target on its interval for
+// sysUpTime, sysName + any custom OIDs. Unreachable targets raise pipeline events.
 const snmp = require('net-snmp');
 const { db } = require('../db');
 const config = require('../config');
@@ -17,19 +17,37 @@ const insResult = db.prepare(`INSERT INTO snmp_results (target_id, ts, oid, valu
   ON CONFLICT(target_id, oid, ts) DO UPDATE SET value = excluded.value`);
 const setStatus = db.prepare('UPDATE snmp_targets SET last_status = ?, last_seen_at = ? WHERE id = ?');
 
+// Build a session for the target's SNMP version; throws on bad credentials.
+function openSession(target) {
+  const opts = { port: target.port || 161, timeout: 3000, retries: 1 };
+  if (target.version === '3') {
+    const level = { noAuthNoPriv: snmp.SecurityLevel.noAuthNoPriv,
+      authNoPriv: snmp.SecurityLevel.authNoPriv, authPriv: snmp.SecurityLevel.authPriv }[target.v3_level];
+    if (!target.v3_user || level === undefined) throw new Error('bad v3 credentials');
+    const user = { name: target.v3_user, level };
+    if (level !== snmp.SecurityLevel.noAuthNoPriv) {
+      user.authProtocol = target.v3_auth_protocol === 'sha' ? snmp.AuthProtocols.sha : snmp.AuthProtocols.md5;
+      user.authKey = decrypt(target.v3_auth_key_enc, config.secret);
+    }
+    if (level === snmp.SecurityLevel.authPriv) {
+      user.privProtocol = target.v3_priv_protocol === 'aes' ? snmp.PrivProtocols.aes : snmp.PrivProtocols.des;
+      user.privKey = decrypt(target.v3_priv_key_enc, config.secret);
+    }
+    return snmp.createV3Session(target.host, user, opts);
+  }
+  const community = decrypt(target.community_enc, config.secret);
+  return snmp.createSession(target.host, community, { ...opts, version: snmp.Version2c });
+}
+
 function pollTarget(target) {
   return new Promise((resolve) => {
-    let community;
-    try { community = decrypt(target.community_enc, config.secret); }
-    catch { setStatus.run('bad community encryption', now(), target.id); return resolve(); }
-
     let custom = [];
     try { custom = JSON.parse(target.oids || '[]'); } catch { /* noop */ }
     const oids = [...BASE_OIDS, ...custom].map((o) => o.oid).slice(0, 50);
 
-    const session = snmp.createSession(target.host, community, {
-      port: target.port || 161, timeout: 3000, retries: 1, version: snmp.Version2c,
-    });
+    let session;
+    try { session = openSession(target); }
+    catch (e) { setStatus.run(`bad credentials (${String(e.message).slice(0, 60)})`, now(), target.id); return resolve(); }
     session.get(oids, (error, varbinds) => {
       const t = now();
       if (error) {

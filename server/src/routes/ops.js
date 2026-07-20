@@ -2,8 +2,10 @@
 // Session-authenticated operations API: events, cases, logs, dashboard,
 // analytics, alert rules, notifications, incidents, live stream (SSE).
 const express = require('express');
+const crypto = require('crypto');
 const { db } = require('../db');
-const { now, clampInt, isStr, optStr, httpError, SseHub } = require('../util');
+const { now, sha256, clampInt, isStr, optStr, httpError, SseHub } = require('../util');
+const config = require('../config');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
 
@@ -300,6 +302,55 @@ router.get('/notifications', (req, res) => {
     channel: n.channel, ok: !!n.ok, error: n.error })));
 });
 
+// ---- heartbeats (dead-man's-switch monitors) ----
+function heartbeatStatus(hb, t) {
+  const base = hb.last_ping_at || hb.created_at;
+  if (!hb.enabled) return 'disabled';
+  if (t > base + (hb.interval_s + hb.grace_s) * 1000) return 'missing';
+  if (t > base + hb.interval_s * 1000) return 'late';
+  return hb.last_ping_at ? 'ok' : 'waiting';
+}
+
+router.get('/heartbeats', (req, res) => {
+  const t = now();
+  res.json(db.prepare('SELECT * FROM heartbeats WHERE org_id = ? ORDER BY id').all(req.orgId)
+    .map((hb) => ({ id: hb.id, name: hb.name, intervalS: hb.interval_s, graceS: hb.grace_s,
+      enabled: !!hb.enabled, lastPingAt: hb.last_ping_at, status: heartbeatStatus(hb, t) })));
+});
+
+router.post('/heartbeats', sec.requireRole('lead'), (req, res) => {
+  const { name, intervalS, graceS } = req.body || {};
+  if (!isStr(name, 100)) return httpError(res, 400, 'name required');
+  const token = 'och_' + crypto.randomBytes(24).toString('hex');
+  const info = db.prepare(`INSERT INTO heartbeats (org_id, name, token_hash, interval_s, grace_s,
+    enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)`)
+    .run(req.orgId, name, sha256(token), clampInt(intervalS, 30, 30 * 86400, 3600),
+      clampInt(graceS, 0, 86400, 300), now());
+  sec.audit(req.user.id, 'heartbeat_create', name, req.orgId);
+  // ping URL returned once — only the token hash is stored
+  res.json({ id: info.lastInsertRowid, pingUrl: `${config.baseUrl}/v1/heartbeat/${token}` });
+});
+
+router.patch('/heartbeats/:id', sec.requireRole('lead'), (req, res) => {
+  const hb = db.prepare('SELECT * FROM heartbeats WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  if (!hb) return httpError(res, 404, 'heartbeat not found');
+  const b = req.body || {};
+  db.prepare(`UPDATE heartbeats SET name = COALESCE(?, name), enabled = COALESCE(?, enabled),
+      interval_s = COALESCE(?, interval_s), grace_s = COALESCE(?, grace_s) WHERE id = ? AND org_id = ?`)
+    .run(isStr(b.name, 100) ? b.name : null,
+      typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
+      Number.isFinite(b.intervalS) ? clampInt(b.intervalS, 30, 30 * 86400, 3600) : null,
+      Number.isFinite(b.graceS) ? clampInt(b.graceS, 0, 86400, 300) : null, hb.id, req.orgId);
+  sec.audit(req.user.id, 'heartbeat_update', hb.name, req.orgId);
+  res.json({ ok: true });
+});
+
+router.delete('/heartbeats/:id', sec.requireRole('lead'), (req, res) => {
+  db.prepare('DELETE FROM heartbeats WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+  sec.audit(req.user.id, 'heartbeat_delete', `heartbeat ${req.params.id}`, req.orgId);
+  res.json({ ok: true });
+});
+
 // ---- assets: every monitored counterparty in one list ----
 // Agents, SNMP targets and synthetic checks are configured objects; "sources"
 // are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
@@ -325,6 +376,10 @@ router.get('/assets', (req, res) => {
     rows.push({ kind: 'check', id: c.id, name: `${c.type} ${c.target}`, detail: `every ${c.interval_s}s`,
       status: !c.enabled ? 'disabled' : last && last.ts != null ? (last.ok ? 'ok' : 'failing') : 'pending',
       lastSeen: last ? last.ts : null });
+  }
+  for (const hb of db.prepare('SELECT * FROM heartbeats WHERE org_id = ?').all(req.orgId)) {
+    rows.push({ kind: 'heartbeat', id: hb.id, name: hb.name, detail: `every ${hb.interval_s}s (+${hb.grace_s}s grace)`,
+      status: heartbeatStatus(hb, t), lastSeen: hb.last_ping_at || null });
   }
   const sources = new Map();
   for (const r of db.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {

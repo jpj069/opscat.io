@@ -22,6 +22,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(require('./routes/public'));
 
 // open ingest surface (API-key / agent-token / probe-key auth)
+app.use('/v1', require('./routes/heartbeat')); // public ping, token-in-URL auth
 app.use('/v1', require('./routes/ingest'));
 
 // IMPORTANT: mount specific /api/* routers BEFORE the broad '/api' ops router,
@@ -91,6 +92,7 @@ seed();
 require('./engine/alerts').start();
 require('./engine/synthetics').start();
 require('./engine/snmp').start();
+require('./engine/heartbeats').start();
 require('./engine/retention').start();
 
 app.listen(config.port, () => {

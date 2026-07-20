@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   interval_s    INTEGER NOT NULL DEFAULT 60,
   timeout_ms    INTEGER NOT NULL DEFAULT 5000,
   enabled       INTEGER NOT NULL DEFAULT 1,
+  assertions    TEXT,                        -- JSON {status?, keyword?, jsonPath?, jsonValue?} (http only)
   created_at    INTEGER NOT NULL
 );
 
@@ -211,13 +212,35 @@ CREATE TABLE IF NOT EXISTS snmp_targets (
   name          TEXT NOT NULL,
   host          TEXT NOT NULL,
   port          INTEGER NOT NULL DEFAULT 161,
-  version       TEXT NOT NULL DEFAULT '2c',
+  version       TEXT NOT NULL DEFAULT '2c', -- '2c' | '3'
   community_enc TEXT NOT NULL,               -- AES-256-GCM(community)
   oids          TEXT NOT NULL DEFAULT '[]',  -- JSON [{oid,label}]
   interval_s    INTEGER NOT NULL DEFAULT 60,
   enabled       INTEGER NOT NULL DEFAULT 1,
   last_status   TEXT,                        -- 'ok' | 'unreachable' | error msg
   last_seen_at  INTEGER,
+  -- SNMPv3 (used when version = '3'; keys AES-256-GCM encrypted like community)
+  v3_user           TEXT,
+  v3_level          TEXT,                    -- noAuthNoPriv | authNoPriv | authPriv
+  v3_auth_protocol  TEXT,                    -- md5 | sha
+  v3_auth_key_enc   TEXT,
+  v3_priv_protocol  TEXT,                    -- des | aes
+  v3_priv_key_enc   TEXT,
+  created_at    INTEGER NOT NULL
+);
+
+-- dead-man's-switch monitors: a cron job / backup pings its URL; silence longer
+-- than interval+grace raises a heartbeat_missed event.
+CREATE TABLE IF NOT EXISTS heartbeats (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  name          TEXT NOT NULL,
+  token_hash    TEXT NOT NULL UNIQUE,
+  interval_s    INTEGER NOT NULL DEFAULT 3600,
+  grace_s       INTEGER NOT NULL DEFAULT 300,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  last_ping_at  INTEGER,
+  alerted_at    INTEGER,                     -- set when the current miss was reported
   created_at    INTEGER NOT NULL
 );
 

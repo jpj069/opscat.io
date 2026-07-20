@@ -178,16 +178,38 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
 // ---- SNMP targets (lead+) ----
 router.get('/snmp/targets', sec.requireRole('lead'), (req, res) => {
   res.json(db.prepare(`SELECT id, name, host, port, version, oids, interval_s, enabled,
-    last_status, last_seen_at FROM snmp_targets WHERE org_id = ? ORDER BY id`).all(req.orgId)
+    last_status, last_seen_at, v3_user, v3_level FROM snmp_targets WHERE org_id = ? ORDER BY id`).all(req.orgId)
     .map((t) => ({ id: t.id, name: t.name, host: t.host, port: t.port, version: t.version,
       oids: JSON.parse(t.oids || '[]'), intervalS: t.interval_s, enabled: !!t.enabled,
-      lastStatus: t.last_status, lastSeenAt: t.last_seen_at })));
+      lastStatus: t.last_status, lastSeenAt: t.last_seen_at,
+      v3User: t.v3_user, v3Level: t.v3_level })));
 });
 
+const V3_LEVELS = ['noAuthNoPriv', 'authNoPriv', 'authPriv'];
+
 router.post('/snmp/targets', sec.requireRole('lead'), (req, res) => {
-  const { name, host, port, community, oids, intervalS } = req.body || {};
+  const { name, host, port, version, community, oids, intervalS,
+    v3User, v3Level, v3AuthProtocol, v3AuthKey, v3PrivProtocol, v3PrivKey } = req.body || {};
   if (!isStr(name, 100) || !isStr(host, 255)) return httpError(res, 400, 'name and host required');
-  if (!isStr(community, 200)) return httpError(res, 400, 'community required');
+  const ver = version === '3' ? '3' : '2c';
+  const v3 = { user: null, level: null, authProto: null, authKeyEnc: null, privProto: null, privKeyEnc: null };
+  if (ver === '2c') {
+    if (!isStr(community, 200)) return httpError(res, 400, 'community required');
+  } else {
+    if (!isStr(v3User, 100)) return httpError(res, 400, 'v3User required');
+    if (!V3_LEVELS.includes(v3Level)) return httpError(res, 400, 'bad v3Level');
+    v3.user = v3User; v3.level = v3Level;
+    if (v3Level !== 'noAuthNoPriv') {
+      if (!isStr(v3AuthKey, 200) || v3AuthKey.length < 8) return httpError(res, 400, 'v3AuthKey required (min 8 chars)');
+      v3.authProto = v3AuthProtocol === 'sha' ? 'sha' : 'md5';
+      v3.authKeyEnc = encrypt(v3AuthKey, config.secret);
+    }
+    if (v3Level === 'authPriv') {
+      if (!isStr(v3PrivKey, 200) || v3PrivKey.length < 8) return httpError(res, 400, 'v3PrivKey required (min 8 chars)');
+      v3.privProto = v3PrivProtocol === 'aes' ? 'aes' : 'des';
+      v3.privKeyEnc = encrypt(v3PrivKey, config.secret);
+    }
+  }
   if (!withinPlan(req, res, 'snmpTargets')) return undefined;
   let oidsJson = '[]';
   if (Array.isArray(oids)) {
@@ -195,10 +217,12 @@ router.post('/snmp/targets', sec.requireRole('lead'), (req, res) => {
     oidsJson = JSON.stringify(clean);
   }
   const info = db.prepare(`INSERT INTO snmp_targets (org_id, name, host, port, version, community_enc, oids,
-    interval_s, enabled, created_at) VALUES (?, ?, ?, ?, '2c', ?, ?, ?, 1, ?)`)
-    .run(req.orgId, name, host, clampInt(port, 1, 65535, 161), encrypt(community, config.secret),
-      oidsJson, clampInt(intervalS, 15, 3600, 60), now());
-  sec.audit(req.user.id, 'snmp_target_create', `${name} (${host})`, req.orgId);
+    interval_s, enabled, v3_user, v3_level, v3_auth_protocol, v3_auth_key_enc, v3_priv_protocol, v3_priv_key_enc,
+    created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(req.orgId, name, host, clampInt(port, 1, 65535, 161), ver,
+      encrypt(ver === '2c' ? community : '', config.secret), oidsJson, clampInt(intervalS, 15, 3600, 60),
+      v3.user, v3.level, v3.authProto, v3.authKeyEnc, v3.privProto, v3.privKeyEnc, now());
+  sec.audit(req.user.id, 'snmp_target_create', `${name} (${host}, v${ver})`, req.orgId);
   res.json({ id: info.lastInsertRowid });
 });
 

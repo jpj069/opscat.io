@@ -653,7 +653,14 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [port, setPort] = useState('161');
+  const [version, setVersion] = useState<'2c' | '3'>('2c');
   const [community, setCommunity] = useState('');
+  const [v3User, setV3User] = useState('');
+  const [v3Level, setV3Level] = useState('authPriv');
+  const [v3AuthProtocol, setV3AuthProtocol] = useState('sha');
+  const [v3AuthKey, setV3AuthKey] = useState('');
+  const [v3PrivProtocol, setV3PrivProtocol] = useState('aes');
+  const [v3PrivKey, setV3PrivKey] = useState('');
   const [interval, setIntervalS] = useState('60');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -661,7 +668,12 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
     e.preventDefault(); setBusy(true); setErr('');
     try {
       await api.post('/api/admin/snmp/targets', {
-        name, host, port: Number(port) || 161, community, oids: [], intervalS: Number(interval) || 60,
+        name, host, port: Number(port) || 161, version, oids: [], intervalS: Number(interval) || 60,
+        ...(version === '2c' ? { community } : {
+          v3User, v3Level,
+          ...(v3Level !== 'noAuthNoPriv' ? { v3AuthProtocol, v3AuthKey } : {}),
+          ...(v3Level === 'authPriv' ? { v3PrivProtocol, v3PrivKey } : {}),
+        }),
       });
       onCreated(); onClose();
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); setBusy(false); }
@@ -678,13 +690,69 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
         <Field label="Port">
           <input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
         </Field>
-        <Field label="Community (v2c)">
-          <input type="password" value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
+        <Field label="SNMP version">
+          <select value={version} onChange={(e) => setVersion(e.target.value as '2c' | '3')}>
+            <option value="2c">v2c (community)</option>
+            <option value="3">v3 (user-based security)</option>
+          </select>
         </Field>
+        {version === '2c' ? (
+          <Field label="Community">
+            <input type="password" value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
+          </Field>
+        ) : (
+          <>
+            <Field label="Security user">
+              <input required value={v3User} onChange={(e) => setV3User(e.target.value)} placeholder="opscat-ro" />
+            </Field>
+            <Field label="Security level">
+              <select value={v3Level} onChange={(e) => setV3Level(e.target.value)}>
+                <option value="noAuthNoPriv">noAuthNoPriv</option>
+                <option value="authNoPriv">authNoPriv</option>
+                <option value="authPriv">authPriv</option>
+              </select>
+            </Field>
+            {v3Level !== 'noAuthNoPriv' && (
+              <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                <div style={{ width: 90 }}>
+                  <Field label="Auth">
+                    <select value={v3AuthProtocol} onChange={(e) => setV3AuthProtocol(e.target.value)}>
+                      <option value="sha">SHA</option>
+                      <option value="md5">MD5</option>
+                    </select>
+                  </Field>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Field label="Auth key (min 8 chars)">
+                    <input type="password" required minLength={8} value={v3AuthKey}
+                      onChange={(e) => setV3AuthKey(e.target.value)} />
+                  </Field>
+                </div>
+              </div>
+            )}
+            {v3Level === 'authPriv' && (
+              <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                <div style={{ width: 90 }}>
+                  <Field label="Privacy">
+                    <select value={v3PrivProtocol} onChange={(e) => setV3PrivProtocol(e.target.value)}>
+                      <option value="aes">AES</option>
+                      <option value="des">DES</option>
+                    </select>
+                  </Field>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Field label="Privacy key (min 8 chars)">
+                    <input type="password" required minLength={8} value={v3PrivKey}
+                      onChange={(e) => setV3PrivKey(e.target.value)} />
+                  </Field>
+                </div>
+              </div>
+            )}
+          </>
+        )}
         <Field label="Interval (seconds)">
           <input value={interval} onChange={(e) => setIntervalS(e.target.value)} inputMode="numeric" />
         </Field>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8 }}>SNMP v2c.</div>
         {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Add target'}</button>

@@ -14,7 +14,7 @@ const chanColor = (ch: string) => CHAN_COLORS[ch] || SEV.info;
 const RULE_COLS = '1fr 90px 140px 70px 80px 60px 110px';
 const NOTIF_COLS = '80px 1fr 90px 90px 70px';
 const DEFAULT_TRIGGERS = ['ddos', 'out_of_memory', 'synthetic_check_failed', 'snmp_unreachable',
-  'agent_offline', 'host_disk_high', 'sentry_error'];
+  'agent_offline', 'host_disk_high', 'sentry_error', 'tls_cert_expiring', 'heartbeat_missed'];
 
 export default function Rules() {
   const app = useApp();

@@ -52,7 +52,7 @@ export interface Rule {
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
 export interface AssetRow {
-  kind: 'agent' | 'snmp' | 'check' | 'source';
+  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'source';
   id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
 }
 
@@ -72,9 +72,11 @@ export interface Component {
 }
 
 export interface SynthLocation { id: number; city: string; cc: string; kind: 'local' | 'remote'; online: boolean; }
+export interface CheckAssertions { status?: number; keyword?: string; jsonPath?: string; jsonValue?: string; }
 export interface SynthCheck {
   id: number; type: 'http' | 'icmp' | 'dns' | 'tcp' | 'traceroute'; target: string;
   intervalS: number; timeoutMs: number; enabled: boolean; passing: boolean; locations: number;
+  assertions: CheckAssertions | null;
 }
 export interface SynthResult {
   checkId: number; locationId: number; ts: number; ok: boolean; latencyMs: number | null;
@@ -94,6 +96,11 @@ export interface SnmpTarget {
   id: number; name: string; host: string; port: number; version: string;
   oids: { oid: string; label: string }[]; intervalS: number; enabled: boolean;
   lastStatus: string | null; lastSeenAt: number | null;
+  v3User?: string | null; v3Level?: string | null;
+}
+export interface HeartbeatRow {
+  id: number; name: string; intervalS: number; graceS: number; enabled: boolean;
+  lastPingAt: number | null; status: string;
 }
 export interface AgentRow {
   id: number; name: string; group: string; hostname: string | null; platform: string | null;

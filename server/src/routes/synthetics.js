@@ -49,6 +49,20 @@ router.delete('/locations/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
+// Sanitize the optional http assertions object; null when nothing is set.
+function cleanAssertions(a) {
+  if (!a || typeof a !== 'object') return null;
+  const out = {};
+  const status = parseInt(a.status, 10);
+  if (Number.isFinite(status) && status >= 100 && status <= 599) out.status = status;
+  if (isStr(a.keyword, 200) && a.keyword.trim()) out.keyword = a.keyword.trim();
+  if (isStr(a.jsonPath, 200) && a.jsonPath.trim()) {
+    out.jsonPath = a.jsonPath.trim();
+    out.jsonValue = isStr(a.jsonValue, 200) ? a.jsonValue : '';
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
 router.get('/checks', (req, res) => {
   const checks = db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ? ORDER BY id').all(req.orgId);
   const t = now();
@@ -59,18 +73,20 @@ router.get('/checks', (req, res) => {
     const locs = db.prepare(`SELECT COUNT(DISTINCT location_id) c FROM synthetic_results
       WHERE check_id = ? AND ts >= ?`).get(c.id, t - 3600000).c;
     return { id: c.id, type: c.type, target: c.target, intervalS: c.interval_s,
-      timeoutMs: c.timeout_ms, enabled: !!c.enabled, passing: !failing, locations: Math.max(locs, 1) };
+      timeoutMs: c.timeout_ms, enabled: !!c.enabled, passing: !failing, locations: Math.max(locs, 1),
+      assertions: c.assertions ? JSON.parse(c.assertions) : null };
   }));
 });
 
 router.post('/checks', sec.requireRole('lead'), (req, res) => {
-  const { type, target, intervalS, timeoutMs } = req.body || {};
+  const { type, target, intervalS, timeoutMs, assertions } = req.body || {};
   if (!['http', 'icmp', 'dns', 'tcp', 'traceroute'].includes(type)) return httpError(res, 400, 'bad type');
   if (!isStr(target, 300)) return httpError(res, 400, 'target required');
   if (!withinPlan(req, res, 'checks')) return undefined;
-  const info = db.prepare(`INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms, enabled, created_at)
-    VALUES (?, ?, ?, ?, ?, 1, ?)`)
-    .run(req.orgId, type, target, clampInt(intervalS, 15, 3600, 60), clampInt(timeoutMs, 500, 60000, 5000), now());
+  const info = db.prepare(`INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms,
+    enabled, assertions, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`)
+    .run(req.orgId, type, target, clampInt(intervalS, 15, 3600, 60), clampInt(timeoutMs, 500, 60000, 5000),
+      type === 'http' ? cleanAssertions(assertions) : null, now());
   sec.audit(req.user.id, 'check_create', `${type} ${target}`, req.orgId);
   res.json({ id: info.lastInsertRowid });
 });
@@ -80,10 +96,13 @@ router.patch('/checks/:id', sec.requireRole('lead'), (req, res) => {
   if (!c) return httpError(res, 404, 'check not found');
   const b = req.body || {};
   db.prepare(`UPDATE synthetic_checks SET target = COALESCE(?, target),
-      interval_s = COALESCE(?, interval_s), enabled = COALESCE(?, enabled) WHERE id = ? AND org_id = ?`)
+      interval_s = COALESCE(?, interval_s), enabled = COALESCE(?, enabled),
+      assertions = CASE WHEN ? THEN ? ELSE assertions END WHERE id = ? AND org_id = ?`)
     .run(isStr(b.target, 300) ? b.target : null,
       Number.isFinite(b.intervalS) ? clampInt(b.intervalS, 15, 3600, 60) : null,
-      typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null, c.id, req.orgId);
+      typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
+      b.assertions !== undefined && c.type === 'http' ? 1 : 0, cleanAssertions(b.assertions),
+      c.id, req.orgId);
   sec.audit(req.user.id, 'check_update', `check ${c.id}`, req.orgId);
   res.json({ ok: true });
 });

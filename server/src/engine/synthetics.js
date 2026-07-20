@@ -5,6 +5,7 @@
 const { execFile } = require('child_process');
 const dns = require('dns');
 const net = require('net');
+const tls = require('tls');
 const { db } = require('../db');
 const config = require('../config');
 const { now } = require('../util');
@@ -82,13 +83,65 @@ async function assertPublicHost(host) {
   if (isPrivateAddress(address)) throw new Error('target resolves to a private address');
 }
 
+// Days until the server certificate expires (null when unknown/plain http).
+// rejectUnauthorized:false on purpose — an already-invalid chain should still
+// report its dates instead of hiding them.
+function certDaysLeft(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    let sock;
+    const finish = (v) => { try { sock.destroy(); } catch { /* noop */ } resolve(v); };
+    try {
+      sock = tls.connect({ host, port, servername: host, timeout: timeoutMs, rejectUnauthorized: false }, () => {
+        const cert = sock.getPeerCertificate();
+        if (!cert || !cert.valid_to) return finish(null);
+        finish(Math.floor((Date.parse(cert.valid_to) - Date.now()) / 86400000));
+      });
+      sock.on('error', () => finish(null));
+      sock.on('timeout', () => finish(null));
+    } catch { resolve(null); }
+  });
+}
+
+// Simple dot-path lookup ("a.b.0.c") — deliberately no JSONPath dependency.
+function jsonPath(obj, path) {
+  let cur = obj;
+  for (const part of String(path).replace(/^\$\.?/, '').split('.').filter(Boolean)) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = cur[part];
+  }
+  return cur;
+}
+
+// Evaluate configured assertions against the response; returns a failure
+// message or null when everything passes.
+function failedAssertion(assertions, status, bodyText) {
+  if (assertions.status && status !== assertions.status) {
+    return `status ${status} != ${assertions.status}`;
+  }
+  if (assertions.keyword && !bodyText.includes(assertions.keyword)) {
+    return `keyword "${assertions.keyword}" not found`;
+  }
+  if (assertions.jsonPath) {
+    let val;
+    try { val = jsonPath(JSON.parse(bodyText), assertions.jsonPath); }
+    catch { return 'response is not valid JSON'; }
+    if (String(val) !== String(assertions.jsonValue)) {
+      return `${assertions.jsonPath} = ${JSON.stringify(val)} != ${JSON.stringify(assertions.jsonValue)}`;
+    }
+  }
+  return null;
+}
+
 async function checkHttp(check) {
   const url = /^https?:\/\//.test(check.target) ? check.target : `https://${check.target}`;
+  let assertions = null;
+  try { assertions = check.assertions ? JSON.parse(check.assertions) : null; } catch { /* noop */ }
   const started = process.hrtime.bigint();
   try {
-    let host;
-    try { host = new URL(url).hostname.replace(/^\[|\]$/g, ''); }
+    let parsed;
+    try { parsed = new URL(url); }
     catch { return { ok: false, latency: null, meta: { error: 'invalid url' } }; }
+    const host = parsed.hostname.replace(/^\[|\]$/g, '');
     await assertPublicHost(host);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), check.timeout_ms);
@@ -98,10 +151,25 @@ async function checkHttp(check) {
       signal: ctrl.signal, redirect: 'manual',
       headers: { 'User-Agent': 'OpsCat-Synthetics/1.0' },
     });
-    await resp.arrayBuffer().catch(() => {}); // drain
+    // body only needed when assertions inspect it; otherwise just drain
+    const body = assertions && (assertions.keyword || assertions.jsonPath)
+      ? (await resp.text().catch(() => '')).slice(0, 262144)
+      : (await resp.arrayBuffer().catch(() => {}), '');
     clearTimeout(timer);
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    return { ok: resp.status < 400, latency: ms, meta: { status: resp.status } };
+    const meta = { status: resp.status };
+    if (parsed.protocol === 'https:') {
+      const days = await certDaysLeft(host, Number(parsed.port) || 443, check.timeout_ms);
+      if (days != null) meta.certDaysLeft = days;
+    }
+    let ok = resp.status < 400;
+    if (ok && assertions) {
+      const failed = failedAssertion(assertions, resp.status, body);
+      if (failed) { ok = false; meta.failed = failed; }
+    } else if (!ok && assertions && assertions.status === resp.status) {
+      ok = !failedAssertion(assertions, resp.status, body); // explicitly expected non-2xx
+    }
+    return { ok, latency: ms, meta };
   } catch (e) {
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
     return { ok: false, latency: ms, meta: { error: String(e.cause?.code || e.message || e.name).slice(0, 100) } };
@@ -178,6 +246,18 @@ const RUNNERS = { http: checkHttp, icmp: checkIcmp, dns: checkDns, tcp: checkTcp
 
 function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
   insResult.run(checkId, locationId, ts, ok ? 1 : 0, latency, meta ? JSON.stringify(meta).slice(0, 4000) : null);
+  // certificate expiry is an event of its own — the site may still be up
+  if (meta && Number.isFinite(meta.certDaysLeft) && meta.certDaysLeft <= 14) {
+    const check = getCheck.get(checkId);
+    if (check) {
+      const days = meta.certDaysLeft;
+      pipeline.ingestEvent({
+        name: 'tls_cert_expiring', device: check.target.replace(/^https?:\/\//, '').split('/')[0],
+        target: check.target, severity: days <= 3 ? 85 : days <= 7 ? 75 : 60,
+        description: `tls_cert_expiring ${check.target} — certificate expires in ${days} day(s)`,
+      }, 'synthetics', false, check.org_id);
+    }
+  }
   if (!ok) {
     // only raise an event after 2 consecutive failures to avoid flapping
     const recent = lastFails.all(checkId, locationId);

@@ -5,25 +5,26 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Modal, StatusPill } from '../ui';
+import { Modal, StatusPill, Field } from '../ui';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
 import type { AssetRow } from '../types';
 
-const COLS = '1fr 110px 1fr 110px 110px';
+const COLS = '1fr 110px 1fr 110px 110px 34px';
 
 const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   agent: { label: 'agent', color: '#38b6ff' },
   snmp: { label: 'snmp', color: '#e3b341' },
   check: { label: 'check', color: '#bc8cff' },
+  heartbeat: { label: 'heartbeat', color: '#f0883e' },
   source: { label: 'source', color: '#3fb950' },
 };
 
 function statusColor(s: string): string {
   if (s === 'online' || s === 'ok' || s === 'active') return SEV.green;
-  if (s === 'pending') return '#e3b341';
-  if (s === 'disabled') return 'var(--text3)';
-  return SEV.critical; // offline / failing / unreachable / error text
+  if (s === 'pending' || s === 'late') return '#e3b341';
+  if (s === 'disabled' || s === 'waiting') return 'var(--text3)';
+  return SEV.critical; // offline / failing / missing / unreachable / error text
 }
 
 export default function Assets() {
@@ -32,7 +33,7 @@ export default function Assets() {
   const [rows, setRows] = useState<AssetRow[] | null>(null);
   const [filter, setFilter] = useState<AssetRow['kind'] | 'all'>('all');
   const [adding, setAdding] = useState(false);
-  const [modal, setModal] = useState<'key' | 'agent' | 'target' | null>(null);
+  const [modal, setModal] = useState<'key' | 'agent' | 'target' | 'heartbeat' | null>(null);
   const [secret, setSecret] = useState<SecretInfo | null>(null);
 
   const load = () => api.get<AssetRow[]>('/api/assets').then(setRows).catch(() => setRows([]));
@@ -41,10 +42,16 @@ export default function Assets() {
   const shown = rows?.filter((r) => filter === 'all' || r.kind === filter);
   const counts = (k: AssetRow['kind']) => rows?.filter((r) => r.kind === k).length ?? 0;
 
-  const pick = (m: 'key' | 'agent' | 'target' | 'synthetics') => {
+  const pick = (m: 'key' | 'agent' | 'target' | 'heartbeat' | 'synthetics') => {
     setAdding(false);
     if (m === 'synthetics') { app.setNav('synthetics'); return; }
     setModal(m);
+  };
+
+  const removeHeartbeat = async (r: AssetRow) => {
+    if (!confirm(`Delete heartbeat "${r.name}"?`)) return;
+    await api.del(`/api/heartbeats/${r.id}`);
+    load();
   };
 
   return (
@@ -55,7 +62,7 @@ export default function Assets() {
       </div>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        {(['all', 'agent', 'snmp', 'check', 'source'] as const).map((k) => (
+        {(['all', 'agent', 'snmp', 'check', 'heartbeat', 'source'] as const).map((k) => (
           <button key={k} className="btn btn-sm" onClick={() => setFilter(k)}
             style={{ background: filter === k ? 'var(--bg3)' : undefined,
               color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>
@@ -66,7 +73,7 @@ export default function Assets() {
 
       <div className="card" style={{ padding: 0 }}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
-          <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span>
+          <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
         </div>
         {!shown ? (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
@@ -84,6 +91,12 @@ export default function Assets() {
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.status}>{r.status}</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>
               {r.lastSeen ? relTime(r.lastSeen) : 'never'}</span>
+            <span>
+              {canEdit && r.kind === 'heartbeat' && (
+                <button title="Delete heartbeat" style={{ color: SEV.critical, fontSize: 13 }}
+                  onClick={() => removeHeartbeat(r)}>×</button>
+              )}
+            </span>
           </div>
         ))}
       </div>
@@ -97,16 +110,70 @@ export default function Assets() {
               onClick={() => pick('target')} />
             <AddChoice icon="≡" title="Application" note="Create an API key for the SDK, OTLP, Sentry or webhooks"
               onClick={() => pick('key')} />
-            <AddChoice icon="◉" title="Synthetic check" note="HTTP, ping, DNS or traceroute — from one or more locations"
+            <AddChoice icon="◉" title="Synthetic check" note="HTTP, ping, DNS, TCP or traceroute — from one or more locations"
               onClick={() => pick('synthetics')} />
+            <AddChoice icon="♥" title="Heartbeat / cron job" note="A backup or cron job pings a URL — silence raises an alert"
+              onClick={() => pick('heartbeat')} />
           </div>
         </Modal>
       )}
       {modal === 'agent' && <RegisterAgentModal onClose={() => setModal(null)} onCreated={load} onSecret={setSecret} />}
       {modal === 'target' && <AddTargetModal onClose={() => setModal(null)} onCreated={load} />}
       {modal === 'key' && <CreateKeyModal onClose={() => setModal(null)} onCreated={load} onSecret={setSecret} />}
+      {modal === 'heartbeat' && <CreateHeartbeatModal onClose={() => setModal(null)} onCreated={load} onSecret={setSecret} />}
       {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
     </div>
+  );
+}
+
+function CreateHeartbeatModal({ onClose, onCreated, onSecret }:
+  { onClose: () => void; onCreated: () => void; onSecret: (s: SecretInfo) => void }) {
+  const [name, setName] = useState('');
+  const [intervalS, setIntervalS] = useState(3600);
+  const [graceS, setGraceS] = useState(300);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr('');
+    try {
+      const r = await api.post<{ pingUrl: string }>('/api/heartbeats', { name, intervalS, graceS });
+      onSecret({
+        title: 'Heartbeat created',
+        note: 'Ping this URL from your job (curl -fsS <url>). It is shown only once.',
+        value: r.pingUrl,
+      });
+      onCreated(); onClose();
+    } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); setBusy(false); }
+  };
+  return (
+    <Modal title="Add heartbeat" onClose={onClose}>
+      <form onSubmit={submit}>
+        <Field label="Name">
+          <input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="nightly-backup" />
+        </Field>
+        <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <Field label="Expected every (seconds)">
+              <input type="number" min={30} value={intervalS}
+                onChange={(e) => setIntervalS(Number(e.target.value))} />
+            </Field>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Field label="Grace (seconds)">
+              <input type="number" min={0} value={graceS}
+                onChange={(e) => setGraceS(Number(e.target.value))} />
+            </Field>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8 }}>
+          No ping for longer than interval + grace raises a <span className="mono">heartbeat_missed</span> event.
+        </div>
+        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+          disabled={busy || !name.trim()}>{busy ? '…' : 'Create heartbeat'}</button>
+      </form>
+    </Modal>
   );
 }
 

@@ -254,12 +254,22 @@ function AddCheckModal({ onClose, onAdded }: { onClose: () => void; onAdded: () 
   const [target, setTarget] = useState('');
   const [intervalS, setIntervalS] = useState(60);
   const [timeoutMs, setTimeoutMs] = useState(5000);
+  const [expectStatus, setExpectStatus] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [jsonPath, setJsonPath] = useState('');
+  const [jsonValue, setJsonValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr('');
-    try { await api.post('/api/synthetics/checks', { type, target, intervalS, timeoutMs }); onAdded(); }
+    const assertions = type === 'http' && (expectStatus || keyword || jsonPath) ? {
+      status: expectStatus ? Number(expectStatus) : undefined,
+      keyword: keyword || undefined,
+      jsonPath: jsonPath || undefined,
+      jsonValue: jsonPath ? jsonValue : undefined,
+    } : undefined;
+    try { await api.post('/api/synthetics/checks', { type, target, intervalS, timeoutMs, assertions }); onAdded(); }
     catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); setBusy(false); }
   };
 
@@ -281,6 +291,40 @@ function AddCheckModal({ onClose, onAdded }: { onClose: () => void; onAdded: () 
         <Field label="Timeout (ms)">
           <input type="number" min={100} value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} />
         </Field>
+        {type === 'http' && (
+          <>
+            <div className="micro" style={{ fontSize: 9, margin: '4px 0 6px' }}>
+              ASSERTIONS (optional — leave empty for "reachable = ok")</div>
+            <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <Field label="Expected status">
+                  <input inputMode="numeric" value={expectStatus} placeholder="e.g. 200"
+                    onChange={(e) => setExpectStatus(e.target.value)} />
+                </Field>
+              </div>
+              <div style={{ flex: 2 }}>
+                <Field label="Body must contain">
+                  <input value={keyword} placeholder='e.g. "status":"ok"'
+                    onChange={(e) => setKeyword(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+            <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <Field label="JSON path">
+                  <input className="mono" value={jsonPath} placeholder="$.status"
+                    onChange={(e) => setJsonPath(e.target.value)} />
+                </Field>
+              </div>
+              <div style={{ flex: 1 }}>
+                <Field label="equals">
+                  <input className="mono" value={jsonValue} placeholder="ok"
+                    onChange={(e) => setJsonValue(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          </>
+        )}
         {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || !target}>{busy ? '…' : 'Add check'}</button>

@@ -140,6 +140,17 @@ const MIGRATIONS = [
       SELECT id, 'onboarding_done', '0' FROM organizations WHERE true
       ON CONFLICT(org_id, key) DO UPDATE SET value = '0'`).run();
   },
+  // idx 5 -> version 6: HTTP assertions on synthetic checks + SNMPv3 target
+  // credentials. (The heartbeats table ships via schema.sql CREATE IF NOT EXISTS.)
+  () => {
+    addColumn('synthetic_checks', 'assertions', 'TEXT');
+    addColumn('snmp_targets', 'v3_user', 'TEXT');
+    addColumn('snmp_targets', 'v3_level', 'TEXT');
+    addColumn('snmp_targets', 'v3_auth_protocol', 'TEXT');
+    addColumn('snmp_targets', 'v3_auth_key_enc', 'TEXT');
+    addColumn('snmp_targets', 'v3_priv_protocol', 'TEXT');
+    addColumn('snmp_targets', 'v3_priv_key_enc', 'TEXT');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);
