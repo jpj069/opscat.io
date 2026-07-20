@@ -15,8 +15,9 @@ pipeline.on('log', (l) => hub.broadcast('log', l, l.orgId));
 pipeline.on('event', (e) => hub.broadcast('event', publicEvent(e), e.org_id));
 
 const userLite = db.prepare('SELECT id, name, color FROM users WHERE id = ?');
-// org-scoped existence check used to validate assignees (tenant isolation)
-const userInOrg = db.prepare('SELECT id FROM users WHERE id = ? AND org_id = ?');
+// org-scoped existence check used to validate assignees (tenant isolation):
+// a user may act in this org only if they hold a membership in it.
+const userInOrg = db.prepare('SELECT user_id AS id FROM memberships WHERE user_id = ? AND org_id = ?');
 function initials(name) {
   return name.split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase();
 }
@@ -41,7 +42,8 @@ router.get('/stream', (req, res) => hub.handler(req, res, req.orgId));
 // Assignee pickers need names/colors without exposing emails or last-seen —
 // the full user list stays behind lead+ in /api/admin/users.
 router.get('/team', (req, res) => {
-  res.json(db.prepare("SELECT id, name, color, role FROM users WHERE active = 1 AND org_id = ? ORDER BY name").all(req.orgId)
+  res.json(db.prepare(`SELECT u.id, u.name, u.color, m.role FROM memberships m
+    JOIN users u ON u.id = m.user_id WHERE m.org_id = ? AND u.active = 1 ORDER BY u.name`).all(req.orgId)
     .map((u) => ({ id: u.id, name: u.name, i: initials(u.name), color: u.color, role: u.role })));
 });
 

@@ -44,9 +44,10 @@ app.get('/api/plans', (req, res) => res.json({
   },
 }));
 
-// Enterprise-edition routes (billing / super-admin). Self-guard by edition + role.
+// Enterprise-edition routes (billing / super-admin / self-service orgs). Self-guard by edition + role.
 try { app.use('/api/billing', require('./routes/billing')); } catch (e) { /* EE module absent */ }
 try { app.use('/api/superadmin', require('./routes/superadmin')); } catch (e) { /* EE module absent */ }
+try { app.use('/api/orgs', require('./routes/orgs')); } catch (e) { /* EE module absent */ }
 
 // session-authenticated app APIs — ops is the catch-all for the remaining
 // /api/* routes, so it MUST be mounted last.

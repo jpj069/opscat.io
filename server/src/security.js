@@ -1,5 +1,5 @@
 'use strict';
-const { db } = require('./db');
+const { db, getMembership, anyMembership } = require('./db');
 const config = require('./config');
 const { now, sha256, randHex, RateLimiter, httpError } = require('./util');
 
@@ -18,6 +18,8 @@ const touchUser = db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?');
 const delSession = db.prepare('DELETE FROM sessions WHERE id = ?');
 const getKeyByHash = db.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND active = 1');
 const touchKey = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+const setSessionOrg = db.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?');
+const getUserHomeOrg = db.prepare('SELECT org_id FROM users WHERE id = ?');
 
 function parseCookies(req) {
   const out = {};
@@ -42,12 +44,16 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
 
-function createSession(userId, req) {
+function createSession(userId, req, activeOrgId = null) {
   const sid = randHex(32);
   const csrf = randHex(16);
-  db.prepare(`INSERT INTO sessions (id, user_id, csrf, created_at, last_used_at, ip, user_agent)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(sid, userId, csrf, now(), now(), clientIp(req), String(req.headers['user-agent'] || '').slice(0, 300));
+  if (!activeOrgId) {
+    const u = getUserHomeOrg.get(userId);
+    activeOrgId = u ? u.org_id : null;
+  }
+  db.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(sid, userId, activeOrgId, csrf, now(), now(), clientIp(req), String(req.headers['user-agent'] || '').slice(0, 300));
   return { sid, csrf };
 }
 
@@ -78,7 +84,30 @@ function requireSession(req, res, next) {
   }
   const user = getUser.get(sess.user_id);
   if (!user || !user.active) return httpError(res, 401, 'account disabled');
-  const org = getOrg.get(user.org_id);
+
+  // Resolve the org this session is acting in (multi-org). Start from the
+  // session's active org (default: the user's home org).
+  let orgId = sess.active_org_id || user.org_id;
+
+  // Super-admins (platform operators) may act within ANY org via ?org=<id> or the
+  // X-OpsCat-Org header (platform console) — no membership required there.
+  let superOverride = false;
+  if (user.is_super_admin) {
+    const requested = parseInt(req.headers['x-opscat-org'] || req.query.org, 10);
+    if (Number.isInteger(requested) && requested > 0) { orgId = requested; superOverride = true; }
+  }
+
+  // Everyone else must hold a membership in the active org. If the session's
+  // active org is stale (membership revoked), fall back to the home org or any
+  // remaining membership and persist that so later requests are consistent.
+  let membership = getMembership(user.id, orgId);
+  if (!membership && !superOverride) {
+    membership = getMembership(user.id, user.org_id) || anyMembership(user.id);
+    if (membership) { orgId = membership.org_id; setSessionOrg.run(orgId, sid); }
+  }
+  if (!membership && !user.is_super_admin) return httpError(res, 403, 'no organization membership');
+
+  const org = getOrg.get(orgId);
   if (!org) return httpError(res, 401, 'organization missing');
   if (org.status === 'suspended' && !user.is_super_admin) {
     return httpError(res, 403, 'organization suspended');
@@ -89,16 +118,12 @@ function requireSession(req, res, next) {
   }
   touchSession.run(t, sid);
   touchUser.run(t, user.id);
+  // Role is per-org: use the membership role for the active org. A super-admin
+  // acting inside an org they don't belong to operates as an admin there.
+  user.role = membership ? membership.role : 'admin';
   req.user = user;
   req.session = sess;
   req.org = org;
-  // Super-admins may act within another org by passing ?org=<id> or the
-  // X-OpsCat-Org header (used by the platform console); everyone else is pinned.
-  let orgId = user.org_id;
-  if (user.is_super_admin) {
-    const requested = parseInt(req.headers['x-opscat-org'] || req.query.org, 10);
-    if (Number.isInteger(requested) && requested > 0) orgId = requested;
-  }
   req.orgId = orgId;
   next();
 }

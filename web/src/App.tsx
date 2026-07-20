@@ -19,6 +19,8 @@ import Analytics from './pages/Analytics';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
 import SuperAdmin from './pages/SuperAdmin';
+import Onboarding from './pages/Onboarding';
+import OrgSwitcher from './OrgSwitcher';
 import type { BillingStatus, PlansResponse } from './types';
 
 const NAV = [
@@ -66,12 +68,21 @@ export default function App() {
       .finally(() => setBooting(false));
   }, []);
 
-  if (booting) {
-    return <div style={{ height: '100%', display: 'flex', alignItems: 'center',
-      justifyContent: 'center', color: 'var(--text3)' }} className="mono">loading…</div>;
-  }
+  if (booting) return <Splash />;
   if (!app.user) return <Login />;
+  // wait until the caller's orgs are known before choosing onboarding vs. the app
+  if (app.activeOrgId == null) return <Splash />;
+  const activeOrg = app.orgs.find((o) => o.orgId === app.activeOrgId);
+  // a freshly-created cloud org greets its admin with the full-screen setup flow
+  if (app.edition === 'cloud' && app.user.role === 'admin' && activeOrg && !activeOrg.onboardingDone) {
+    return <Onboarding />;
+  }
   return <Shell />;
+}
+
+function Splash() {
+  return <div style={{ height: '100%', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', color: 'var(--text3)' }} className="mono">loading…</div>;
 }
 
 // ---------------------------------------------------------------- login
@@ -353,6 +364,7 @@ function Shell() {
         <header style={{ height: 48, flexShrink: 0, background: 'var(--bg1)',
           borderBottom: '1px solid var(--bg3)', display: 'flex', alignItems: 'center',
           gap: 14, padding: '0 16px' }}>
+          <OrgSwitcher edition={edition} />
           <span className="row" style={{ gap: 6 }}>
             <span className={app.connected ? 'pulse' : ''} style={{ width: 7, height: 7, borderRadius: '50%',
               background: app.connected ? SEV.green : SEV.critical }} />

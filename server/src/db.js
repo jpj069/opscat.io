@@ -119,6 +119,27 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_rules_org ON alert_rules(org_id);
     `);
   },
+  // idx 3 -> version 4: multi-org memberships. Add the per-session active org and
+  // backfill exactly one membership per existing user from their (org_id, role) —
+  // so a freshly-migrated single-tenant DB keeps everyone in their current org.
+  () => {
+    // memberships table + sessions.active_org_id are in schema.sql for fresh
+    // installs; add the column here for databases that predate it.
+    addColumn('sessions', 'active_org_id', 'INTEGER');
+    db.prepare(`INSERT INTO memberships (user_id, org_id, role, created_at)
+      SELECT id, org_id, role, COALESCE(created_at, ?) FROM users WHERE org_id IS NOT NULL
+      ON CONFLICT(user_id, org_id) DO NOTHING`).run(Date.now());
+  },
+  // idx 4 -> version 5: one-time reset — make every EXISTING org re-run the setup
+  // flow (we only have demo tenants at this point). On a fresh install this runs
+  // before seed() creates the default org, so it is a no-op there and the seeded
+  // platform org keeps its pre-populated state (no onboarding).
+  () => {
+    // `WHERE true` disambiguates ON CONFLICT from a JOIN's ON in INSERT…SELECT…UPSERT
+    db.prepare(`INSERT INTO org_settings (org_id, key, value)
+      SELECT id, 'onboarding_done', '0' FROM organizations WHERE true
+      ON CONFLICT(org_id, key) DO UPDATE SET value = '0'`).run();
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);
@@ -155,6 +176,24 @@ function getOrgSetting(orgId, key, def = null) {
 }
 function setOrgSetting(orgId, key, value) { orgSettingSetStmt.run(orgId, key, String(value)); }
 
+// --- memberships (multi-org): who is in which org, with what role ---
+const membershipGetStmt = db.prepare('SELECT role FROM memberships WHERE user_id = ? AND org_id = ?');
+const membershipUpsertStmt = db.prepare(
+  `INSERT INTO memberships (user_id, org_id, role, created_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(user_id, org_id) DO UPDATE SET role = excluded.role`);
+const membershipListStmt = db.prepare(
+  `SELECT m.org_id, m.role, o.name, o.slug, o.plan, o.status
+   FROM memberships m JOIN organizations o ON o.id = m.org_id
+   WHERE m.user_id = ? ORDER BY o.name`);
+const membershipDelStmt = db.prepare('DELETE FROM memberships WHERE user_id = ? AND org_id = ?');
+const membershipAnyStmt = db.prepare('SELECT org_id, role FROM memberships WHERE user_id = ? ORDER BY org_id LIMIT 1');
+
+function getMembership(userId, orgId) { return membershipGetStmt.get(userId, orgId); }
+function addMembership(userId, orgId, role = 'analyst') { membershipUpsertStmt.run(userId, orgId, role, Date.now()); }
+function listMemberships(userId) { return membershipListStmt.all(userId); }
+function removeMembership(userId, orgId) { membershipDelStmt.run(userId, orgId); }
+function anyMembership(userId) { return membershipAnyStmt.get(userId); }
+
 // Persist an app secret if none provided via env (used for SNMP community encryption).
 if (!config.secret) {
   let s = getSetting('app_secret');
@@ -162,4 +201,7 @@ if (!config.secret) {
   config.secret = s;
 }
 
-module.exports = { db, getSetting, setSetting, getOrgSetting, setOrgSetting };
+module.exports = {
+  db, getSetting, setSetting, getOrgSetting, setOrgSetting,
+  getMembership, addMembership, listMemberships, removeMembership, anyMembership,
+};

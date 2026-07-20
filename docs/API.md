@@ -13,9 +13,11 @@ Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HT
 page — per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
 (edition, public plan matrix, auth options for the login/pricing UI).
 
-**Multi-tenancy:** every session, API key, agent token and probe key is bound to one
-organization; all queries are scoped to it. Super-admins may target another org with
-`?org=<id>` or the `X-OpsCat-Org` header.
+**Multi-tenancy:** API keys, agent tokens and probe keys are each bound to one
+organization; all queries are scoped to it. A **user** may belong to several
+organizations (`memberships`, one role per org) and — in the **cloud edition** — switches
+the org their session acts in via `POST /api/auth/switch-org` (default: their home org).
+Super-admins may target any org with `?org=<id>` or the `X-OpsCat-Org` header.
 
 ## Auth
 
@@ -25,7 +27,9 @@ organization; all queries are scoped to it. Super-admins may target another org 
 | POST `/api/auth/magic-link` | `{email}` | always `{ok:true}`; sends sign-in link via Resend |
 | POST `/api/auth/magic-login` | `{token}` | consumes link token → `{user, csrf}` |
 | POST `/api/auth/change-password` | `{currentPassword?, newPassword}` | min 12 chars; `currentPassword` not required while a forced change (`mustChangePassword`) is pending |
-| GET `/api/auth/me` | — | current user + csrf |
+| GET `/api/auth/me` | — | current user + csrf (role reflects the active org) |
+| GET `/api/auth/orgs` | — | the caller's orgs → `{activeOrgId, orgs:[{orgId,name,slug,plan,role,onboardingDone}]}` |
+| POST `/api/auth/switch-org` | `{orgId}` | **cloud only** — set the session's active org (caller must be a member) |
 | POST `/api/auth/logout` | — | |
 | POST `/api/auth/signup` | `{orgName, name, email, password}` | cloud edition + signups open — creates organization + owner |
 | GET `/api/auth/github` | — | GitHub login (community feature); `…/github/callback` completes — requires a verified GitHub e-mail |
@@ -38,6 +42,12 @@ existing users only — self-service signup for unknown e-mails is cloud-edition
 A verified social login retires a pending admin-issued temporary password: the
 account adopts the provider, `mustChangePassword` is cleared and password login
 stays disabled until an admin issues a new reset.
+
+**Organizations (multi-org, cloud):** `POST /api/orgs {orgName}` lets a signed-in user
+spin up an additional organization (they become its admin) and switches the session into
+it — gated by the current org's plan carrying the `multi_org` feature (on every plan by
+default; see `plans.js`). Adding an existing account to an org, or removing a member, is
+done through the admin users API below.
 
 ## Ingest (`/v1`, API key scope `ingest`)
 
@@ -86,11 +96,11 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET/POST /api/incidents`, `POST /api/incidents/:id/status` (`{status,message?}`), `PATCH /api/incidents/:id` (`{title?,severity?,published?,rca:{summary,impact,rootCause,resolution,actions}}`) — incident objects: `{id,label,title,severity,status,published,startedAt,resolvedAt,durationMs,updates:[{ts,status,message}],rca}`
 - `GET /api/admin/components` → `[{id,name,group,status,uptimePct,days:[{day,worst}]}]`; POST/PATCH/DELETE for lead+ (`status` ∈ operational|degraded|partial|major|maintenance)
 - `GET /api/synthetics/locations` (POST creates remote probe → `{probeKey}` once), `GET/POST/PATCH/DELETE /api/synthetics/checks`, `GET /api/synthetics/results` (latest per check×location), `GET /api/synthetics/results/series?checkId=&locationId=&hours=`, `GET /api/synthetics/results/route?locationId=`, `POST /api/synthetics/run`
-- `GET /api/admin/users` (all roles), POST/PATCH admin only (`{resetPassword:true}` → one-time password)
+- `GET /api/admin/users` (lead+) lists org **members** with their per-org role. POST/PATCH admin only: POST with a known e-mail attaches that existing account to the org (multi-org), an unknown e-mail creates a user (`initialPassword` once); PATCH `{role}` sets the per-org role, `{remove:true}` drops the member from this org, `{resetPassword:true}` → one-time password
 - `GET/POST/PATCH /api/admin/apikeys` (lead+) — POST → `{key}` shown once
 - `GET/POST/PATCH/DELETE /api/admin/snmp/targets` (lead+) — `{name,host,port,community,oids:[{oid,label}],intervalS}`
 - `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,lastSeenAt,online}`), POST (lead+) → `{token}` once, `GET /api/admin/agents/:id/metrics?hours=`
-- `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, alert_email_from, auth_email_from, teams_webhook_url, telegram_bot_token, pushover_token, classifiers`
+- `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, onboarding_done, onboarding_role, onboarding_goal, onboarding_source, alert_email_from, auth_email_from, teams_webhook_url, telegram_bot_token, pushover_token, classifiers`. `onboarding_done` is `'0'` on a fresh cloud org and flipped to `'1'` when its admin finishes/skips the first-run setup flow; `onboarding_role/goal/source` capture the personalization answers (source = acquisition channel, only asked on a user's first org) for later analysis
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 
 ## Billing (cloud edition, `/api/billing`)
@@ -105,7 +115,9 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 
 Plan limits (`server/src/plans.js`) are enforced on create routes (users, API keys,
 agents, SNMP targets, checks, sensors): exceeding a limit returns
-`402 {error, limit, plan}`. Community edition enforces nothing.
+`402 {error, limit, plan}`. Feature flags in the same file gate cloud capabilities via
+`hasFeature` — e.g. `multi_org` (multiple organizations per account), enabled on every
+plan by default. Community edition enforces nothing.
 
 ## Super-admin (cloud edition, `/api/superadmin` — requires `is_super_admin`)
 

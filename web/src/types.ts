@@ -1,9 +1,15 @@
 // API types — mirror server responses (docs/API.md).
 
+export type Role = 'admin' | 'cto' | 'lead' | 'analyst';
 export interface User {
-  id: number; email: string; name: string; role: 'admin' | 'cto' | 'lead' | 'analyst';
+  id: number; email: string; name: string; role: Role;
   color: string; mustChangePassword?: boolean; isSuperAdmin?: boolean;
 }
+// one organization the signed-in user belongs to (multi-org switcher)
+export interface OrgMembership {
+  orgId: number; name: string; slug: string; plan: string; role: Role; onboardingDone: boolean;
+}
+export interface OrgsResponse { activeOrgId: number; orgs: OrgMembership[]; }
 export interface AssignedRef { id: number; n: string; i: string; c: string; }
 
 export interface EventRow {

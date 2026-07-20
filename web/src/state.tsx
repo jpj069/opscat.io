@@ -1,7 +1,7 @@
 // Global app state: auth, theme/density, live events + logs via SSE.
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, openStream, setCsrf } from './api';
-import type { EventRow, LogRow, User, UserRow } from './types';
+import type { EventRow, LogRow, OrgMembership, OrgsResponse, User, UserRow } from './types';
 
 function lsGet(k: string, d: string): string { try { return localStorage.getItem(k) || d; } catch { return d; } }
 function lsSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* sandboxed */ } }
@@ -9,6 +9,12 @@ function lsSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch
 export interface AppState {
   user: User | null;
   setUser: (u: User | null, csrf?: string) => void;
+  orgs: OrgMembership[];
+  activeOrgId: number | null;
+  switchOrg: (orgId: number) => Promise<void>;
+  createOrg: (orgName: string) => Promise<number>;
+  reloadOrgs: () => Promise<void>;
+  edition: string | null;
   theme: string; setTheme: (t: string) => void;
   density: string; setDensity: (d: string) => void;
   nav: string; setNav: (n: string) => void;
@@ -35,6 +41,9 @@ function navFromPath(): string {
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
+  const [orgs, setOrgs] = useState<OrgMembership[]>([]);
+  const [activeOrgId, setActiveOrgId] = useState<number | null>(null);
+  const [edition, setEdition] = useState<string | null>(null);
   const [theme, setThemeState] = useState(lsGet('opscat-theme', 'dark'));
   const [density, setDensityState] = useState(lsGet('opscat-density', 'comfortable'));
   const [nav, setNavState] = useState(navFromPath());
@@ -48,6 +57,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { document.body.dataset.theme = theme; lsSet('opscat-theme', theme); }, [theme]);
   useEffect(() => { document.body.dataset.density = density; lsSet('opscat-density', density); }, [density]);
+  useEffect(() => { api.get<{ edition: string }>('/api/plans').then((r) => setEdition(r.edition)).catch(() => {}); }, []);
 
   const setNav = (n: string) => {
     setNavState(n);
@@ -68,8 +78,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setUserState(u);
   };
 
+  const reloadOrgs = () => api.get<OrgsResponse>('/api/auth/orgs')
+    .then((r) => { setOrgs(r.orgs); setActiveOrgId(r.activeOrgId); })
+    .catch(() => { /* session gone */ });
+
+  // switch the org this session acts in; the data effect below reloads for it
+  const switchOrg = async (orgId: number) => {
+    if (orgId === activeOrgId) return;
+    await api.post('/api/auth/switch-org', { orgId });
+    setActiveOrgId(orgId);
+    setUserState((u) => (u ? { ...u, role: orgs.find((o) => o.orgId === orgId)?.role || u.role } : u));
+  };
+
+  // self-service: create a new org and land in it (server switches the session)
+  const createOrg = async (orgName: string) => {
+    const r = await api.post<{ orgId: number }>('/api/orgs', { orgName });
+    await reloadOrgs();
+    setActiveOrgId(r.orgId);
+    setUserState((u) => (u ? { ...u, role: 'admin' } : u));
+    return r.orgId;
+  };
+
+  // load the caller's organizations once per login (clears them on logout)
   useEffect(() => {
-    if (!user) { streamStop.current?.(); streamStop.current = null; setConnected(false); return; }
+    if (!user) { setOrgs([]); setActiveOrgId(null); return; }
+    reloadOrgs();
+  }, [user?.id]);
+
+  // org-scoped data + live stream — reruns whenever the active org changes
+  useEffect(() => {
+    if (!user || activeOrgId == null) { streamStop.current?.(); streamStop.current = null; setConnected(false); return; }
     refreshEvents();
     api.get<LogRow[]>('/api/logs?hours=2&limit=200').then((rows) => setLogs(rows.reverse())).catch(() => {});
     // lightweight roster for assignee pickers (works for every role; the full
@@ -93,17 +131,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }),
     });
     return () => { streamStop.current?.(); streamStop.current = null; };
-  }, [user?.id]);
+  }, [user?.id, activeOrgId]);
 
   const logout = () => {
     api.post('/api/auth/logout').catch(() => {}).finally(() => setUser(null));
   };
 
   const value = useMemo<AppState>(() => ({
-    user, setUser, theme, setTheme: setThemeState, density, setDensity: setDensityState,
+    user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition,
+    theme, setTheme: setThemeState, density, setDensity: setDensityState,
     nav, setNav, events, logs, refreshEvents, connected, selectedEvent, setSelectedEvent,
     users, settings, logout,
-  }), [user, theme, density, nav, events, logs, connected, selectedEvent, users, settings]);
+  }), [user, orgs, activeOrgId, edition, theme, density, nav, events, logs, connected, selectedEvent, users, settings]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

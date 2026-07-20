@@ -10,6 +10,8 @@ powers the hosted **OpsCat Cloud** SaaS.
 |---|---|---|
 | License | Apache-2.0 | Apache-2.0 core + EE (`ee/LICENSE`) |
 | Tenancy | Single organization | Multi-tenant (many organizations) |
+| Users in multiple orgs + switcher | — (one org) | Yes (self-service new org, invite existing account) |
+| First-run onboarding flow | — | Yes (full-screen setup for each new org) |
 | Monitoring features | **All** (logs, OTLP, Sentry, events, cases, synthetics, SNMP, agents, alerts, incidents, status page) | All |
 | Plan limits | None — unlimited | Enforced per org (Free / Pro / Business / Enterprise) |
 | Billing (Stripe) | — | Yes |
@@ -28,10 +30,17 @@ Enterprise modules under `server/src/ee/**` are active.
 - **Apache-2.0 core** — the whole platform: `server/src` (except `server/src/ee/**`
   and files headed as EE), `web/`, `sdk/`, `agent/`. Self-host it, fork it, run it
   commercially internally — the Apache license permits it.
-- **Enterprise Edition** — `server/src/ee/**`, the super-admin/billing/oauth routes,
-  the sensor-provisioning orchestration, and the full super-admin console UI. These
-  are what OpsCat Cloud sells; they are covered by `ee/LICENSE`. They live only in
-  the private repository (see below).
+- **Enterprise Edition** — `server/src/ee/**`, the super-admin / billing / oauth /
+  self-service-org (`routes/orgs.js`) routes, and the sensor-provisioning orchestration.
+  On the **frontend**, the cloud-only UI is swapped for stubs at publish time so no
+  cloud-feature source ships into the Apache-2.0 core: the super-admin console
+  (`web/src/pages/SuperAdmin.tsx`), the workspace switcher (`web/src/OrgSwitcher.tsx`,
+  → null) and the first-run onboarding (`web/src/pages/Onboarding.tsx`, → null). These
+  are what OpsCat Cloud sells; they are covered by `ee/LICENSE` and live only in the
+  private repository (see below). What *does* stay in the core is the harmless membership
+  *plumbing* — the `memberships` table and `GET /api/auth/orgs` session context;
+  `POST /api/auth/switch-org` `403`s in community — where a community user simply has one
+  membership.
 
 ## Two repositories
 
@@ -43,7 +52,8 @@ Enterprise modules under `server/src/ee/**` are active.
 All development happens in the private repo. `scripts/publish-community.sh`
 exports the tracked tree at `HEAD`, strips every EE/private path, swaps in the
 community build files (`Dockerfile.community` → `Dockerfile` etc.) and the
-super-admin UI stub, runs a secret scan, and pushes one snapshot commit to the
+cloud-only UI stubs (super-admin console, org switcher, onboarding), runs a
+secret scan, and pushes one snapshot commit to the
 public repo ("Sync community core from internal repo @ <sha>"). The EE code
 never leaves the private repo; the public repo is always buildable and runs
 standalone as the community edition.

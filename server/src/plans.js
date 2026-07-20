@@ -5,28 +5,35 @@
 const { db } = require('./db');
 
 // -1 means unlimited.
+//
+// Feature flags gate cloud capabilities (checked via `hasFeature`). `multi_org` —
+// running more than one organization from a single account (self-service org creation
+// + the workspace switcher) — is enabled on EVERY cloud plan on purpose: multi-org is a
+// baseline cloud capability, not an Enterprise-only upsell. This features array is the
+// single place to change that per plan (drop it from a tier to gate multi-org there).
 const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
     limits: { users: 3, retentionDays: 7, checks: 3, sensors: 1, snmpTargets: 2, agents: 2, apiKeys: 2 },
-    features: ['status_page', 'email_alerts'],
+    features: ['status_page', 'email_alerts', 'multi_org'],
   },
   pro: {
     key: 'pro', name: 'Pro', priceMonthly: 29, priceYearly: 290,
     limits: { users: 10, retentionDays: 30, checks: 25, sensors: 5, snmpTargets: 20, agents: 25, apiKeys: 10 },
-    features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp', 'sentry'],
+    features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
+      'sentry', 'multi_org'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
     limits: { users: 30, retentionDays: 90, checks: 100, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: 50 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
-      'sentry', 'priority_support', 'sensor_autoprovision'],
+      'sentry', 'priority_support', 'sensor_autoprovision', 'multi_org'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
     limits: { users: -1, retentionDays: 365, checks: -1, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: -1 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
-      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'sla'],
+      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'sla', 'multi_org'],
   },
 };
 
@@ -34,7 +41,8 @@ function planFor(planKey) { return PLANS[planKey] || PLANS.free; }
 
 // Count current usage of a limited resource for an org.
 const COUNTERS = {
-  users: (orgId) => db.prepare('SELECT COUNT(*) c FROM users WHERE org_id = ? AND active = 1').get(orgId).c,
+  users: (orgId) => db.prepare(`SELECT COUNT(*) c FROM memberships m JOIN users u ON u.id = m.user_id
+    WHERE m.org_id = ? AND u.active = 1`).get(orgId).c,
   checks: (orgId) => db.prepare('SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ?').get(orgId).c,
   sensors: (orgId) => db.prepare("SELECT COUNT(*) c FROM synthetic_locations WHERE org_id = ? AND kind = 'remote'").get(orgId).c,
   snmpTargets: (orgId) => db.prepare('SELECT COUNT(*) c FROM snmp_targets WHERE org_id = ?').get(orgId).c,

@@ -3,7 +3,8 @@
 // status page components. RBAC enforced per route group.
 const express = require('express');
 const crypto = require('crypto');
-const { db, getOrgSetting, setOrgSetting } = require('../db');
+const { db, getOrgSetting, setOrgSetting,
+  getMembership, addMembership, removeMembership, listMemberships } = require('../db');
 const config = require('../config');
 const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt } = require('../util');
 const sec = require('../security');
@@ -28,52 +29,80 @@ const ROLES = ['admin', 'cto', 'lead', 'analyst'];
 const COLORS = ['#bc8cff', '#38b6ff', '#3fb950', '#f0883e', '#e3b341', '#f85149'];
 
 // ---- users (admin) ----
+// "Users in this org" = members (memberships is the authority). Role is per-org
+// (from the membership); active is a global per-user flag.
 // GET is lead+ (email/role/last-seen enumeration); assignee pickers use /api/team.
 router.get('/users', sec.requireRole('lead'), (req, res) => {
-  res.json(db.prepare(`SELECT id, email, name, role, color, active, last_seen_at FROM users WHERE org_id = ? ORDER BY id`)
+  res.json(db.prepare(`SELECT u.id, u.email, u.name, m.role, u.color, u.active, u.last_seen_at
+    FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY u.id`)
     .all(req.orgId).map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
       active: !!u.active, lastSeenAt: u.last_seen_at })));
 });
 
+// Add a member: an existing OpsCat account is attached to this org (multi-org);
+// an unknown e-mail creates a brand-new user whose home org is this one.
 router.post('/users', sec.requireRole('admin'), (req, res) => {
   const { email, name, role } = req.body || {};
   if (!isEmail(email)) return httpError(res, 400, 'valid email required');
-  if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   if (!ROLES.includes(role)) return httpError(res, 400, 'bad role');
-  if (db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase())) {
-    return httpError(res, 409, 'email already exists');
+  const existing = db.prepare('SELECT id, name FROM users WHERE email = ?').get(email.toLowerCase());
+  if (existing) {
+    if (getMembership(existing.id, req.orgId)) return httpError(res, 409, 'user already in this organization');
+    if (!withinPlan(req, res, 'users')) return undefined;
+    addMembership(existing.id, req.orgId, role);
+    sec.audit(req.user.id, 'member_add', `${email} (${role})`, req.orgId);
+    return res.json({ id: existing.id, added: true });
   }
+  if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   if (!withinPlan(req, res, 'users')) return undefined;
   const password = crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = hashPassword(password);
-  const color = COLORS[db.prepare('SELECT COUNT(*) c FROM users WHERE org_id = ?').get(req.orgId).c % COLORS.length];
+  const color = COLORS[listMemberships(req.user.id).length % COLORS.length];
   const info = db.prepare(`INSERT INTO users (org_id, email, name, role, pass_salt, pass_hash, color, active,
     must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`)
     .run(req.orgId, email.toLowerCase(), name, role, salt, hash, color, now());
+  addMembership(info.lastInsertRowid, req.orgId, role);
   sec.audit(req.user.id, 'user_create', `${email} (${role})`, req.orgId);
   // initial password returned once to the creating admin
   res.json({ id: info.lastInsertRowid, initialPassword: password });
 });
 
 router.patch('/users/:id', sec.requireRole('admin'), (req, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  // target must be a member of the acting org
+  const mem = getMembership(req.params.id, req.orgId);
+  const u = mem && db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return httpError(res, 404, 'user not found');
   const b = req.body || {};
   if (b.role && !ROLES.includes(b.role)) return httpError(res, 400, 'bad role');
+
+  // remove the user FROM THIS ORG (delete the membership); the account lives on
+  // in its other orgs. Deactivating globally is a separate action (active:false).
+  if (b.remove === true) {
+    if (u.id === req.user.id) return httpError(res, 400, 'cannot remove yourself');
+    const others = listMemberships(u.id).filter((m) => m.org_id !== req.orgId);
+    if (others.length === 0) return httpError(res, 400, 'user belongs only to this org — deactivate instead');
+    removeMembership(u.id, req.orgId);
+    if (u.org_id === req.orgId) db.prepare('UPDATE users SET org_id = ? WHERE id = ?').run(others[0].org_id, u.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND active_org_id = ?').run(u.id, req.orgId);
+    sec.audit(req.user.id, 'member_remove', u.email, req.orgId);
+    return res.json({ ok: true, removed: true });
+  }
+
   if (u.id === req.user.id && b.active === false) return httpError(res, 400, 'cannot deactivate yourself');
   if (u.id === req.user.id && b.role && b.role !== 'admin') {
     return httpError(res, 400, 'cannot demote yourself');
   }
-  db.prepare(`UPDATE users SET name = COALESCE(?, name), role = COALESCE(?, role),
-      active = COALESCE(?, active) WHERE id = ? AND org_id = ?`)
-    .run(isStr(b.name, 100) ? b.name : null, b.role || null,
-      typeof b.active === 'boolean' ? (b.active ? 1 : 0) : null, u.id, req.orgId);
+  // role is per-org → update the membership; name/active are global user fields
+  if (b.role) addMembership(u.id, req.orgId, b.role);
+  db.prepare('UPDATE users SET name = COALESCE(?, name), active = COALESCE(?, active) WHERE id = ?')
+    .run(isStr(b.name, 100) ? b.name : null,
+      typeof b.active === 'boolean' ? (b.active ? 1 : 0) : null, u.id);
   if (b.active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
   if (b.resetPassword === true) {
     const password = crypto.randomBytes(12).toString('base64url');
     const { salt, hash } = hashPassword(password);
-    db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1 WHERE id = ? AND org_id = ?')
-      .run(salt, hash, u.id, req.orgId);
+    db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1 WHERE id = ?')
+      .run(salt, hash, u.id);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
     sec.audit(req.user.id, 'user_password_reset', u.email, req.orgId);
     return res.json({ ok: true, initialPassword: password });
@@ -116,9 +145,9 @@ router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {
 });
 
 // ---- settings (admin; safe subset readable by all sessions) ----
-const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'retention_logs_days'];
-const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'alert_email_from', 'auth_email_from', 'teams_webhook_url',
-  'telegram_bot_token', 'pushover_token', 'classifiers'];
+const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'retention_logs_days', 'onboarding_done'];
+const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal', 'onboarding_source',
+  'alert_email_from', 'auth_email_from', 'teams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers'];
 
 router.get('/settings', (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
@@ -301,7 +330,7 @@ router.get('/system', sec.requireRole('admin'), (req, res) => {
       logs: db.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?').get(req.orgId).c,
       events: db.prepare('SELECT COUNT(*) c FROM events WHERE org_id = ?').get(req.orgId).c,
       cases: db.prepare('SELECT COUNT(*) c FROM cases WHERE org_id = ?').get(req.orgId).c,
-      users: db.prepare('SELECT COUNT(*) c FROM users WHERE org_id = ?').get(req.orgId).c,
+      users: db.prepare('SELECT COUNT(*) c FROM memberships WHERE org_id = ?').get(req.orgId).c,
     },
     node: process.version,
   });

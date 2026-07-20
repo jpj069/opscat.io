@@ -2,7 +2,7 @@
 // Idempotent bootstrap: default organization, first super-admin user, default
 // components, synthetic checks and a sane alert rule. Run at boot — safe to re-run.
 const crypto = require('crypto');
-const { db, getOrgSetting, setOrgSetting } = require('../db');
+const { db, getOrgSetting, setOrgSetting, addMembership } = require('../db');
 const { now, hashPassword } = require('../util');
 
 function seed({ log = console.log } = {}) {
@@ -23,10 +23,11 @@ function seed({ log = console.log } = {}) {
     const password = process.env.OPSCAT_ADMIN_PASSWORD ||
       crypto.randomBytes(12).toString('base64url');
     const { salt, hash } = hashPassword(password);
-    db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+    const info = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
       VALUES (1, ?, ?, 'admin', 1, ?, ?, '#f0883e', 1, 1, ?)`)
       .run(email, process.env.OPSCAT_ADMIN_NAME || 'OpsCat Admin', salt, hash, t);
+    addMembership(info.lastInsertRowid, 1, 'admin');
     adminCredentials = { email, password };
     log(`[seed] created super-admin ${email} — initial password: ${password}`);
     log('[seed] the password must be changed on first login.');

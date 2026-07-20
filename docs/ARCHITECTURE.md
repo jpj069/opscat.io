@@ -88,6 +88,22 @@ down interfaces generate pipeline events. Community strings are encrypted at res
   API keys, agent tokens and probe keys are org-bound, and the SSE stream plus the
   ingest pipeline (event dedupe) operate per org. A missing `org_id` filter is a
   security bug (see CONTRIBUTING.md).
+- A **user can belong to several orgs**: `memberships(user_id, org_id, role)` is the
+  authority for org membership and carries a role *per org*. `requireSession` reads the
+  session's active org (`sessions.active_org_id`, default the user's home `users.org_id`),
+  validates the membership, and sets `req.user.role` from it. The **switcher is a
+  Cloud-edition feature**: the top-bar UI renders only in cloud and
+  `POST /api/auth/switch-org` `403`s in community (which is single-org anyway).
+  `GET /api/auth/orgs` (session context) stays in both. Cloud users can self-serve a new
+  org (`POST /api/orgs`) or attach an existing account to an org (admin users API).
+  `users.org_id` stays the home/default org.
+- **First-run onboarding**: a freshly-created cloud org is seeded with
+  `org_settings.onboarding_done = '0'`. On login the app renders a full-screen setup flow
+  (`web/src/pages/Onboarding.tsx`) instead of the shell for that org's admin — it performs
+  real actions through the normal APIs (ingest key, a synthetic check, an alert rule,
+  teammates), captures personalization answers (`onboarding_role/goal/source`, the last
+  only asked on a user's first org) and flips the flag to `'1'` on finish/skip. Existing
+  orgs and the community edition have no `'0'` flag, so they never see it.
 - `OPSCAT_EDITION` selects the runtime edition (`server/src/edition.js`):
   `community` (default — single organization, no limits) or `cloud` (multi-tenant
   SaaS: plan limits from `server/src/plans.js` enforced with `402`, Stripe billing,
@@ -95,7 +111,8 @@ down interfaces generate pipeline events. Community strings are encrypted at res
   in `server/src/ee/**` and the EE routes (`billing`, `superadmin`, `oauth`), loaded
   via guarded `require` — the community tree runs without them (`docs/OPEN-CORE.md`).
 - Super-admins (`users.is_super_admin`) operate across organizations and may target
-  one explicitly via `?org=` / `X-OpsCat-Org`.
+  one explicitly via `?org=` / `X-OpsCat-Org` (no membership required — this is distinct
+  from the membership-based switcher normal users get).
 - Public status pages are per-org: `/status` (default org) and `/status/:slug`.
 
 ## Scaling / HA path (documented now, executed when load demands)

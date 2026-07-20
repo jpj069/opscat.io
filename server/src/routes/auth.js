@@ -1,10 +1,11 @@
 'use strict';
 const express = require('express');
 const crypto = require('crypto');
-const { db, getSetting } = require('../db');
+const { db, getSetting, getOrgSetting, listMemberships, getMembership } = require('../db');
 const config = require('../config');
 const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError } = require('../util');
 const sec = require('../security');
+const edition = require('../edition');
 const mailer = require('../mailer');
 
 const router = express.Router();
@@ -122,6 +123,30 @@ router.post('/change-password', sec.requireSession, (req, res) => {
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(user.id, req.session.id);
   sec.audit(user.id, 'password_changed', null);
   res.json({ ok: true });
+});
+
+// --- multi-org: the caller's organizations + switching the active one ---
+router.get('/orgs', sec.requireSession, (req, res) => {
+  res.json({
+    activeOrgId: req.orgId,
+    orgs: listMemberships(req.user.id).map((m) => ({
+      orgId: m.org_id, name: m.name, slug: m.slug, plan: m.plan, role: m.role,
+      onboardingDone: getOrgSetting(m.org_id, 'onboarding_done', '1') === '1',
+    })),
+  });
+});
+
+router.post('/switch-org', sec.requireSession, (req, res) => {
+  // Switching organizations is a Cloud-edition feature; community is single-org.
+  if (!edition.isCloud()) return httpError(res, 403, 'switching organizations is a Cloud feature');
+  const orgId = parseInt(req.body && req.body.orgId, 10);
+  if (!Number.isInteger(orgId) || orgId <= 0) return httpError(res, 400, 'orgId required');
+  // Only orgs the user is a member of. (Super-admins target other orgs through
+  // the platform console's X-OpsCat-Org header, not this endpoint.)
+  if (!getMembership(req.user.id, orgId)) return httpError(res, 403, 'not a member of that organization');
+  db.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?').run(orgId, req.session.id);
+  sec.audit(req.user.id, 'org_switch', `org ${orgId}`, orgId);
+  res.json({ ok: true, activeOrgId: orgId });
 });
 
 module.exports = router;

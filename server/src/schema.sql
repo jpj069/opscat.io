@@ -36,9 +36,22 @@ CREATE TABLE IF NOT EXISTS users (
   created_at    INTEGER NOT NULL
 );
 
+-- org membership: a user may belong to MANY organizations, with a distinct role
+-- per org. users.org_id stays the user's "home" org (default active org on login);
+-- memberships is the authority for "who is in org X" and "what can they do there".
+CREATE TABLE IF NOT EXISTS memberships (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  role          TEXT NOT NULL DEFAULT 'analyst' CHECK (role IN ('admin','cto','lead','analyst')),
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (user_id, org_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(org_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id            TEXT PRIMARY KEY,            -- random 64 hex
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  active_org_id INTEGER,                     -- org the session is currently acting in
   csrf          TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL,
