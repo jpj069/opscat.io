@@ -165,6 +165,16 @@ function requireAgentToken(req, res, next) {
   next();
 }
 
+// The server image bundles the agent script so agents can self-update; read
+// once at boot. Absent in exotic setups — updates are then simply disabled.
+const AGENT_FILE = require('path').join(__dirname, '..', '..', '..', 'agent', 'opscat-agent.js');
+let bundledAgent = null;
+let bundledAgentVersion = null;
+try {
+  bundledAgent = require('fs').readFileSync(AGENT_FILE, 'utf8');
+  bundledAgentVersion = (/const VERSION = '([^']+)'/.exec(bundledAgent) || [])[1] || null;
+} catch { /* no bundled agent in this build */ }
+
 router.post('/agents/heartbeat', requireAgentToken, (req, res) => {
   const b = req.body || {};
   db.prepare(`UPDATE agents SET last_seen_at = ?, hostname = COALESCE(?, hostname),
@@ -172,7 +182,17 @@ router.post('/agents/heartbeat', requireAgentToken, (req, res) => {
     .run(now(), isStr(b.hostname, 200) ? b.hostname : null,
       isStr(b.platform, 100) ? b.platform : null,
       isStr(b.version, 50) ? b.version : null, req.agent.id);
-  res.json({ ok: true, intervalS: 60 });
+  const updateAvailable = !!(bundledAgentVersion && req.agent.auto_update
+    && isStr(b.version, 50) && b.version !== bundledAgentVersion);
+  res.json({ ok: true, intervalS: 60, latestVersion: bundledAgentVersion, updateAvailable });
+});
+
+// Self-update download: the agent fetches this when its heartbeat says
+// updateAvailable, atomically replaces its own script and lets systemd restart it.
+router.get('/agents/update', requireAgentToken, (req, res) => {
+  if (!bundledAgent) return httpError(res, 404, 'no bundled agent in this build');
+  res.setHeader('X-Agent-Version', bundledAgentVersion || '');
+  res.type('application/javascript').send(bundledAgent);
 });
 
 router.post('/agents/metrics', requireAgentToken, (req, res) => {

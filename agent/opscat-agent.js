@@ -29,7 +29,7 @@ const dns = require('dns');
 const { execFile, spawn } = require('child_process');
 const readline = require('readline');
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const HTTP_TIMEOUT_MS = 10000;
 const LOG_QUEUE_CAP = 2000;
 const LOG_BATCH = 100;
@@ -227,13 +227,44 @@ async function collectMetrics() {
   };
 }
 
+// --- self-update -------------------------------------------------------------
+// The server bundles its matching agent script; when the heartbeat reports
+// updateAvailable, download it, replace THIS file atomically and exit — the
+// systemd unit (Restart=always) relaunches the new version.
+let updating = false;
+async function selfUpdate() {
+  if (updating) return;
+  updating = true;
+  try {
+    const res = await fetch(cfg.url + '/v1/agents/update', {
+      headers: { Authorization: 'Bearer ' + cfg.token },
+    });
+    if (!res.ok) { logErr('update', 'HTTP ' + res.status); updating = false; return; }
+    const script = await res.text();
+    const m = /const VERSION = '([^']+)'/.exec(script);
+    if (!m || m[1] === VERSION || script.length < 10000) {
+      logErr('update', 'refusing update: implausible script payload');
+      updating = false;
+      return;
+    }
+    fs.writeFileSync(__filename + '.new', script, { mode: 0o755 });
+    fs.renameSync(__filename + '.new', __filename);
+    logInfo('self-update ' + VERSION + ' -> ' + m[1] + ' installed; exiting for restart');
+    setTimeout(() => process.exit(0), 300);
+  } catch (e) {
+    logErr('update', (e && e.message) || String(e));
+    updating = false;
+  }
+}
+
 // --- heartbeat + metrics tick ----------------------------------------------
 async function tick() {
-  await safePost('/v1/agents/heartbeat', cfg.token, {
+  const hb = await safePost('/v1/agents/heartbeat', cfg.token, {
     hostname: os.hostname(),
     platform: os.platform() + ' ' + os.release(),
     version: VERSION,
   }, 'heartbeat');
+  if (hb && hb.updateAvailable) selfUpdate();
 
   const metrics = await collectMetrics();
   await safePost('/v1/agents/metrics', cfg.token, metrics, 'metrics');

@@ -21,6 +21,7 @@ FROM node:22-alpine
 RUN apk add --no-cache iputils traceroute wget
 WORKDIR /app
 COPY server/ ./server/
+COPY agent/ ./agent/
 COPY --from=serverdeps /build/server/node_modules ./server/node_modules
 COPY --from=webbuild /build/web/dist ./server/public
 

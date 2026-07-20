@@ -199,22 +199,25 @@ export default function Settings() {
             <span>Agents</span>
             {leadPlus && <button className="btn btn-sm" onClick={() => setModal('agent')}>+ Register agent</button>}
           </div>
-          <div className="tbl-head" style={{ gridTemplateColumns: '1fr 110px 140px 110px 90px 110px 80px', padding: '8px 0' }}>
+          <div className="tbl-head" style={{ gridTemplateColumns: '1fr 100px 140px 100px 80px 100px 90px 60px', padding: '8px 0' }}>
             <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
-            <span>Status</span><span>Last seen</span><span></span>
+            <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
           </div>
           {agents === null && <Loading />}
           {agents?.length === 0 && <Empty>No agents registered.</Empty>}
           {agents?.map((a) => (
-            <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 140px 110px 90px 110px 80px',
+            <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 140px 100px 80px 100px 90px 60px',
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{a.name}</span>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{a.name}
+                {a.version && <span style={{ color: 'var(--text3)' }}> v{a.version}</span>}</span>
               <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{a.group}</span>
               <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.hostname || '—'}</span>
               <span style={{ fontSize: 10, color: 'var(--text2)' }}>{a.platform || '—'}</span>
               <StatusCell online={a.online} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(a.lastSeenAt)}</span>
+              <Toggle on={a.autoUpdate} disabled={!leadPlus}
+                onClick={leadPlus ? () => api.patch(`/api/admin/agents/${a.id}`, { autoUpdate: !a.autoUpdate }).then(reloadAgents) : undefined} />
               <span>
                 {leadPlus && (
                   <button title="Delete agent" style={{ color: '#f85149', fontSize: 14 }}
@@ -612,12 +615,13 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
   { onClose: () => void; onCreated: () => void; onSecret: (s: SecretInfo) => void }) {
   const [name, setName] = useState('');
   const [group, setGroup] = useState('default');
+  const [autoUpdate, setAutoUpdate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr('');
     try {
-      const r = await api.post<{ token: string }>('/api/admin/agents', { name, group });
+      const r = await api.post<{ token: string }>('/api/admin/agents', { name, group, autoUpdate });
       const install = `OPSCAT_URL=https://opscat.io OPSCAT_AGENT_TOKEN=${r.token} sh agent/install.sh`;
       onSecret({
         title: 'Agent registered', note: 'Copy the token now — it is shown only once.', value: r.token,
@@ -639,6 +643,12 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
         <Field label="Group">
           <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="default" />
         </Field>
+        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+          <Toggle on={autoUpdate} onClick={() => setAutoUpdate(!autoUpdate)} />
+          <span style={{ fontSize: 11, color: 'var(--text1)' }}>Auto-update</span>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>
+            — agent updates itself when the server ships a newer version</span>
+        </div>
         {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Register'}</button>

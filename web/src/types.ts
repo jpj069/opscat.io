@@ -104,7 +104,7 @@ export interface HeartbeatRow {
 }
 export interface AgentRow {
   id: number; name: string; group: string; hostname: string | null; platform: string | null;
-  version: string | null; active: boolean; lastSeenAt: number | null; online: boolean;
+  version: string | null; active: boolean; autoUpdate: boolean; lastSeenAt: number | null; online: boolean;
 }
 export type Settings = Record<string, string>;
 

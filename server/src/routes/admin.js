@@ -250,25 +250,37 @@ router.delete('/snmp/targets/:id', sec.requireRole('lead'), (req, res) => {
 // ---- agents management ----
 router.get('/agents', (req, res) => {
   const t = now();
-  res.json(db.prepare(`SELECT id, name, grp, hostname, platform, version, active, last_seen_at, created_at
-    FROM agents WHERE org_id = ? ORDER BY grp, id`).all(req.orgId)
+  res.json(db.prepare(`SELECT id, name, grp, hostname, platform, version, active, auto_update,
+    last_seen_at, created_at FROM agents WHERE org_id = ? ORDER BY grp, id`).all(req.orgId)
     .map((a) => ({ id: a.id, name: a.name, group: a.grp, hostname: a.hostname, platform: a.platform,
-      version: a.version, active: !!a.active, lastSeenAt: a.last_seen_at,
+      version: a.version, active: !!a.active, autoUpdate: !!a.auto_update, lastSeenAt: a.last_seen_at,
       online: !!a.last_seen_at && t - a.last_seen_at < 3 * 60 * 1000 })));
 });
 
 router.post('/agents', sec.requireRole('lead'), (req, res) => {
-  const { name, group } = req.body || {};
+  const { name, group, autoUpdate } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   if (db.prepare('SELECT id FROM agents WHERE name = ?').get(name)) {
     return httpError(res, 409, 'agent name already exists');
   }
   if (!withinPlan(req, res, 'agents')) return undefined;
   const token = 'oca_' + crypto.randomBytes(24).toString('hex');
-  const info = db.prepare('INSERT INTO agents (org_id, name, grp, token_hash, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(req.orgId, name, isStr(group, 100) ? group : 'default', sha256(token), now());
+  const info = db.prepare(`INSERT INTO agents (org_id, name, grp, token_hash, auto_update, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(req.orgId, name, isStr(group, 100) ? group : 'default', sha256(token),
+      autoUpdate === false ? 0 : 1, now());
   sec.audit(req.user.id, 'agent_create', name, req.orgId);
   res.json({ id: info.lastInsertRowid, token, note: 'store this token now — it is not retrievable later' });
+});
+
+router.patch('/agents/:id', sec.requireRole('lead'), (req, res) => {
+  const a = db.prepare('SELECT * FROM agents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  if (!a) return httpError(res, 404, 'agent not found');
+  const b = req.body || {};
+  db.prepare('UPDATE agents SET auto_update = COALESCE(?, auto_update) WHERE id = ? AND org_id = ?')
+    .run(typeof b.autoUpdate === 'boolean' ? (b.autoUpdate ? 1 : 0) : null, a.id, req.orgId);
+  sec.audit(req.user.id, 'agent_update', a.name, req.orgId);
+  res.json({ ok: true });
 });
 
 router.get('/agents/:id/metrics', (req, res) => {

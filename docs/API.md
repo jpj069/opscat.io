@@ -68,7 +68,8 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 
 | Endpoint | Body |
 |---|---|
-| POST `/v1/agents/heartbeat` | `{hostname?, platform?, version?}` → `{ok, intervalS}` |
+| POST `/v1/agents/heartbeat` | `{hostname?, platform?, version?}` → `{ok, intervalS, latestVersion, updateAvailable}` |
+| GET `/v1/agents/update` | server-bundled agent script for self-update (`X-Agent-Version` header); agents with auto-update on replace themselves and restart via systemd |
 | POST `/v1/agents/metrics` | `{cpuPct, load1, memUsed, memTotal, diskUsed, diskTotal, netRx, netTx}` |
 | POST `/v1/agents/logs` | `{logs:[…]}` like ingest/logs |
 
@@ -100,7 +101,7 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET /api/admin/users` (lead+) lists org **members** with their per-org role. POST/PATCH admin only: POST with a known e-mail attaches that existing account to the org (multi-org), an unknown e-mail creates a user (`initialPassword` once); PATCH `{role}` sets the per-org role, `{remove:true}` drops the member from this org, `{resetPassword:true}` → one-time password
 - `GET/POST/PATCH /api/admin/apikeys` (lead+) — POST → `{key}` shown once
 - `GET/POST/PATCH/DELETE /api/admin/snmp/targets` (lead+) — `{name,host,port,version:'2c'|'3',community?,oids:[{oid,label}],intervalS}`; v3 instead of community: `{v3User, v3Level:'noAuthNoPriv'|'authNoPriv'|'authPriv', v3AuthProtocol:'sha'|'md5', v3AuthKey, v3PrivProtocol:'aes'|'des', v3PrivKey}` (keys stored encrypted, never returned)
-- `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,lastSeenAt,online}`), POST (lead+) → `{token}` once, `GET /api/admin/agents/:id/metrics?hours=`
+- `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,autoUpdate,lastSeenAt,online}`), POST (lead+, `{name,group,autoUpdate?}` default true) → `{token}` once, PATCH `/:id` `{autoUpdate}`, `GET /api/admin/agents/:id/metrics?hours=`
 - `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, onboarding_done, onboarding_role, onboarding_goal, onboarding_source, alert_email_from, auth_email_from, teams_webhook_url, telegram_bot_token, pushover_token, classifiers`. `onboarding_done` is `'0'` on a fresh cloud org and flipped to `'1'` when its admin finishes/skips the first-run setup flow; `onboarding_role/goal/source` capture the personalization answers (source = acquisition channel, only asked on a user's first org) for later analysis
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 

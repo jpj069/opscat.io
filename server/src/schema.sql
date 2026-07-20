@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS agents (
   platform      TEXT,
   version       TEXT,
   active        INTEGER NOT NULL DEFAULT 1,
+  auto_update   INTEGER NOT NULL DEFAULT 1,  -- self-update to the server-bundled agent
   last_seen_at  INTEGER,
   created_at    INTEGER NOT NULL
 );

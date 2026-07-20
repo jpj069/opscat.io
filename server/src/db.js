@@ -151,6 +151,10 @@ const MIGRATIONS = [
     addColumn('snmp_targets', 'v3_priv_protocol', 'TEXT');
     addColumn('snmp_targets', 'v3_priv_key_enc', 'TEXT');
   },
+  // idx 6 -> version 7: agent self-update opt-out flag (default on).
+  () => {
+    addColumn('agents', 'auto_update', 'INTEGER NOT NULL DEFAULT 1');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);
