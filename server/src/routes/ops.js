@@ -300,10 +300,10 @@ router.get('/notifications', (req, res) => {
     channel: n.channel, ok: !!n.ok, error: n.error })));
 });
 
-// ---- inventory: every monitored counterparty in one list ----
+// ---- assets: every monitored counterparty in one list ----
 // Agents, SNMP targets and synthetic checks are configured objects; "sources"
 // are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
-router.get('/inventory', (req, res) => {
+router.get('/assets', (req, res) => {
   const t = now();
   const rows = [];
   const agents = db.prepare('SELECT * FROM agents WHERE org_id = ?').all(req.orgId);

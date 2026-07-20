@@ -1,4 +1,4 @@
-// Inventory — every monitored counterparty in one list: server agents, SNMP
+// Assets — every monitored counterparty in one list: server agents, SNMP
 // targets, synthetic checks and implicit log/event sources (applications),
 // with a single "+ Add" entry point that routes to the right flow.
 import React, { useEffect, useState } from 'react';
@@ -8,11 +8,11 @@ import { SEV, relTime } from '../format';
 import { Modal, StatusPill } from '../ui';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
-import type { InventoryRow } from '../types';
+import type { AssetRow } from '../types';
 
 const COLS = '1fr 110px 1fr 110px 110px';
 
-const KIND_UI: Record<InventoryRow['kind'], { label: string; color: string }> = {
+const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   agent: { label: 'agent', color: '#38b6ff' },
   snmp: { label: 'snmp', color: '#e3b341' },
   check: { label: 'check', color: '#bc8cff' },
@@ -26,20 +26,20 @@ function statusColor(s: string): string {
   return SEV.critical; // offline / failing / unreachable / error text
 }
 
-export default function Inventory() {
+export default function Assets() {
   const app = useApp();
   const canEdit = app.user ? app.user.role !== 'analyst' : false;
-  const [rows, setRows] = useState<InventoryRow[] | null>(null);
-  const [filter, setFilter] = useState<InventoryRow['kind'] | 'all'>('all');
+  const [rows, setRows] = useState<AssetRow[] | null>(null);
+  const [filter, setFilter] = useState<AssetRow['kind'] | 'all'>('all');
   const [adding, setAdding] = useState(false);
   const [modal, setModal] = useState<'key' | 'agent' | 'target' | null>(null);
   const [secret, setSecret] = useState<SecretInfo | null>(null);
 
-  const load = () => api.get<InventoryRow[]>('/api/inventory').then(setRows).catch(() => setRows([]));
+  const load = () => api.get<AssetRow[]>('/api/assets').then(setRows).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
 
   const shown = rows?.filter((r) => filter === 'all' || r.kind === filter);
-  const counts = (k: InventoryRow['kind']) => rows?.filter((r) => r.kind === k).length ?? 0;
+  const counts = (k: AssetRow['kind']) => rows?.filter((r) => r.kind === k).length ?? 0;
 
   const pick = (m: 'key' | 'agent' | 'target' | 'synthetics') => {
     setAdding(false);
@@ -50,7 +50,7 @@ export default function Inventory() {
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Inventory</h1>
+        <h1 className="page-title">Assets</h1>
         {canEdit && <button className="btn btn-primary" onClick={() => setAdding(true)}>+ Add</button>}
       </div>
 

@@ -8,7 +8,7 @@ import type { CaseRow, EventDetail, User } from './types';
 import Monitor from './pages/Monitor';
 import Classic from './pages/Classic';
 import Dashboard from './pages/Dashboard';
-import Inventory from './pages/Inventory';
+import Assets from './pages/Assets';
 import Cases from './pages/Cases';
 import Incidents from './pages/Incidents';
 import StatusPageAdmin from './pages/StatusPageAdmin';
@@ -27,7 +27,7 @@ const NAV = [
   { id: 'monitor', label: 'Monitor', icon: '⬡' },
   { id: 'classic', label: 'Classic View', icon: '⌗', sub: true },
   { id: 'dashboard', label: 'Dashboard', icon: '▤' },
-  { id: 'inventory', label: 'Inventory', icon: '▦' },
+  { id: 'assets', label: 'Assets', icon: '▦' },
   { id: 'cases', label: 'Cases', icon: '◻' },
   { id: 'incidents', label: 'Incidents', icon: '◈' },
   { id: 'statuspage', label: 'Status Page', icon: '▣' },
@@ -44,7 +44,7 @@ const PLATFORM_NAV = [
   { id: 'platform', label: 'Platform', icon: '◆' },
 ];
 const PAGES: Record<string, React.ComponentType> = {
-  monitor: Monitor, classic: Classic, dashboard: Dashboard, inventory: Inventory, cases: Cases,
+  monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
   incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics,
   logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, settings: Settings,
   platform: SuperAdmin,
