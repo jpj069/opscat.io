@@ -70,6 +70,7 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 |---|---|
 | POST `/v1/agents/heartbeat` | `{hostname?, platform?, version?}` → `{ok, intervalS, latestVersion, updateAvailable}` |
 | GET `/v1/agents/update` | server-bundled agent script for self-update (`X-Agent-Version` header); agents with auto-update on replace themselves and restart via systemd |
+| POST `/v1/agents/containers` | `{containers:[{name, image, state, cpuPct?, memUsed?, memLimit?}]}` — docker snapshot (minute-bucketed); a previously-running container now missing/stopped raises `container_down` |
 | POST `/v1/agents/metrics` | `{cpuPct, load1, memUsed, memTotal, diskUsed, diskTotal, netRx, netTx}` |
 | POST `/v1/agents/logs` | `{logs:[…]}` like ingest/logs |
 
@@ -93,7 +94,8 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 - `GET /api/analytics?range=24h|7d|30d` → `{volume:[{d,c,h,m,l}], mttrDaily:[{d,v}], topTypes, topServers, totals:{events,mttrMs,resolutionRate,notifications,notificationsFailed}}`
 - `GET/POST/PATCH/DELETE /api/rules[/:id]` — `{name,enabled,channel:'email'|'teams'|'webhook'|'slack'|'telegram'|'discord'|'ntfy'|'pushover',triggerName,severityMin,cooldownM,recipients:[]}` (lead+ to modify). `recipients` per channel: email addresses, webhook/Slack/Discord/ntfy URLs, Telegram chat ids, Pushover user keys; Telegram/Pushover need `telegram_bot_token`/`pushover_token` in settings
 - `GET /api/notifications` → `[{ts,rule,event,channel,ok,error}]`
-- `GET /api/assets` → unified list of monitored assets `[{kind:'agent'|'snmp'|'check'|'heartbeat'|'source', id, name, detail, status, lastSeen}]` — agents, SNMP targets, synthetic checks, heartbeats plus implicit log/event sources
+- `GET /api/assets` → unified list of monitored assets `[{kind:'agent'|'snmp'|'check'|'heartbeat'|'container'|'source', id, name, detail, status, lastSeen}]` — agents, SNMP targets, synthetic checks, heartbeats, containers (latest agent snapshot) plus implicit log/event sources
+- `GET/POST/DELETE /api/maintenance[/:id]` (lead+ to modify) — `{name, startsAt, endsAt}` (ms epoch, ≤30 days); while a window is active all alert dispatch for the org is suppressed (events still record; the notification log shows `suppressed: maintenance window "…"`)
 - `GET/POST/PATCH/DELETE /api/heartbeats[/:id]` (lead+ to modify) — `{name, intervalS, graceS}`; POST returns `pingUrl` once. Public ping: `GET|POST /v1/heartbeat/:token` (no other auth); silence past interval+grace raises a `heartbeat_missed` event
 - `GET/POST /api/incidents`, `POST /api/incidents/:id/status` (`{status,message?}`), `PATCH /api/incidents/:id` (`{title?,severity?,published?,rca:{summary,impact,rootCause,resolution,actions}}`) — incident objects: `{id,label,title,severity,status,published,startedAt,resolvedAt,durationMs,updates:[{ts,status,message}],rca}`
 - `GET /api/admin/components` → `[{id,name,group,status,uptimePct,days:[{day,worst}]}]`; POST/PATCH/DELETE for lead+ (`status` ∈ operational|degraded|partial|major|maintenance)

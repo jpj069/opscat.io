@@ -156,15 +156,28 @@ async function dispatch(rule, ev) {
   return caseLabel;
 }
 
+const getActiveWindow = db.prepare(`SELECT name FROM maintenance_windows
+  WHERE org_id = ? AND starts_at <= ? AND ends_at >= ? ORDER BY id LIMIT 1`);
+
 function onEvent(ev) {
   const t = now();
   const orgId = ev.org_id || 1;
-  for (const rule of getRules.all(orgId)) {
+  const rules = getRules.all(orgId);
+  if (!rules.length) return;
+  // planned work: keep recording events, but hold every notification back —
+  // one visible "suppressed" line per rule/cooldown in the notification log
+  const win = getActiveWindow.get(orgId, t, t);
+  for (const rule of rules) {
     if (ev.severity < rule.severity_min) continue;
     if (rule.trigger_name && rule.trigger_name !== ev.name) continue;
     const fired = getFire.get(rule.id, ev.dedupe_key);
     if (fired && t - fired.fired_at < rule.cooldown_m * 60 * 1000) continue;
     setFire.run(rule.id, ev.dedupe_key, t);
+    if (win) {
+      insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, rule.channel, 1,
+        `suppressed: maintenance window "${win.name}"`);
+      continue;
+    }
     dispatch(rule, ev)
       .then((caseLabel) => insNotif.run(orgId, now(), rule.id, rule.name, ev.id, caseLabel, rule.channel, 1, null))
       .catch((err) => {

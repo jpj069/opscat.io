@@ -45,6 +45,8 @@ function prune() {
   const logDays = parseInt(getOrgSetting(1, 'retention_logs_days', config.retentionLogsDays), 10);
   db.prepare('DELETE FROM logs WHERE ts < ?').run(t - logDays * 86400000);
   db.prepare('DELETE FROM agent_metrics WHERE ts < ?').run(t - config.retentionMetricsDays * 86400000);
+  db.prepare('DELETE FROM agent_containers WHERE ts < ?').run(t - config.retentionMetricsDays * 86400000);
+  db.prepare('DELETE FROM maintenance_windows WHERE ends_at < ?').run(t - 30 * 86400000);
   db.prepare('DELETE FROM synthetic_results WHERE ts < ?').run(t - config.retentionResultsDays * 86400000);
   db.prepare('DELETE FROM snmp_results WHERE ts < ?').run(t - config.retentionResultsDays * 86400000);
   db.prepare('DELETE FROM event_buckets WHERE bucket < ?').run(Math.floor((t - 7 * 86400000) / 60000));

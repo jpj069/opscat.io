@@ -351,6 +351,35 @@ router.delete('/heartbeats/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- maintenance windows (planned work: alerts suppressed while active) ----
+router.get('/maintenance', (req, res) => {
+  const t = now();
+  res.json(db.prepare('SELECT * FROM maintenance_windows WHERE org_id = ? ORDER BY starts_at DESC').all(req.orgId)
+    .map((w) => ({ id: w.id, name: w.name, startsAt: w.starts_at, endsAt: w.ends_at,
+      active: w.starts_at <= t && w.ends_at >= t })));
+});
+
+router.post('/maintenance', sec.requireRole('lead'), (req, res) => {
+  const { name, startsAt, endsAt } = req.body || {};
+  if (!isStr(name, 100)) return httpError(res, 400, 'name required');
+  const s = Number(startsAt);
+  const e = Number(endsAt);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
+    return httpError(res, 400, 'startsAt/endsAt required (ms epoch, endsAt > startsAt)');
+  }
+  if (e - s > 30 * 86400000) return httpError(res, 400, 'window longer than 30 days');
+  const info = db.prepare(`INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at)
+    VALUES (?, ?, ?, ?, ?)`).run(req.orgId, name, s, e, now());
+  sec.audit(req.user.id, 'maintenance_create', name, req.orgId);
+  res.json({ id: info.lastInsertRowid });
+});
+
+router.delete('/maintenance/:id', sec.requireRole('lead'), (req, res) => {
+  db.prepare('DELETE FROM maintenance_windows WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+  sec.audit(req.user.id, 'maintenance_delete', `window ${req.params.id}`, req.orgId);
+  res.json({ ok: true });
+});
+
 // ---- assets: every monitored counterparty in one list ----
 // Agents, SNMP targets and synthetic checks are configured objects; "sources"
 // are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
@@ -380,6 +409,15 @@ router.get('/assets', (req, res) => {
   for (const hb of db.prepare('SELECT * FROM heartbeats WHERE org_id = ?').all(req.orgId)) {
     rows.push({ kind: 'heartbeat', id: hb.id, name: hb.name, detail: `every ${hb.interval_s}s (+${hb.grace_s}s grace)`,
       status: heartbeatStatus(hb, t), lastSeen: hb.last_ping_at || null });
+  }
+  // containers: latest snapshot per agent (reported minute-bucketed)
+  for (const a of agents) {
+    const lastTs = db.prepare('SELECT MAX(ts) ts FROM agent_containers WHERE agent_id = ?').get(a.id).ts;
+    if (!lastTs || t - lastTs > 10 * 60 * 1000) continue; // stale snapshot → skip
+    for (const c of db.prepare('SELECT * FROM agent_containers WHERE agent_id = ? AND ts = ?').all(a.id, lastTs)) {
+      rows.push({ kind: 'container', id: null, name: `${a.name}/${c.name}`,
+        detail: c.image || '', status: c.state || 'unknown', lastSeen: lastTs });
+    }
   }
   const sources = new Map();
   for (const r of db.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {

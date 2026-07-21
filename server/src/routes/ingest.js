@@ -195,6 +195,42 @@ router.get('/agents/update', requireAgentToken, (req, res) => {
   res.type('application/javascript').send(bundledAgent);
 });
 
+// Container snapshot from the host agent (docker ps + stats). Raises a
+// container_down event when a container that was running in the previous
+// snapshot is now missing or in a non-running state.
+router.post('/agents/containers', requireAgentToken, (req, res) => {
+  const list = Array.isArray(req.body && req.body.containers) ? req.body.containers.slice(0, 200) : [];
+  const minute = Math.floor(now() / 60000) * 60000;
+  const prevTs = db.prepare('SELECT MAX(ts) ts FROM agent_containers WHERE agent_id = ? AND ts < ?')
+    .get(req.agent.id, minute).ts;
+  const prevRunning = prevTs
+    ? db.prepare("SELECT name FROM agent_containers WHERE agent_id = ? AND ts = ? AND state = 'running'")
+      .all(req.agent.id, prevTs).map((r) => r.name)
+    : [];
+  const ins = db.prepare(`INSERT INTO agent_containers (agent_id, ts, name, image, state, cpu_pct, mem_used, mem_limit)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(agent_id, ts, name) DO UPDATE SET image = excluded.image, state = excluded.state,
+      cpu_pct = excluded.cpu_pct, mem_used = excluded.mem_used, mem_limit = excluded.mem_limit`);
+  const num = (v) => (Number.isFinite(v) ? v : null);
+  const nowRunning = new Set();
+  for (const c of list) {
+    if (!isStr(c.name, 200)) continue;
+    const state = isStr(c.state, 40) ? c.state : 'unknown';
+    if (state === 'running') nowRunning.add(c.name);
+    ins.run(req.agent.id, minute, c.name, isStr(c.image, 300) ? c.image : null, state,
+      num(c.cpuPct), num(c.memUsed), num(c.memLimit));
+  }
+  for (const name of prevRunning) {
+    if (nowRunning.has(name)) continue;
+    const cur = list.find((c) => c && c.name === name);
+    pipeline.ingestEvent({
+      name: 'container_down', device: req.agent.name, target: name, severity: 65,
+      description: `container_down ${name} on ${req.agent.name} (${cur ? cur.state : 'gone'})`,
+    }, 'agents', false, req.agent.org_id);
+  }
+  res.json({ ok: true, stored: list.length });
+});
+
 router.post('/agents/metrics', requireAgentToken, (req, res) => {
   const m = req.body || {};
   const num = (v) => (Number.isFinite(v) ? v : null);

@@ -52,7 +52,7 @@ export interface Rule {
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
 export interface AssetRow {
-  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'source';
+  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source';
   id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
 }
 
@@ -101,6 +101,9 @@ export interface SnmpTarget {
 export interface HeartbeatRow {
   id: number; name: string; intervalS: number; graceS: number; enabled: boolean;
   lastPingAt: number | null; status: string;
+}
+export interface MaintenanceWindow {
+  id: number; name: string; startsAt: number; endsAt: number; active: boolean;
 }
 export interface AgentRow {
   id: number; name: string; group: string; hostname: string | null; platform: string | null;

@@ -29,7 +29,7 @@ const dns = require('dns');
 const { execFile, spawn } = require('child_process');
 const readline = require('readline');
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const HTTP_TIMEOUT_MS = 10000;
 const LOG_QUEUE_CAP = 2000;
 const LOG_BATCH = 100;
@@ -257,6 +257,55 @@ async function selfUpdate() {
   }
 }
 
+// --- container stats (docker CLI; silently off when docker is absent) -------
+let dockerAvailable = null; // null = not probed yet
+function execCmd(cmd, args, timeoutMs) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      resolve({ err, stdout: String(stdout || '') });
+    });
+  });
+}
+function parseSize(s) {
+  const m = /^([\d.]+)\s*([KMGT]?i?B)$/i.exec(String(s || '').trim());
+  if (!m) return null;
+  const mult = { b: 1, kb: 1e3, kib: 1024, mb: 1e6, mib: 1048576, gb: 1e9, gib: 1073741824,
+    tb: 1e12, tib: 1099511627776 }[m[2].toLowerCase()] || 1;
+  return Math.round(parseFloat(m[1]) * mult);
+}
+async function collectContainers() {
+  if (dockerAvailable === false) return null;
+  const ps = await execCmd('docker', ['ps', '-a', '--format', '{{json .}}'], 10000);
+  if (ps.err) {
+    if (dockerAvailable === null) logInfo('docker not available — container monitoring disabled');
+    dockerAvailable = false;
+    return null;
+  }
+  dockerAvailable = true;
+  const byName = new Map();
+  for (const line of ps.stdout.split('\n').filter(Boolean)) {
+    try {
+      const c = JSON.parse(line);
+      byName.set(c.Names, { name: c.Names, image: c.Image, state: String(c.State || '').toLowerCase() });
+    } catch (e) { /* skip malformed line */ }
+  }
+  const stats = await execCmd('docker', ['stats', '--no-stream', '--format', '{{json .}}'], 15000);
+  if (!stats.err) {
+    for (const line of stats.stdout.split('\n').filter(Boolean)) {
+      try {
+        const s = JSON.parse(line);
+        const c = byName.get(s.Name);
+        if (!c) continue;
+        c.cpuPct = parseFloat(String(s.CPUPerc).replace('%', ''));
+        const mem = String(s.MemUsage || '').split('/');
+        c.memUsed = parseSize(mem[0]);
+        c.memLimit = parseSize(mem[1]);
+      } catch (e) { /* skip malformed line */ }
+    }
+  }
+  return Array.from(byName.values());
+}
+
 // --- heartbeat + metrics tick ----------------------------------------------
 async function tick() {
   const hb = await safePost('/v1/agents/heartbeat', cfg.token, {
@@ -268,6 +317,11 @@ async function tick() {
 
   const metrics = await collectMetrics();
   await safePost('/v1/agents/metrics', cfg.token, metrics, 'metrics');
+
+  const containers = await collectContainers();
+  if (containers && containers.length) {
+    await safePost('/v1/agents/containers', cfg.token, { containers }, 'containers');
+  }
 }
 
 // --- log shipping (journald) -----------------------------------------------

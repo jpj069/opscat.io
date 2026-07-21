@@ -17,14 +17,15 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   snmp: { label: 'snmp', color: '#e3b341' },
   check: { label: 'check', color: '#bc8cff' },
   heartbeat: { label: 'heartbeat', color: '#f0883e' },
+  container: { label: 'container', color: '#58a6ff' },
   source: { label: 'source', color: '#3fb950' },
 };
 
 function statusColor(s: string): string {
-  if (s === 'online' || s === 'ok' || s === 'active') return SEV.green;
-  if (s === 'pending' || s === 'late') return '#e3b341';
-  if (s === 'disabled' || s === 'waiting') return 'var(--text3)';
-  return SEV.critical; // offline / failing / missing / unreachable / error text
+  if (s === 'online' || s === 'ok' || s === 'active' || s === 'running') return SEV.green;
+  if (s === 'pending' || s === 'late' || s === 'restarting' || s === 'paused') return '#e3b341';
+  if (s === 'disabled' || s === 'waiting' || s === 'created') return 'var(--text3)';
+  return SEV.critical; // offline / failing / missing / exited / unreachable / error text
 }
 
 export default function Assets() {
@@ -62,7 +63,7 @@ export default function Assets() {
       </div>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        {(['all', 'agent', 'snmp', 'check', 'heartbeat', 'source'] as const).map((k) => (
+        {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'source'] as const).map((k) => (
           <button key={k} className="btn btn-sm" onClick={() => setFilter(k)}
             style={{ background: filter === k ? 'var(--bg3)' : undefined,
               color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>

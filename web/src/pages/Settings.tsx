@@ -6,7 +6,7 @@ import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import { Modal, Field, Toggle, StatusPill } from '../ui';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
-  Settings as SettingsMap, SnmpTarget,
+  MaintenanceWindow, Settings as SettingsMap, SnmpTarget,
 } from '../types';
 
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
@@ -164,6 +164,9 @@ export default function Settings() {
         </button>
       </div>
 
+      {/* 2b. Maintenance windows */}
+      <MaintenanceCard canEdit={leadPlus} />
+
       {/* 3. API Keys (lead+) */}
       {!keysHidden && (
         <div className="card">
@@ -300,6 +303,73 @@ export default function Settings() {
       {modal === 'agent' && <RegisterAgentModal onClose={() => setModal(null)} onCreated={reloadAgents} onSecret={setSecret} />}
       {modal === 'target' && <AddTargetModal onClose={() => setModal(null)} onCreated={reloadTargets} />}
       {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- maintenance windows
+
+function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
+  const [windows, setWindows] = useState<MaintenanceWindow[] | null>(null);
+  const [name, setName] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [err, setErr] = useState('');
+  const load = () => api.get<MaintenanceWindow[]>('/api/maintenance').then(setWindows).catch(() => setWindows([]));
+  useEffect(() => { load(); }, []);
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault(); setErr('');
+    const startsAt = Date.parse(from);
+    const endsAt = Date.parse(to);
+    if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt) {
+      setErr('end must be after start'); return;
+    }
+    try {
+      await api.post('/api/maintenance', { name: name.trim(), startsAt, endsAt });
+      setName(''); setFrom(''); setTo(''); load();
+    } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
+  };
+  const remove = async (w: MaintenanceWindow) => {
+    if (!confirm(`Delete maintenance window "${w.name}"?`)) return;
+    await api.del(`/api/maintenance/${w.id}`);
+    load();
+  };
+  const fmt = (t: number) => new Date(t).toLocaleString();
+
+  return (
+    <div className="card">
+      <div className="card-title">Maintenance Windows</div>
+      <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+        While a window is active, events keep recording but no alerts are sent
+        (the notification log shows them as suppressed).
+      </div>
+      {windows === null && <Loading />}
+      {windows?.length === 0 && <Empty>No maintenance windows.</Empty>}
+      {windows?.map((w) => (
+        <div key={w.id} className="row" style={{ gap: 10, padding: '6px 0',
+          borderBottom: '1px solid var(--bg3)' }}>
+          <StatusPill text={w.active ? 'active' : (w.endsAt < Date.now() ? 'past' : 'planned')}
+            color={w.active ? '#e3b341' : w.endsAt < Date.now() ? 'var(--text3)' : '#38b6ff'} />
+          <span style={{ fontSize: 11, color: 'var(--text0)', fontWeight: 600 }}>{w.name}</span>
+          <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', flex: 1 }}>
+            {fmt(w.startsAt)} → {fmt(w.endsAt)}</span>
+          {canEdit && <button title="Delete" style={{ color: '#f85149', fontSize: 13 }}
+            onClick={() => remove(w)}>×</button>}
+        </div>
+      ))}
+      {canEdit && (
+        <form onSubmit={add} className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <input required value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. core switch upgrade" style={{ flex: 2, minWidth: 160 }} />
+          <input required type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)}
+            style={{ flex: 1, minWidth: 150 }} />
+          <input required type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)}
+            style={{ flex: 1, minWidth: 150 }} />
+          <button className="btn btn-sm">+ Add window</button>
+          {err && <span style={{ color: '#f85149', fontSize: 11 }}>{err}</span>}
+        </form>
+      )}
     </div>
   );
 }

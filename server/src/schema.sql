@@ -230,6 +230,30 @@ CREATE TABLE IF NOT EXISTS snmp_targets (
   created_at    INTEGER NOT NULL
 );
 
+-- planned-work windows: while a window is active, alert dispatch for the org is
+-- suppressed (events still record; the notification log shows "suppressed").
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  name          TEXT NOT NULL,
+  starts_at     INTEGER NOT NULL,
+  ends_at       INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+
+-- per-minute container snapshots reported by host agents (docker ps + stats)
+CREATE TABLE IF NOT EXISTS agent_containers (
+  agent_id      INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  ts            INTEGER NOT NULL,            -- minute bucket
+  name          TEXT NOT NULL,
+  image         TEXT,
+  state         TEXT,                        -- running | exited | restarting | …
+  cpu_pct       REAL,
+  mem_used      INTEGER,
+  mem_limit     INTEGER,
+  PRIMARY KEY (agent_id, ts, name)
+) WITHOUT ROWID;
+
 -- dead-man's-switch monitors: a cron job / backup pings its URL; silence longer
 -- than interval+grace raises a heartbeat_missed event.
 CREATE TABLE IF NOT EXISTS heartbeats (
