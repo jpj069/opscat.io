@@ -8,7 +8,7 @@ import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
-  SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon,
+  SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -245,6 +245,7 @@ function Login() {
 function Shell() {
   const app = useApp();
   const [collapsed, setCollapsed] = useState(false);
+  const [drawer, setDrawer] = useState(false); // phone: sidebar as slide-in drawer
   const [showPalette, setShowPalette] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showPwModal, setShowPwModal] = useState(!!app.user?.mustChangePassword);
@@ -292,8 +293,10 @@ function Shell() {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* sidebar */}
-      <aside style={{ width: collapsed ? 48 : 196, transition: 'width 0.2s', flexShrink: 0,
+      {/* sidebar — on phones a slide-in drawer (.shell-rail in tokens.css) */}
+      {drawer && <div className="overlay-dim" style={{ zIndex: 94 }} onClick={() => setDrawer(false)} />}
+      <aside className={`shell-rail ${drawer ? 'open' : ''}`}
+        style={{ width: collapsed ? 48 : 196, transition: 'width 0.2s', flexShrink: 0,
         background: 'var(--bg1)', borderRight: '1px solid var(--bg3)', display: 'flex',
         flexDirection: 'column', padding: '10px 8px' }}>
         <div className="row" style={{ justifyContent: collapsed ? 'center' : 'space-between',
@@ -303,7 +306,8 @@ function Shell() {
               background: 'linear-gradient(135deg,#6366f1,#4338ca)' }} />
             {!collapsed && <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text0)' }}>OpsCat</span>}
           </div>
-          <button onClick={() => setCollapsed(!collapsed)} style={{ color: 'var(--text3)', fontSize: 11 }}>
+          <button onClick={() => setCollapsed(!collapsed)} className="tb-hide-m"
+            style={{ color: 'var(--text3)', fontSize: 11 }}>
             {collapsed ? '»' : '«'}
           </button>
         </div>
@@ -311,7 +315,7 @@ function Shell() {
           OPERATIONS</div>}
         {NAV.map((n) => (
           <button key={n.id} className={`nav-item ${n.sub && !collapsed ? 'sub' : ''} ${app.nav === n.id ? 'active' : ''}`}
-            onClick={() => app.setNav(n.id)} title={n.label}
+            onClick={() => { app.setNav(n.id); setDrawer(false); }} title={n.label}
             style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
             <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
               <n.icon size={14} /></span>
@@ -331,7 +335,7 @@ function Shell() {
           padding: '12px 10px 4px' }}>ADMIN</div>}
         {ADMIN_NAV.map((n) => (
           <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
-            onClick={() => app.setNav(n.id)} title={n.label}
+            onClick={() => { app.setNav(n.id); setDrawer(false); }} title={n.label}
             style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
             <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
               <n.icon size={14} /></span>
@@ -343,7 +347,7 @@ function Shell() {
             padding: '12px 10px 4px' }}>PLATFORM</div>}
           {PLATFORM_NAV.map((n) => (
             <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
-              onClick={() => app.setNav(n.id)} title={n.label}
+              onClick={() => { app.setNav(n.id); setDrawer(false); }} title={n.label}
               style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
               <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0,
                 color: SEV.purple }}><n.icon size={14} /></span>
@@ -375,8 +379,10 @@ function Shell() {
         <header style={{ height: 48, flexShrink: 0, background: 'var(--bg1)',
           borderBottom: '1px solid var(--bg3)', display: 'flex', alignItems: 'center',
           gap: 14, padding: '0 16px' }}>
+          <button className="shell-burger" onClick={() => setDrawer(true)} title="Menu">
+            <MenuIcon size={17} /></button>
           <OrgSwitcher edition={edition} />
-          <span className="row" style={{ gap: 6 }}>
+          <span className="row tb-hide-m" style={{ gap: 6 }}>
             <span className={app.connected ? 'pulse' : ''} style={{ width: 7, height: 7, borderRadius: '50%',
               background: app.connected ? SEV.green : SEV.critical }} />
             <span className="mono" style={{ fontSize: 9, fontWeight: 600,
@@ -384,12 +390,12 @@ function Shell() {
               {app.connected ? 'IN SYNC' : 'OFFLINE'}
             </span>
           </span>
-          <span className="pill" style={{ color: SEV.green, background: alpha(SEV.green, 0.12),
+          <span className="pill tb-hide-m" style={{ color: SEV.green, background: alpha(SEV.green, 0.12),
             border: `1px solid ${alpha(SEV.green, 0.3)}` }}>
             {app.settings.backend_label || 'nbg1 · PRIMARY'}
           </span>
           {edition === 'cloud' && (
-            <span className="row" style={{ gap: 6 }}>
+            <span className="row tb-hide-m" style={{ gap: 6 }}>
               <span className="pill" style={{ color: planColor, background: alpha(planColor, 0.12),
                 border: `1px solid ${alpha(planColor, 0.3)}` }} title="Current plan">
                 {planLabel}
@@ -400,13 +406,15 @@ function Shell() {
               )}
             </span>
           )}
-          <button onClick={() => setShowPalette(true)} className="row" style={{ width: 220,
+          <button onClick={() => setShowPalette(true)} className="row tb-hide-m" style={{ width: 220,
             justifyContent: 'space-between', background: 'var(--bg2)', border: '1px solid var(--bg3)',
             borderRadius: 6, padding: '5px 10px', color: 'var(--text3)', fontSize: 11 }}>
             <span>Search events, cases…</span><kbd>⌘K</kbd>
           </button>
           <div style={{ flex: 1 }} />
-          <span className="row mono" style={{ gap: 10, fontSize: 10, fontWeight: 600 }}>
+          <button className="shell-burger" onClick={() => setShowPalette(true)} title="Search">
+            <SearchIcon size={15} /></button>
+          <span className="row mono tb-hide-m" style={{ gap: 10, fontSize: 10, fontWeight: 600 }}>
             {([['critical', sevCounts.critical], ['high', sevCounts.high], ['medium', sevCounts.medium],
               ['low', sevCounts.low]] as const).map(([band, count]) => (
               <span key={band} className="row" style={{ gap: 4, color: count ? SEV[band] : 'var(--text3)' }}>
@@ -414,7 +422,7 @@ function Shell() {
               </span>
             ))}
           </span>
-          <span className="row" style={{ gap: 0, border: '1px solid var(--bg3)', borderRadius: 5, overflow: 'hidden' }}>
+          <span className="row tb-hide-m" style={{ gap: 0, border: '1px solid var(--bg3)', borderRadius: 5, overflow: 'hidden' }}>
             {(['comfortable', 'compact'] as const).map((d) => (
               <button key={d} onClick={() => app.setDensity(d)} title={d}
                 style={{ padding: '4px 8px',
@@ -431,7 +439,9 @@ function Shell() {
           <span style={{ position: 'relative' }}>
             <button onClick={() => setShowProfile(!showProfile)} className="row"
               style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)', gap: 5 }}>
-              {app.user!.name} <span style={{ fontSize: 9, color: 'var(--text3)' }}>▾</span>
+              <span className="tb-hide-m">{app.user!.name}</span>
+              <span className="m-only"><Avatar i={initials(app.user!.name)} c={app.user!.color || '#7c3aed'} size={24} /></span>
+              <span className="tb-hide-m" style={{ fontSize: 9, color: 'var(--text3)' }}>▾</span>
             </button>
             {showProfile && (
               <div style={{ position: 'absolute', right: 0, top: 30, width: 200, zIndex: 80,
