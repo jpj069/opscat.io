@@ -9,6 +9,7 @@ import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
   SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
+  ChevronUpIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -356,18 +357,37 @@ function Shell() {
           ))}
         </>}
         <div style={{ flex: 1 }} />
-        <div className="row" style={{ padding: '8px 6px', borderTop: '1px solid var(--bg3)',
-          justifyContent: collapsed ? 'center' : 'flex-start' }}>
-          <span style={{ position: 'relative' }}>
-            <Avatar i={initials(app.user!.name)} c={app.user!.color || '#7c3aed'} />
-            <span style={{ position: 'absolute', right: -1, bottom: -1, width: 8, height: 8,
-              borderRadius: '50%', background: SEV.green, border: '2px solid var(--bg1)' }} />
-          </span>
-          {!collapsed && (
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)', whiteSpace: 'nowrap',
-                overflow: 'hidden', textOverflow: 'ellipsis' }}>{app.user!.name}</div>
-              <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
+        {/* account menu — the single place for profile actions (no topbar duplicate) */}
+        <div style={{ position: 'relative', borderTop: '1px solid var(--bg3)' }}>
+          <button onClick={() => setShowProfile(!showProfile)} className="row" title="Account"
+            style={{ padding: '8px 6px', width: '100%', textAlign: 'left',
+              justifyContent: collapsed ? 'center' : 'flex-start' }}>
+            <span style={{ position: 'relative' }}>
+              <Avatar i={initials(app.user!.name)} c={app.user!.color || '#7c3aed'} />
+              <span style={{ position: 'absolute', right: -1, bottom: -1, width: 8, height: 8,
+                borderRadius: '50%', background: SEV.green, border: '2px solid var(--bg1)' }} />
+            </span>
+            {!collapsed && (
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)', whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis' }}>{app.user!.name}</div>
+                <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
+              </div>
+            )}
+            {!collapsed && <span style={{ color: 'var(--text3)' }}><ChevronUpIcon size={12} /></span>}
+          </button>
+          {showProfile && (
+            <div style={{ position: 'absolute', left: 6, bottom: 50, width: 200, zIndex: 96,
+              background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 8,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.4)', padding: 6 }}>
+              <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--bg3)', marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)', overflow: 'hidden',
+                  textOverflow: 'ellipsis' }}>{app.user!.email}</div>
+                <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
+              </div>
+              <button className="nav-item" onClick={() => { setShowProfile(false); setShowPwModal(true); }}>
+                Change password</button>
+              <button className="nav-item" onClick={app.logout} style={{ color: SEV.critical }}>Sign out</button>
             </div>
           )}
         </div>
@@ -436,27 +456,6 @@ function Shell() {
             title="Toggle theme" style={{ color: 'var(--text2)' }}>
             {app.theme === 'dark' ? <MoonIcon size={14} /> : <SunIcon size={14} />}
           </button>
-          <span style={{ position: 'relative' }}>
-            <button onClick={() => setShowProfile(!showProfile)} className="row"
-              style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)', gap: 5 }}>
-              <span className="tb-hide-m">{app.user!.name}</span>
-              <span className="m-only"><Avatar i={initials(app.user!.name)} c={app.user!.color || '#7c3aed'} size={24} /></span>
-              <span className="tb-hide-m" style={{ fontSize: 9, color: 'var(--text3)' }}>▾</span>
-            </button>
-            {showProfile && (
-              <div style={{ position: 'absolute', right: 0, top: 30, width: 200, zIndex: 80,
-                background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.4)', padding: 6 }}>
-                <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--bg3)', marginBottom: 4 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)' }}>{app.user!.email}</div>
-                  <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
-                </div>
-                <button className="nav-item" onClick={() => { setShowProfile(false); setShowPwModal(true); }}>
-                  Change password</button>
-                <button className="nav-item" onClick={app.logout} style={{ color: SEV.critical }}>Sign out</button>
-              </div>
-            )}
-          </span>
         </header>
 
         <main style={{ flex: 1, minHeight: 0, background: 'var(--bg0)' }}>

@@ -147,7 +147,6 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
 
 /* app shell (App.tsx) — sidebar becomes a slide-in drawer on phones */
 .shell-burger { display: none; }
-.m-only { display: none; }
 
 /* mobile */
 @media (max-width: 720px) {
@@ -162,7 +161,6 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
     box-shadow: 0 0 48px rgba(0, 0, 0, 0.55); }
   .shell-rail.open { transform: translateX(0); }
   .tb-hide-m { display: none !important; }
-  .m-only { display: inline-flex; }
   .onb-rail { display: none; }
   .onb-mhead { display: flex; align-items: center; gap: 6px; padding: 12px 16px;
     background: var(--bg1); border-bottom: 1px solid var(--bg3); }
