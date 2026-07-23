@@ -34,6 +34,25 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+# Piped install (curl … | sh) has no source files next to the script —
+# download them from the OpsCat instance, which serves /agent/* itself.
+fetch() {
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+  else echo "need curl or wget to download $1" >&2; exit 1; fi
+}
+if [ ! -f "${SRC_DIR}/opscat-agent.js" ]; then
+  if [ -z "${OPSCAT_URL:-}" ]; then
+    echo "opscat-agent.js not found next to install.sh — set OPSCAT_URL so it can be downloaded." >&2
+    exit 1
+  fi
+  SRC_DIR=$(mktemp -d)
+  trap 'rm -rf "${SRC_DIR}"' EXIT
+  echo "==> Downloading agent files from ${OPSCAT_URL%/}/agent/"
+  fetch "${OPSCAT_URL%/}/agent/opscat-agent.js" "${SRC_DIR}/opscat-agent.js"
+  fetch "${OPSCAT_URL%/}/agent/opscat-agent.service" "${SRC_DIR}/opscat-agent.service"
+fi
+
 echo "==> Installing agent to ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"
 cp "${SRC_DIR}/opscat-agent.js" "${INSTALL_DIR}/opscat-agent.js"

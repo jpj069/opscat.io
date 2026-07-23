@@ -13,12 +13,26 @@ No npm dependencies.
 
 ## Install (one-liner)
 
-From a checkout of this directory, as root:
+No checkout needed — every OpsCat instance serves these files under `/agent/`,
+and `install.sh` downloads what it needs when run piped. As root:
+
+```sh
+curl -fsSL https://opscat.io/agent/install.sh | sudo \
+  OPSCAT_URL=https://opscat.io \
+  OPSCAT_AGENT_TOKEN=oca_xxxxxxxx \
+  OPSCAT_AGENT_FLAGS="--logs" sh
+```
+
+(Register the agent first under Settings → Agents — or in onboarding — to get
+the `oca_…` token; add `OPSCAT_PROBE_KEY=ocp_…` and `--probe` to also run
+synthetic probes from this host.)
+
+From a checkout of this directory the same works offline:
 
 ```sh
 sudo OPSCAT_URL=https://opscat.io \
-     OPSCAT_AGENT_TOKEN=agt_xxxxxxxx \
-     OPSCAT_PROBE_KEY=prb_xxxxxxxx \
+     OPSCAT_AGENT_TOKEN=oca_xxxxxxxx \
+     OPSCAT_PROBE_KEY=ocp_xxxxxxxx \
      OPSCAT_AGENT_FLAGS="--logs --probe" \
      sh install.sh
 ```
@@ -65,7 +79,7 @@ When installed via systemd, extra flags go in `OPSCAT_AGENT_FLAGS` in
 ### Run manually
 
 ```sh
-OPSCAT_URL=https://opscat.io OPSCAT_AGENT_TOKEN=agt_xxx \
+OPSCAT_URL=https://opscat.io OPSCAT_AGENT_TOKEN=oca_xxx \
   node opscat-agent.js --interval 30 --logs
 
 # preview the metrics payload without sending anything:

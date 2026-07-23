@@ -59,6 +59,13 @@ app.use('/api', require('./routes/ops'));
 // --- static: marketing site at /, app SPA at /app ---
 const pub = config.publicDir;         // built web/ (app), served under /app
 const wwwDir = config.wwwDir;          // marketing static, served at /
+// host-agent files (repo root /agent, /app/agent in the Docker image) so a
+// server can be onboarded with a single command, no checkout needed:
+//   curl -fsSL https://<host>/agent/install.sh | sudo OPSCAT_URL=… OPSCAT_AGENT_TOKEN=… sh
+const agentDir = path.join(__dirname, '..', '..', 'agent');
+if (fs.existsSync(agentDir)) {
+  app.use('/agent', express.static(agentDir, { maxAge: '5m', index: false }));
+}
 const appIndex = path.join(pub, 'index.html');
 if (fs.existsSync(pub)) {
   app.use('/app', express.static(pub, { maxAge: '1h', index: 'index.html' }));

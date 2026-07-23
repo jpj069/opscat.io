@@ -692,7 +692,7 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
     e.preventDefault(); setBusy(true); setErr('');
     try {
       const r = await api.post<{ token: string }>('/api/admin/agents', { name, group, autoUpdate });
-      const install = `OPSCAT_URL=https://opscat.io OPSCAT_AGENT_TOKEN=${r.token} sh agent/install.sh`;
+      const install = `curl -fsSL ${location.origin}/agent/install.sh | sudo OPSCAT_URL=${location.origin} OPSCAT_AGENT_TOKEN=${r.token} sh`;
       onSecret({
         title: 'Agent registered', note: 'Copy the token now — it is shown only once.', value: r.token,
         extra: (

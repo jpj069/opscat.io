@@ -66,6 +66,11 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 
 ## Agents (`/v1`, agent token)
 
+Install files are served unauthenticated under `/agent/` (`install.sh`,
+`opscat-agent.js`, `opscat-agent.service`), enabling the copy-paste install
+one-liner shown in onboarding and Settings → Agents:
+`curl -fsSL https://<host>/agent/install.sh | sudo OPSCAT_URL=… OPSCAT_AGENT_TOKEN=oca_… sh`
+
 | Endpoint | Body |
 |---|---|
 | POST `/v1/agents/heartbeat` | `{hostname?, platform?, version?}` → `{ok, intervalS, latestVersion, updateAvailable}` |
