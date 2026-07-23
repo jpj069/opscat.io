@@ -161,6 +161,10 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
     box-shadow: 0 0 48px rgba(0, 0, 0, 0.55); }
   .shell-rail.open { transform: translateX(0); }
   .tb-hide-m { display: none !important; }
+  /* tables scroll inside their card — the page itself never scrolls sideways */
+  .page { overflow-x: hidden; }
+  .card { overflow-x: auto; }
+  .tbl-head, .tbl-row { min-width: 620px; }
   .onb-rail { display: none; }
   .onb-mhead { display: flex; align-items: center; gap: 6px; padding: 12px 16px;
     background: var(--bg1); border-bottom: 1px solid var(--bg3); }

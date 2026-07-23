@@ -135,7 +135,9 @@ plan by default. Community edition enforces nothing.
 | GET `/overview` | platform KPIs: orgs, users, MRR, ingest volume |
 | GET/POST `/orgs` · GET/PATCH/DELETE `/orgs/:id` | manage organizations (plan, status) |
 | POST `/orgs/:id/impersonate` | switch the session into that org (audited) |
-| POST `/users/:id/super-admin` | grant/revoke the platform role |
+| GET `/super-admins` | list platform super-admins |
+| POST `/super-admins` | `{email}` — grant the flag to an existing account (audited) |
+| POST `/users/:id/super-admin` | grant/revoke the platform role by user id (self-demote rejected) |
 | GET `/audit` | platform-wide audit trail |
 
 Errors are always JSON `{error}` with proper status codes. Rate limits: auth 10/min/IP,
