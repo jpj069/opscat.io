@@ -38,7 +38,7 @@ export default function Analytics() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, opacity: loading ? 0.6 : 1 }}>
           {/* KPI row */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
+          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
             <KpiCard label="TOTAL EVENTS" value={String(ana.totals.events)} color={SEV.high} />
             <KpiCard label="AVG MTTR" value={fmtDuration(ana.totals.mttrMs)} color={SEV.medium} />
             <KpiCard label="RESOLUTION RATE" value={`${ana.totals.resolutionRate}%`} color={SEV.green} />
@@ -47,12 +47,12 @@ export default function Analytics() {
           </div>
 
           {/* Volume + MTTR */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
-            <div className="card" style={{ flex: 1, minWidth: 0 }}>
+          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+            <div className="card" style={{ flex: 1, minWidth: 280 }}>
               <div className="card-title">Event Volume</div>
               <StackedArea data={ana.volume} />
             </div>
-            <div className="card" style={{ flex: 1, minWidth: 0 }}>
+            <div className="card" style={{ flex: 1, minWidth: 280 }}>
               <div className="card-title">MTTR</div>
               <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
                 fmt={(v) => `${Math.round(v / 60000)}m`} />
@@ -60,12 +60,12 @@ export default function Analytics() {
           </div>
 
           {/* Top types + servers */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
-            <div className="card" style={{ flex: 1, minWidth: 0 }}>
+          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+            <div className="card" style={{ flex: 1, minWidth: 280 }}>
               <div className="card-title">Top Event Types</div>
               <HBars items={ana.topTypes} color={SEV.low} />
             </div>
-            <div className="card" style={{ flex: 1, minWidth: 0 }}>
+            <div className="card" style={{ flex: 1, minWidth: 280 }}>
               <div className="card-title">Most Active Servers</div>
               <HBars items={ana.topServers} color={SEV.cyan} />
             </div>

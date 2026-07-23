@@ -170,6 +170,20 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
   );
 }
 
+// Design-system standard: THE horizontal scroll container for wide tables.
+// Wrap the whole table block (head + rows + empty states) in it. It keeps its
+// intrinsic height, so it never introduces inner vertical scrolling — cards
+// and pages themselves must never become scroll containers (that lets flex
+// squeeze them to viewport height; see tokens.css).
+export function TableScroll({ minWidth = 620, children }:
+  { minWidth?: number; children: React.ReactNode }) {
+  return (
+    <div className="tbl-scroll">
+      <div style={{ minWidth }}>{children}</div>
+    </div>
+  );
+}
+
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>

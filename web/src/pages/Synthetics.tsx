@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
-import { LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field } from '../ui';
+import { LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll } from '../ui';
 import type { SynthLocation, SynthCheck, SynthResult, SynthSeriesPoint } from '../types';
 
 const CHECK_GRID = '110px 1fr 80px 90px 90px 120px';
@@ -203,6 +203,7 @@ export default function Synthetics() {
 
       {/* checks table */}
       <div className="card" style={{ padding: 0 }}>
+        <TableScroll minWidth={660}>
         <div className="tbl-head" style={{ gridTemplateColumns: CHECK_GRID }}>
           <span>Type</span>
           <span>Target</span>
@@ -234,6 +235,7 @@ export default function Synthetics() {
             </span>
           </div>
         ))}
+        </TableScroll>
         {canWrite && (
           <div style={{ padding: '12px 16px' }}>
             <button className="btn btn-sm" onClick={() => setShowAdd(true)}>+ Add check</button>

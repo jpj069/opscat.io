@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
-import { Modal, Field, Toggle, StatusPill } from '../ui';
+import { Modal, Field, Toggle, StatusPill, TableScroll } from '../ui';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, Settings as SettingsMap, SnmpTarget,
@@ -174,6 +174,7 @@ export default function Settings() {
             <span>API Keys</span>
             <button className="btn btn-sm" onClick={() => setModal('key')}>+ Create key</button>
           </div>
+          <TableScroll minWidth={720}>
           <div className="tbl-head" style={{ gridTemplateColumns: '1fr 120px 140px 110px 120px 90px', padding: '8px 0' }}>
             <span>Name</span><span>Prefix</span><span>Scopes</span>
             <span>Created</span><span>Last used</span><span>Active</span>
@@ -192,6 +193,7 @@ export default function Settings() {
                 onClick={() => api.patch(`/api/admin/apikeys/${k.id}`, { active: !k.active }).then(reloadKeys)} />
             </div>
           ))}
+          </TableScroll>
         </div>
       )}
 
@@ -202,6 +204,7 @@ export default function Settings() {
             <span>Agents</span>
             {leadPlus && <button className="btn btn-sm" onClick={() => setModal('agent')}>+ Register agent</button>}
           </div>
+          <TableScroll minWidth={840}>
           <div className="tbl-head" style={{ gridTemplateColumns: '1fr 100px 140px 100px 80px 100px 90px 60px', padding: '8px 0' }}>
             <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
             <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
@@ -231,6 +234,7 @@ export default function Settings() {
               </span>
             </div>
           ))}
+          </TableScroll>
         </div>
       )}
 
@@ -241,6 +245,7 @@ export default function Settings() {
             <span>SNMP Targets</span>
             <button className="btn btn-sm" onClick={() => setModal('target')}>+ Add target</button>
           </div>
+          <TableScroll minWidth={780}>
           <div className="tbl-head" style={{ gridTemplateColumns: '1fr 160px 70px 90px 110px 110px 80px', padding: '8px 0' }}>
             <span>Name</span><span>Host</span><span>Port</span><span>Interval</span>
             <span>Enabled</span><span>Last status</span><span></span>
@@ -269,6 +274,7 @@ export default function Settings() {
               </span>
             </div>
           ))}
+          </TableScroll>
         </div>
       )}
 

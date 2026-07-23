@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Avatar, GlowDot, Modal, Field } from '../ui';
+import { Avatar, GlowDot, Modal, Field, TableScroll } from '../ui';
 import type { UserRow } from '../types';
 
 const ROLES = ['admin', 'cto', 'lead', 'analyst'];
@@ -57,7 +57,8 @@ export default function Users() {
 
       {err && <div className="card" style={{ color: '#f85149', fontSize: 12 }}>{err}</div>}
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0 }}>
+        <TableScroll minWidth={960}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span>User</span><span>Email</span><span>Role</span>
           <span>Status</span><span>Last seen</span><span>Actions</span>
@@ -119,6 +120,7 @@ export default function Users() {
             </span>
           </div>
         ))}
+        </TableScroll>
       </div>
 
       {edit && <EditModal user={edit} onClose={() => setEdit(null)} onSaved={load} />}

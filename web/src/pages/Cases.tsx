@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field } from '../ui';
+import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll } from '../ui';
 import type { CaseRow, UserRow } from '../types';
 
 const TABS = ['all', 'open', 'assigned', 'closed'] as const;
@@ -51,6 +51,7 @@ export default function Cases() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
+        <TableScroll minWidth={900}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Case</span><span>Sev</span><span>Event</span><span>Server</span>
           <span>Status</span><span>Assignee</span><span>Root Cause</span>
@@ -85,6 +86,7 @@ export default function Cases() {
               {fmtDuration(c.durationMs)}</span>
           </div>
         ))}
+        </TableScroll>
       </div>
 
       {editing && (

@@ -48,7 +48,7 @@ export default function Dashboard() {
       <h1 className="page-title">Dashboard</h1>
 
       {/* KPI row */}
-      <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
+      <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
         <KpiCard label="ACTIVE CRITICAL" value={String(dash.sevCounts.critical)} color={SEV.critical}
           spark={ana.volume.map((v) => v.c)} />
         <KpiCard label="OPEN CASES" value={String(dash.openCases)} color={SEV.medium} />
@@ -86,12 +86,12 @@ export default function Dashboard() {
       </div>
 
       {/* Volume + MTTR */}
-      <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
-        <div className="card" style={{ flex: 1, minWidth: 0 }}>
+      <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+        <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Event Volume 7d</div>
           <StackedArea data={ana.volume} />
         </div>
-        <div className="card" style={{ flex: 1, minWidth: 0 }}>
+        <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">MTTR 7d</div>
           <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
             fmt={(v) => `${Math.round(v / 60000)}m`} />
@@ -99,12 +99,12 @@ export default function Dashboard() {
       </div>
 
       {/* Top types + cases by analyst */}
-      <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
-        <div className="card" style={{ flex: 1, minWidth: 0 }}>
+      <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+        <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Top Event Types</div>
           <HBars items={ana.topTypes} color={SEV.low} />
         </div>
-        <div className="card" style={{ flex: 1, minWidth: 0 }}>
+        <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Cases by Analyst</div>
           {dash.casesByAnalyst.length === 0 ? (
             <div style={{ color: 'var(--text3)', fontSize: 11 }}>no cases yet</div>

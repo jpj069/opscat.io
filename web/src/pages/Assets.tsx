@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Modal, StatusPill, Field } from '../ui';
+import { Modal, StatusPill, Field, TableScroll } from '../ui';
 import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
@@ -74,6 +74,7 @@ export default function Assets() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
+        <TableScroll minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
         </div>
@@ -101,6 +102,7 @@ export default function Assets() {
             </span>
           </div>
         ))}
+        </TableScroll>
       </div>
 
       {adding && (

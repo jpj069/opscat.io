@@ -42,6 +42,10 @@ a { color: var(--low); text-decoration: none; }
   display: flex; align-items: center; gap: 8px;
 }
 .page { padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; height: 100%; }
+/* children of a scrolling flex page must never be squeezed to viewport height */
+.page > * { flex-shrink: 0; }
+/* the ONE sanctioned horizontal scroll container — wraps tables (ui.tsx TableScroll) */
+.tbl-scroll { overflow-x: auto; }
 .page-title { font-size: 16px; font-weight: 700; color: var(--text0); margin: 0; }
 .micro {
   font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;

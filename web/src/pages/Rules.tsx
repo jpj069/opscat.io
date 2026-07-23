@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field } from '../ui';
+import { StatusPill, Toggle, Modal, Field, TableScroll } from '../ui';
 import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
@@ -52,6 +52,7 @@ export default function Rules() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
+        <TableScroll minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: RULE_COLS }}>
           <span>Rule</span><span>Channel</span><span>Trigger</span><span>Min Sev</span>
           <span>Cooldown</span><span>On</span><span />
@@ -80,10 +81,12 @@ export default function Rules() {
             ) : <span />}
           </div>
         ))}
+        </TableScroll>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
         <div className="card-title" style={{ padding: '14px 16px 0' }}>Recent Notifications</div>
+        <TableScroll minWidth={560}>
         <div className="tbl-head" style={{ gridTemplateColumns: NOTIF_COLS }}>
           <span>Time</span><span>Rule</span><span>Event</span><span>Channel</span><span>Status</span>
         </div>
@@ -104,6 +107,7 @@ export default function Rules() {
               title={n.ok ? undefined : n.error}>{n.ok ? 'sent' : 'failed'}</span>
           </div>
         ))}
+        </TableScroll>
       </div>
 
       {editing && (

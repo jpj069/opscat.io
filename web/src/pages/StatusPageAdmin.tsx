@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha } from '../format';
-import { Toggle, GlowDot, Modal, Field } from '../ui';
+import { Toggle, GlowDot, Modal, Field, TableScroll } from '../ui';
 import type { Component, CompStatus } from '../types';
 
 const GRID = '20px 1fr 110px 150px 260px 70px';
@@ -98,6 +98,7 @@ export default function StatusPageAdmin() {
           <span className="card-title" style={{ margin: 0 }}>Components</span>
           {canEdit && <button className="btn btn-sm" onClick={() => setShowAdd(true)}>+ Add component</button>}
         </div>
+        <TableScroll minWidth={780}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span />
           <span>Name</span>
@@ -135,6 +136,7 @@ export default function StatusPageAdmin() {
             </div>
           );
         })}
+        </TableScroll>
       </div>
 
       {showAdd && <AddComponentModal onClose={() => setShowAdd(false)}
