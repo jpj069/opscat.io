@@ -4,6 +4,7 @@ import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
 import { Avatar, SevBadge, Spark } from '../ui';
+import { PanelTopIcon, PanelLeftIcon, SquareIcon } from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
 const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
@@ -69,7 +70,7 @@ export default function Monitor() {
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {events.length === 0 && (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
-            No active events{filter !== 'all' ? ` in band "${filter}"` : ''} — all quiet. 🐈
+            No active events{filter !== 'all' ? ` in band "${filter}"` : ''} — all quiet.
           </div>
         )}
         {events.map((e) => {
@@ -149,9 +150,10 @@ export default function Monitor() {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="row" style={{ padding: '10px 16px 0', gap: 6 }}>
         <span className="micro" style={{ fontSize: 9 }}>LAYOUT</span>
-        {([['horizontal', '⬒'], ['vertical', '◧'], ['events', '▢']] as const).map(([l, icon]) => (
+        {([['horizontal', PanelTopIcon], ['vertical', PanelLeftIcon], ['events', SquareIcon]] as const).map(([l, Icon]) => (
           <button key={l} className={`chip ${layout === l ? 'active' : ''}`} title={l}
-            onClick={() => setLayout(l)}>{icon}</button>
+            style={{ display: 'inline-flex', alignItems: 'center' }}
+            onClick={() => setLayout(l)}><Icon size={11} /></button>
         ))}
       </div>
       <div ref={wrapRef} style={{ flex: 1, minHeight: 0, display: 'flex',

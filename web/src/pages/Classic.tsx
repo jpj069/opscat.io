@@ -170,7 +170,7 @@ export default function Classic() {
         <div style={{ flex: 1 }} />
         <button onClick={() => setOrient('horizontal')} style={txtBtn(orient === 'horizontal')} title="stacked">[H]</button>
         <button onClick={() => setOrient('vertical')} style={txtBtn(orient === 'vertical')} title="side-by-side">[V]</button>
-        <button onClick={() => setFull((f) => !f)} style={txtBtn(full)} title="fullscreen">[⛶]</button>
+        <button onClick={() => setFull((f) => !f)} style={txtBtn(full)} title="fullscreen">[F]</button>
       </div>
 
       {/* split panes: logs over events (horizontal) / side-by-side (vertical) */}

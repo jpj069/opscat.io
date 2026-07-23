@@ -60,7 +60,7 @@ export default function Dashboard() {
       <div className="card">
         <div className="card-title">Severity Impact Map</div>
         {bands.length === 0 ? (
-          <div style={{ color: 'var(--text3)', fontSize: 11 }}>no active events — all quiet. 🐈</div>
+          <div style={{ color: 'var(--text3)', fontSize: 11 }}>no active events — all quiet.</div>
         ) : (
           <>
             <div style={{ display: 'flex', height: 64, gap: 4 }}>

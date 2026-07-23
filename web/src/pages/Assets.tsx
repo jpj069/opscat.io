@@ -6,6 +6,7 @@ import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
 import { Modal, StatusPill, Field } from '../ui';
+import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
 import type { AssetRow } from '../types';
@@ -105,15 +106,15 @@ export default function Assets() {
       {adding && (
         <Modal title="Add to monitoring" onClose={() => setAdding(false)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <AddChoice icon="⌗" title="Server" note="Install the OpsCat agent — CPU, RAM, disk, network + logs"
+            <AddChoice icon={<ServerIcon size={17} />} title="Server" note="Install the OpsCat agent — CPU, RAM, disk, network + logs"
               onClick={() => pick('agent')} />
-            <AddChoice icon="◈" title="Network device" note="Poll a switch, router or firewall via SNMP"
+            <AddChoice icon={<NetworkIcon size={17} />} title="Network device" note="Poll a switch, router or firewall via SNMP"
               onClick={() => pick('target')} />
-            <AddChoice icon="≡" title="Application" note="Create an API key for the SDK, OTLP, Sentry or webhooks"
+            <AddChoice icon={<AppWindowIcon size={17} />} title="Application" note="Create an API key for the SDK, OTLP, Sentry or webhooks"
               onClick={() => pick('key')} />
-            <AddChoice icon="◉" title="Synthetic check" note="HTTP, ping, DNS, TCP or traceroute — from one or more locations"
+            <AddChoice icon={<RadarIcon size={17} />} title="Synthetic check" note="HTTP, ping, DNS, TCP or traceroute — from one or more locations"
               onClick={() => pick('synthetics')} />
-            <AddChoice icon="♥" title="Heartbeat / cron job" note="A backup or cron job pings a URL — silence raises an alert"
+            <AddChoice icon={<HeartPulseIcon size={17} />} title="Heartbeat / cron job" note="A backup or cron job pings a URL — silence raises an alert"
               onClick={() => pick('heartbeat')} />
           </div>
         </Modal>
@@ -179,7 +180,7 @@ function CreateHeartbeatModal({ onClose, onCreated, onSecret }:
 }
 
 function AddChoice({ icon, title, note, onClick }:
-  { icon: string; title: string; note: string; onClick: () => void }) {
+  { icon: React.ReactNode; title: string; note: string; onClick: () => void }) {
   return (
     <button onClick={onClick} className="card" style={{ display: 'flex', gap: 12, alignItems: 'center',
       textAlign: 'left', cursor: 'pointer', padding: '12px 14px', background: 'var(--bg2)' }}>

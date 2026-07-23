@@ -103,7 +103,9 @@ down interfaces generate pipeline events. Community strings are encrypted at res
   real actions through the normal APIs (ingest key, a synthetic check, an alert rule,
   teammates), captures personalization answers (`onboarding_role/goal/source`, the last
   only asked on a user's first org) and flips the flag to `'1'` on finish/skip. Existing
-  orgs and the community edition have no `'0'` flag, so they never see it.
+  orgs and the community edition have no `'0'` flag, so they never see it. The flow is
+  responsive: below 720px the step rail is replaced by a compact dot-stepper header
+  (`.onb-*` classes in `web/src/tokens.css`).
 - `OPSCAT_EDITION` selects the runtime edition (`server/src/edition.js`):
   `community` (default — single organization, no limits) or `cloud` (multi-tenant
   SaaS: plan limits from `server/src/plans.js` enforced with `402`, Stripe billing,
@@ -134,7 +136,9 @@ Current: 1 VPS ≈ everything. The seams are already cut so each step below is i
 
 ```
 server/    Express API + engines (server/src/ee/** = Enterprise Edition)
-web/       React + Vite UI (built into server/public at docker build)
+web/       React + Vite UI (built into server/public at docker build; UI icons come
+           from lucide-react, brand marks are inline SVGs in web/src/icons.tsx —
+           no unicode-glyph icons, no emojis)
 sdk/js/    @opscat/sdk — dependency-free log SDK (Node + browser)
 agent/     opscat-agent.js — dependency-free server agent (+ --probe mode)
 marketing/ static marketing site served at opscat.io/ (private repo only)

@@ -4,6 +4,13 @@ import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
 import { Avatar, GlowDot, Modal, SevBadge, Spark, Field } from './ui';
+import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
+import {
+  ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
+  GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
+  SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
 import Monitor from './pages/Monitor';
 import Classic from './pages/Classic';
@@ -23,25 +30,25 @@ import Onboarding from './pages/Onboarding';
 import OrgSwitcher from './OrgSwitcher';
 import type { BillingStatus, PlansResponse } from './types';
 
-const NAV = [
-  { id: 'monitor', label: 'Monitor', icon: '⬡' },
-  { id: 'classic', label: 'Classic View', icon: '⌗', sub: true },
-  { id: 'dashboard', label: 'Dashboard', icon: '▤' },
-  { id: 'assets', label: 'Assets', icon: '▦' },
-  { id: 'cases', label: 'Cases', icon: '◻' },
-  { id: 'incidents', label: 'Incidents', icon: '◈' },
-  { id: 'statuspage', label: 'Status Page', icon: '▣' },
-  { id: 'synthetics', label: 'Synthetics', icon: '◉' },
-  { id: 'logs', label: 'Logs', icon: '≡' },
-  { id: 'rules', label: 'Alert Rules', icon: '◎' },
-  { id: 'analytics', label: 'Analytics', icon: '▲' },
+const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
+  { id: 'monitor', label: 'Monitor', icon: ActivityIcon },
+  { id: 'classic', label: 'Classic View', icon: TableIcon, sub: true },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboardIcon },
+  { id: 'assets', label: 'Assets', icon: BoxesIcon },
+  { id: 'cases', label: 'Cases', icon: InboxIcon },
+  { id: 'incidents', label: 'Incidents', icon: TriangleAlertIcon },
+  { id: 'statuspage', label: 'Status Page', icon: GlobeIcon },
+  { id: 'synthetics', label: 'Synthetics', icon: RadarIcon },
+  { id: 'logs', label: 'Logs', icon: ScrollTextIcon },
+  { id: 'rules', label: 'Alert Rules', icon: BellRingIcon },
+  { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon },
 ];
-const ADMIN_NAV = [
-  { id: 'users', label: 'Users', icon: '○' },
-  { id: 'settings', label: 'Settings', icon: '◇' },
+const ADMIN_NAV: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: 'users', label: 'Users', icon: UsersIcon },
+  { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
-const PLATFORM_NAV = [
-  { id: 'platform', label: 'Platform', icon: '◆' },
+const PLATFORM_NAV: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: 'platform', label: 'Platform', icon: GemIcon },
 ];
 const PAGES: Record<string, React.ComponentType> = {
   monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
@@ -97,10 +104,11 @@ const OAUTH_ERRORS: Record<string, string> = {
 
 type AuthFlags = { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean };
 const NO_AUTH: AuthFlags = { google: false, microsoft: false, github: false, signupsOpen: false };
-const OAUTH_PROVIDERS: { key: 'google' | 'microsoft' | 'github'; label: string; icon: string }[] = [
-  { key: 'google', label: 'Continue with Google', icon: 'G' },
-  { key: 'microsoft', label: 'Continue with Microsoft', icon: '⊞' },
-  { key: 'github', label: 'Continue with GitHub', icon: '⌥' },
+const OAUTH_PROVIDERS: { key: 'google' | 'microsoft' | 'github'; label: string;
+  Icon: React.ComponentType<{ size?: number }> }[] = [
+  { key: 'google', label: 'Continue with Google', Icon: GoogleIcon },
+  { key: 'microsoft', label: 'Continue with Microsoft', Icon: MicrosoftIcon },
+  { key: 'github', label: 'Continue with GitHub', Icon: GitHubIcon },
 ];
 
 function Login() {
@@ -163,8 +171,8 @@ function Login() {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <form onSubmit={submit} className="card" style={{ width: 340, padding: 28 }}>
+    <div style={{ height: '100%', display: 'flex', overflowY: 'auto', padding: 16 }}>
+      <form onSubmit={submit} className="card" style={{ width: '100%', maxWidth: 340, margin: 'auto', padding: 28 }}>
         <div className="row" style={{ gap: 10, marginBottom: 18 }}>
           <span style={{ width: 30, height: 30, borderRadius: 8,
             background: 'linear-gradient(135deg,#6366f1,#4338ca)' }} />
@@ -217,9 +225,10 @@ function Login() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {OAUTH_PROVIDERS.filter((p) => auth[p.key]).map((p) => (
-                <button key={p.key} type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }}
+                <button key={p.key} type="button" className="btn"
+                  style={{ width: '100%', justifyContent: 'center', gap: 8 }}
                   onClick={() => { window.location.href = `/api/auth/${p.key}`; }}>
-                  <span className="mono" style={{ fontWeight: 700 }}>{p.icon}</span>
+                  <p.Icon size={15} />
                   {p.label}
                 </button>
               ))}
@@ -304,7 +313,8 @@ function Shell() {
           <button key={n.id} className={`nav-item ${n.sub && !collapsed ? 'sub' : ''} ${app.nav === n.id ? 'active' : ''}`}
             onClick={() => app.setNav(n.id)} title={n.label}
             style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
-            <span style={{ fontSize: 13, width: 16, textAlign: 'center', flexShrink: 0 }}>{n.icon}</span>
+            <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+              <n.icon size={14} /></span>
             {!collapsed && <span style={{ flex: 1 }}>{n.label}</span>}
             {!collapsed && n.id === 'monitor' && app.events.length > 0 && (
               <span className="mono" style={{ fontSize: 9, fontWeight: 600, padding: '1px 6px',
@@ -323,7 +333,8 @@ function Shell() {
           <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
             onClick={() => app.setNav(n.id)} title={n.label}
             style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
-            <span style={{ fontSize: 13, width: 16, textAlign: 'center', flexShrink: 0 }}>{n.icon}</span>
+            <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+              <n.icon size={14} /></span>
             {!collapsed && <span>{n.label}</span>}
           </button>
         ))}
@@ -334,8 +345,8 @@ function Shell() {
             <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
               onClick={() => app.setNav(n.id)} title={n.label}
               style={collapsed ? { justifyContent: 'center', paddingLeft: 10 } : undefined}>
-              <span style={{ fontSize: 13, width: 16, textAlign: 'center', flexShrink: 0,
-                color: SEV.purple }}>{n.icon}</span>
+              <span style={{ width: 16, display: 'flex', justifyContent: 'center', flexShrink: 0,
+                color: SEV.purple }}><n.icon size={14} /></span>
               {!collapsed && <span>{n.label}</span>}
             </button>
           ))}
@@ -406,16 +417,16 @@ function Shell() {
           <span className="row" style={{ gap: 0, border: '1px solid var(--bg3)', borderRadius: 5, overflow: 'hidden' }}>
             {(['comfortable', 'compact'] as const).map((d) => (
               <button key={d} onClick={() => app.setDensity(d)} title={d}
-                style={{ padding: '4px 8px', fontSize: 10,
+                style={{ padding: '4px 8px',
                   background: app.density === d ? 'var(--bg3)' : 'transparent',
                   color: app.density === d ? 'var(--text0)' : 'var(--text3)' }}>
-                {d === 'comfortable' ? '☰' : '≡'}
+                {d === 'comfortable' ? <Rows3Icon size={13} /> : <Rows4Icon size={13} />}
               </button>
             ))}
           </span>
           <button onClick={() => app.setTheme(app.theme === 'dark' ? 'light' : 'dark')}
-            title="Toggle theme" style={{ color: 'var(--text2)', fontSize: 13 }}>
-            {app.theme === 'dark' ? '☾' : '☀'}
+            title="Toggle theme" style={{ color: 'var(--text2)' }}>
+            {app.theme === 'dark' ? <MoonIcon size={14} /> : <SunIcon size={14} />}
           </button>
           <span style={{ position: 'relative' }}>
             <button onClick={() => setShowProfile(!showProfile)} className="row"
@@ -522,7 +533,8 @@ function Palette({ onClose }: { onClose: () => void }) {
           {!q && <div className="micro" style={{ padding: '6px 10px', fontSize: 9 }}>PAGES</div>}
           {navHits.map((n) => (
             <button key={n.id} className="nav-item" onClick={() => { app.setNav(n.id); onClose(); }}>
-              <span style={{ width: 16, textAlign: 'center' }}>{n.icon}</span>{n.label}
+              <span style={{ width: 16, display: 'flex', justifyContent: 'center' }}>
+                <n.icon size={14} /></span>{n.label}
             </button>
           ))}
           {eventHits.length > 0 && <div className="micro" style={{ padding: '6px 10px', fontSize: 9 }}>EVENTS</div>}
