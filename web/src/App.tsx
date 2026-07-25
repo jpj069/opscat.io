@@ -5,6 +5,7 @@ import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
 import { Avatar, GlowDot, Modal, SevBadge, Spark, Field } from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
+import markUrl from './assets/opscat-mark.png';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
@@ -175,8 +176,7 @@ function Login() {
     <div style={{ height: '100%', display: 'flex', overflowY: 'auto', padding: 16 }}>
       <form onSubmit={submit} className="card" style={{ width: '100%', maxWidth: 340, margin: 'auto', padding: 28 }}>
         <div className="row" style={{ gap: 10, marginBottom: 18 }}>
-          <span style={{ width: 30, height: 30, borderRadius: 8,
-            background: 'linear-gradient(135deg,#6366f1,#4338ca)' }} />
+          <img src={markUrl} alt="" style={{ width: 30, height: 30, borderRadius: 8 }} />
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text0)' }}>OpsCat</div>
             <div style={{ fontSize: 10, color: 'var(--text2)' }}>Infrastructure Ops Platform</div>
@@ -303,8 +303,7 @@ function Shell() {
         <div className="row" style={{ justifyContent: collapsed ? 'center' : 'space-between',
           padding: '2px 4px 12px', flexDirection: collapsed ? 'column' : 'row', gap: 8 }}>
           <div className="row" style={{ gap: 8 }}>
-            <span style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-              background: 'linear-gradient(135deg,#6366f1,#4338ca)' }} />
+            <img src={markUrl} alt="" style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0 }} />
             {!collapsed && <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text0)' }}>OpsCat</span>}
           </div>
           <button onClick={() => setCollapsed(!collapsed)} className="tb-hide-m"
