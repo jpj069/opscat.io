@@ -1,6 +1,20 @@
 // Shared UI atoms: severity badges, sparklines, avatars, toggles, charts.
 import React from 'react';
 import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
+import markLight from './assets/opscat-mark.png';
+import markDark from './assets/opscat-mark-dark.png';
+
+// The OpsCat brand mark (transparent line art). Renders both stroke variants;
+// tokens.css shows the one matching body[data-theme].
+export function BrandMark({ size = 26 }: { size?: number }) {
+  const s = { width: size, height: size, flexShrink: 0 } as const;
+  return (
+    <>
+      <img src={markLight} alt="" className="brand-light" style={s} />
+      <img src={markDark} alt="" className="brand-dark" style={s} />
+    </>
+  );
+}
 
 export function SevBadge({ score }: { score: number }) {
   const c = sevColor(score);

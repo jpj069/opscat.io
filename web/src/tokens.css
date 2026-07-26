@@ -35,6 +35,11 @@ a { color: var(--low); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* brand mark (ui.tsx BrandMark) — light strokes on dark theme, ink on light */
+.brand-dark { display: none; }
+body[data-theme="light"] .brand-light { display: none; }
+body[data-theme="light"] .brand-dark { display: inline-block; }
+
 /* layout primitives */
 .card { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 8px; padding: 14px 16px; }
 .card-title {
