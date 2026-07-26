@@ -20,6 +20,7 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   heartbeat: { label: 'heartbeat', color: '#f0883e' },
   container: { label: 'container', color: '#58a6ff' },
   source: { label: 'source', color: '#3fb950' },
+  vendor: { label: 'vendor', color: '#d29922' },
 };
 
 function statusColor(s: string): string {
@@ -64,7 +65,7 @@ export default function Assets() {
       </div>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'source'] as const).map((k) => (
+        {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'vendor', 'source'] as const).map((k) => (
           <button key={k} className="btn btn-sm" onClick={() => setFilter(k)}
             style={{ background: filter === k ? 'var(--bg3)' : undefined,
               color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>

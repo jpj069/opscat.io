@@ -380,6 +380,19 @@ router.delete('/maintenance/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- status-page user reports (submitted anonymously on /status) ----
+router.get('/status-reports', (req, res) => {
+  const hours = clampInt(req.query.hours, 1, 720, 24);
+  const since = now() - hours * 3600000;
+  const rows = db.prepare(`SELECT r.ts, r.message, c.name AS component
+    FROM status_reports r LEFT JOIN components c ON c.id = r.component_id
+    WHERE r.org_id = ? AND r.ts >= ? ORDER BY r.ts DESC LIMIT 200`).all(req.orgId, since)
+    .map((r) => ({ ts: r.ts, component: r.component, message: r.message }));
+  const total = db.prepare('SELECT COUNT(*) c FROM status_reports WHERE org_id = ? AND ts >= ?')
+    .get(req.orgId, since).c;
+  res.json({ total, reports: rows });
+});
+
 // ---- assets: every monitored counterparty in one list ----
 // Agents, SNMP targets and synthetic checks are configured objects; "sources"
 // are implicit — any device name seen in logs/events (SDK, OTLP, webhooks).
@@ -418,6 +431,11 @@ router.get('/assets', (req, res) => {
       rows.push({ kind: 'container', id: null, name: `${a.name}/${c.name}`,
         detail: c.image || '', status: c.state || 'unknown', lastSeen: lastTs });
     }
+  }
+  for (const v of db.prepare('SELECT * FROM vendors WHERE org_id = ?').all(req.orgId)) {
+    rows.push({ kind: 'vendor', id: v.id, name: v.name, detail: `status feed · every ${v.interval_s}s`,
+      status: !v.enabled ? 'disabled' : v.last_error ? 'error' : v.status,
+      lastSeen: v.last_checked_at || null });
   }
   const sources = new Map();
   for (const r of db.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {

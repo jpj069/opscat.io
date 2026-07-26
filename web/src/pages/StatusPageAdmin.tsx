@@ -1,10 +1,11 @@
-// StatusPageAdmin — public status page management: publish toggle + components.
+// StatusPageAdmin — public status page management: publish toggle, components
+// + anonymous user problem reports (Downdetector-style).
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
-import { alpha } from '../format';
+import { alpha, relTime } from '../format';
 import { Toggle, GlowDot, Modal, Field, TableScroll } from '../ui';
-import type { Component, CompStatus } from '../types';
+import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
 const GRID = '20px 1fr 110px 150px 260px 70px';
 const COMP_COLOR: Record<CompStatus, string> = {
@@ -139,8 +140,80 @@ export default function StatusPageAdmin() {
         </TableScroll>
       </div>
 
+      <UserReports isAdmin={isAdmin} />
+
       {showAdd && <AddComponentModal onClose={() => setShowAdd(false)}
         onAdded={() => { setShowAdd(false); load(); }} />}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ user reports
+
+function UserReports({ isAdmin }: { isAdmin: boolean }) {
+  const app = useApp();
+  const [data, setData] = useState<StatusReportsResponse | null>(null);
+  const [enabled, setEnabled] = useState(app.settings.status_reports_enabled !== '0');
+  const [publicCount, setPublicCount] = useState(app.settings.status_reports_public === '1');
+  const [threshold, setThreshold] = useState(app.settings.status_reports_threshold || '5');
+
+  useEffect(() => {
+    setEnabled(app.settings.status_reports_enabled !== '0');
+    setPublicCount(app.settings.status_reports_public === '1');
+    setThreshold(app.settings.status_reports_threshold || '5');
+  }, [app.settings]);
+
+  const load = () => api.get<StatusReportsResponse>('/api/status-reports?hours=24')
+    .then(setData).catch(() => setData({ total: 0, reports: [] }));
+  useEffect(() => {
+    load();
+    const iv = setInterval(load, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const save = async (patch: Record<string, string>) => {
+    try { await api.patch('/api/admin/settings', patch); } catch { /* revert via settings reload */ }
+  };
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px', flexWrap: 'wrap', gap: 10 }}>
+        <span className="card-title" style={{ margin: 0 }}>
+          User reports (last 24h: {data ? data.total : '…'})</span>
+        {isAdmin && (
+          <span className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+            <span className="row" style={{ gap: 6 }}>
+              <Toggle on={enabled} onClick={() => { setEnabled(!enabled); save({ status_reports_enabled: !enabled ? '1' : '0' }); }} />
+              <span className="micro" style={{ fontSize: 9 }}>Accept reports</span>
+            </span>
+            <span className="row" style={{ gap: 6 }}>
+              <Toggle on={publicCount} onClick={() => { setPublicCount(!publicCount); save({ status_reports_public: !publicCount ? '1' : '0' }); }} />
+              <span className="micro" style={{ fontSize: 9 }}>Show count publicly</span>
+            </span>
+            <span className="row" style={{ gap: 6 }}>
+              <span className="micro" style={{ fontSize: 9 }}>Alert at</span>
+              <input type="number" min={1} max={1000} value={threshold} style={{ width: 60, fontSize: 11, padding: '3px 6px' }}
+                onChange={(e) => setThreshold(e.target.value)}
+                onBlur={() => save({ status_reports_threshold: String(Math.max(1, parseInt(threshold, 10) || 5)) })} />
+              <span className="micro" style={{ fontSize: 9 }}>/ 15 min</span>
+            </span>
+          </span>
+        )}
+      </div>
+      <div style={{ padding: '0 16px 12px' }}>
+        {!data || data.reports.length === 0 ? (
+          <div style={{ fontSize: 11, color: 'var(--text3)', paddingBottom: 4 }}>
+            no reports in the last 24 hours — visitors can report problems on the public status page;
+            a spike raises a <span className="mono">user_reports_spike</span> event</div>
+        ) : data.reports.slice(0, 30).map((r, i) => (
+          <div key={i} className="row" style={{ gap: 8, padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>{relTime(r.ts)}</span>
+            {r.component && <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', flexShrink: 0 }}>[{r.component}]</span>}
+            <span style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap' }}>{r.message || <span style={{ color: 'var(--text3)' }}>no message</span>}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

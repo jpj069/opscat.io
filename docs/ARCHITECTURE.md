@@ -19,7 +19,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
                         │  • SSE       /api/stream (live logs/events)│
                         │  • Engines (in-process schedulers):        │
                         │     pipeline · alerts · synthetics ·       │
-                        │     snmp · retention                       │
+                        │     snmp · vendors · retention             │
                         └───────────────┬────────────────────────────┘
                                         │
                         ┌───────────────▼───────────────┐
@@ -68,6 +68,48 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 (sysUpTime, ifOperStatus, custom OID list per target). Unreachable targets and
 down interfaces generate pipeline events. Community strings are encrypted at rest
 (AES-256-GCM with `OPSCAT_SECRET`).
+
+## Vendor monitoring (supply chain)
+
+`engine/vendors.js` polls the **official status feeds** of third-party services an
+org depends on (status-page aggregation, like StatusGator/IsDown but self-hosted):
+
+- Feed adapters in `engine/vendor-feeds.js`: Atlassian **Statuspage**
+  (`/api/v2/summary.json` — also covers **incident.io** pages, which expose a
+  Statuspage-compatible shim on their canonical host), **Instatus**
+  (`/summary.json`), **Slack**'s status API, Google's dashboards (**gcp** — Cloud,
+  Workspace + Firebase `incidents.json`), the **AWS** public health feed (UTF-16
+  BOM handled), **Heroku** (`/api/v4/current-status`), **status.io**
+  (`api.status.io/1.0/status/<pageId>`, e.g. GitLab) and a generic **RSS/Atom**
+  fallback — native `fetch` + hand-rolled parsing, zero new dependencies.
+- A bundled catalog (`server/src/data/vendor-catalog.json`, 220+ validated vendors
+  with feed URLs + product domains — cross-checked against top-SaaS rankings like
+  Okta's Businesses at Work) plus custom feeds (https-only, SSRF-guarded like
+  synthetic checks, redirects re-validated per hop).
+- Each unique feed URL is fetched **once per tick** and fanned out to every
+  subscribed org (ETag/Last-Modified caching) — polling load on the cloud instance
+  is independent of the org count; a self-hosted community instance polls the same
+  vendor feeds directly with the same code.
+- Vendor state mirrors into `vendors` / `vendor_components` / `vendor_incidents`;
+  new incidents raise `vendor_incident` pipeline events (severity by impact:
+  major/critical page, minor stays informational), recovery raises
+  `vendor_recovered` — alert rules, cases, SSE and the Monitor react automatically.
+- A vendor can be mapped onto an **own status-page component**: the vendor's state
+  then drives that component's status, uptime history and the public status page.
+
+## User problem reports (status page)
+
+The public status page carries a "Report a problem" form (plain HTML POST — the
+page ships no JS, so CSP stays strict): optional component + free-text message,
+no account needed. Guards: honeypot field, per-IP token bucket (3/min), one
+report per visitor per 10 minutes; only a salted IP hash is stored
+(`status_reports`, pruned after 30 days). `engine/reports.js` checks every
+minute: ≥ `status_reports_threshold` (default 5) reports within 15 minutes raise
+a `user_reports_spike` pipeline event — frequently the earliest outage signal,
+before synthetic checks or agents notice. Org settings: `status_reports_enabled`
+(default on), `status_reports_public` (show the last-hour count on the page,
+default off), `status_reports_threshold`. Ops see recent reports on the Status
+Page admin screen.
 
 ## Security
 

@@ -52,8 +52,31 @@ export interface Rule {
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
 export interface AssetRow {
-  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source';
+  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source' | 'vendor';
   id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
+}
+
+// ---------------------------------------------------------------- vendor monitoring
+
+export type VendorStatus = 'unknown' | 'operational' | 'degraded' | 'partial' | 'major' | 'maintenance';
+export type VendorFeedType = 'statuspage' | 'instatus' | 'slack' | 'gcp' | 'aws' | 'heroku' | 'statusio' | 'rss';
+export interface VendorRow {
+  id: number; slug: string; name: string; feedType: VendorFeedType; feedUrl: string;
+  pageUrl: string | null; intervalS: number; enabled: boolean; componentId: number | null;
+  status: VendorStatus; lastCheckedAt: number | null; lastError: string | null;
+  activeIncidents: number;
+}
+export interface VendorIncidentRow {
+  id: number; remoteId: string; title: string; status: string | null; impact: string | null;
+  url: string | null; startedAt: number | null; resolvedAt: number | null; updatedAt: number | null;
+}
+export interface VendorDetail extends VendorRow {
+  components: { name: string; status: string; updatedAt: number }[];
+  incidents: VendorIncidentRow[];
+}
+export interface VendorCatalogEntry {
+  slug: string; name: string; feedType: VendorFeedType; feedUrl: string; pageUrl: string;
+  domains: string[];
 }
 
 export interface IncidentUpdate { ts: number; status: string; message: string; }
@@ -64,6 +87,9 @@ export interface Incident {
   updates: IncidentUpdate[];
   rca: { summary: string; impact: string; rootCause: string; resolution: string; actions: string };
 }
+
+export interface StatusReportRow { ts: number; component: string | null; message: string | null; }
+export interface StatusReportsResponse { total: number; reports: StatusReportRow[]; }
 
 export type CompStatus = 'operational' | 'degraded' | 'partial' | 'major' | 'maintenance';
 export interface Component {

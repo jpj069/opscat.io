@@ -356,6 +356,65 @@ CREATE TABLE IF NOT EXISTS component_days (
   PRIMARY KEY (component_id, day)
 ) WITHOUT ROWID;
 
+-- third-party vendor status monitoring (supply chain): each row subscribes an
+-- org to one vendor's official status feed (statuspage/instatus/... JSON, RSS).
+CREATE TABLE IF NOT EXISTS vendors (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  slug          TEXT NOT NULL,               -- catalog slug or custom-<name>
+  name          TEXT NOT NULL,
+  feed_type     TEXT NOT NULL CHECK (feed_type IN ('statuspage','instatus','slack','gcp','aws','heroku','statusio','rss')),
+  feed_url      TEXT NOT NULL,
+  page_url      TEXT,                        -- human status page link
+  interval_s    INTEGER NOT NULL DEFAULT 120,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  component_id  INTEGER REFERENCES components(id) ON DELETE SET NULL, -- mirror onto own status page
+  status        TEXT NOT NULL DEFAULT 'unknown'
+                CHECK (status IN ('unknown','operational','degraded','partial','major','maintenance')),
+  last_checked_at INTEGER,
+  last_error    TEXT,
+  created_at    INTEGER NOT NULL,
+  UNIQUE (org_id, slug)
+);
+
+-- latest component snapshot as reported by the vendor's feed
+CREATE TABLE IF NOT EXISTS vendor_components (
+  vendor_id     INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'operational',
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (vendor_id, name)
+) WITHOUT ROWID;
+
+-- vendor incident history; resolved_at is set when an incident leaves the feed
+CREATE TABLE IF NOT EXISTS vendor_incidents (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  vendor_id     INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  remote_id     TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  status        TEXT,
+  impact        TEXT,                        -- minor|degraded|partial|major|critical|maintenance|unknown
+  url           TEXT,
+  started_at    INTEGER,
+  resolved_at   INTEGER,
+  updated_at    INTEGER,
+  UNIQUE (vendor_id, remote_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_incidents ON vendor_incidents(vendor_id, updated_at);
+
+-- Downdetector-style user reports submitted from the public status page;
+-- engine/reports.js raises a user_reports_spike event when a 15-minute window
+-- reaches the org's threshold (org setting status_reports_threshold).
+CREATE TABLE IF NOT EXISTS status_reports (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  ts            INTEGER NOT NULL,
+  component_id  INTEGER REFERENCES components(id) ON DELETE SET NULL,
+  message       TEXT,
+  ip_hash       TEXT NOT NULL                -- sha256(orgId|ip): dedupe, never the raw address
+);
+CREATE INDEX IF NOT EXISTS idx_status_reports ON status_reports(org_id, ts);
+
 -- global platform settings (super-admin)
 CREATE TABLE IF NOT EXISTS settings (
   key           TEXT PRIMARY KEY,

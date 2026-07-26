@@ -21,8 +21,14 @@ edition with `OPSCAT_EDITION=community` (default).
 - **Synthetics** — HTTP/ICMP/DNS/TCP/traceroute checks from the platform host plus any
   number of remote probe locations (the agent in `--probe` mode).
 - **SNMP** — v2c polling of network devices with unreachable/threshold events.
+- **Vendor monitoring** — supply-chain watch on the official status pages of 220+
+  services (GitHub, AWS, Cloudflare, Stripe, Notion, GitLab, Heroku, Snowflake,
+  Smartsheet, Qualtrics, …) plus custom feeds — any Statuspage, Instatus,
+  incident.io or status.io page works; vendor incidents raise events/alerts and
+  can mirror onto your own status-page components.
 - **Incidents & status page** — incident timeline + RCA editor, public status page
-  at `/status` with 45-day component uptime.
+  at `/status` with 45-day component uptime and Downdetector-style anonymous
+  "report a problem" submissions (spikes raise alerts before monitoring catches up).
 - **UI** — React SPA (`/app`): live monitor with streaming logs (SSE), dashboard,
   cases, analytics, alert rules, synthetics, terminal-style Classic View, user & key
   management. Dark/light themes. Password, magic-link and GitHub login (Google +

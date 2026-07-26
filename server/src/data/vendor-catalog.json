@@ -1,0 +1,2292 @@
+[
+  {
+    "slug": "onepassword",
+    "name": "1Password",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.1password.com/api/v2/summary.json",
+    "pageUrl": "https://status.1password.com",
+    "domains": [
+      "1password.com"
+    ]
+  },
+  {
+    "slug": "ably",
+    "name": "Ably",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.ably.com/api/v2/summary.json",
+    "pageUrl": "https://status.ably.com",
+    "domains": [
+      "ably.com",
+      "ably.io"
+    ]
+  },
+  {
+    "slug": "acquia",
+    "name": "Acquia",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.acquia.com/api/v2/summary.json",
+    "pageUrl": "https://status.acquia.com",
+    "domains": [
+      "acquia.com"
+    ]
+  },
+  {
+    "slug": "activecampaign",
+    "name": "ActiveCampaign",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.activecampaign.com/api/v2/summary.json",
+    "pageUrl": "https://status.activecampaign.com",
+    "domains": [
+      "activecampaign.com"
+    ]
+  },
+  {
+    "slug": "airbrake",
+    "name": "Airbrake",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.airbrake.io/api/v2/summary.json",
+    "pageUrl": "https://status.airbrake.io",
+    "domains": [
+      "airbrake.io"
+    ]
+  },
+  {
+    "slug": "airbyte",
+    "name": "Airbyte",
+    "feedType": "instatus",
+    "feedUrl": "https://status.airbyte.com/summary.json",
+    "pageUrl": "https://status.airbyte.com",
+    "domains": [
+      "airbyte.com"
+    ]
+  },
+  {
+    "slug": "aircall",
+    "name": "Aircall",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.aircall.io/api/v2/summary.json",
+    "pageUrl": "https://status.aircall.io",
+    "domains": [
+      "aircall.io"
+    ]
+  },
+  {
+    "slug": "airtable",
+    "name": "Airtable",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.airtable.com/api/v2/summary.json",
+    "pageUrl": "https://status.airtable.com",
+    "domains": [
+      "airtable.com"
+    ]
+  },
+  {
+    "slug": "aiven",
+    "name": "Aiven",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.aiven.io/api/v2/summary.json",
+    "pageUrl": "https://status.aiven.io",
+    "domains": [
+      "aiven.io"
+    ]
+  },
+  {
+    "slug": "linode",
+    "name": "Akamai / Linode",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.linode.com/api/v2/summary.json",
+    "pageUrl": "https://status.linode.com",
+    "domains": [
+      "linode.com",
+      "akamai.com"
+    ]
+  },
+  {
+    "slug": "aws",
+    "name": "Amazon Web Services",
+    "feedType": "aws",
+    "feedUrl": "https://health.aws.amazon.com/public/currentevents",
+    "pageUrl": "https://health.aws.amazon.com/health/status",
+    "domains": [
+      "amazonaws.com",
+      "aws.amazon.com"
+    ]
+  },
+  {
+    "slug": "amplitude",
+    "name": "Amplitude",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.amplitude.com/api/v2/summary.json",
+    "pageUrl": "https://status.amplitude.com",
+    "domains": [
+      "amplitude.com"
+    ]
+  },
+  {
+    "slug": "anthropic",
+    "name": "Anthropic",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.anthropic.com/api/v2/summary.json",
+    "pageUrl": "https://status.anthropic.com",
+    "domains": [
+      "anthropic.com",
+      "claude.ai"
+    ]
+  },
+  {
+    "slug": "asana",
+    "name": "Asana",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.asana.com/api/v2/summary.json",
+    "pageUrl": "https://status.asana.com",
+    "domains": [
+      "asana.com"
+    ]
+  },
+  {
+    "slug": "ashby",
+    "name": "Ashby",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.ashbyhq.com/api/v2/summary.json",
+    "pageUrl": "https://status.ashbyhq.com",
+    "domains": [
+      "ashbyhq.com"
+    ]
+  },
+  {
+    "slug": "assemblyai",
+    "name": "AssemblyAI",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.assemblyai.com/api/v2/summary.json",
+    "pageUrl": "https://status.assemblyai.com",
+    "domains": [
+      "assemblyai.com"
+    ]
+  },
+  {
+    "slug": "confluence",
+    "name": "Atlassian Confluence",
+    "feedType": "statuspage",
+    "feedUrl": "https://confluence.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://confluence.status.atlassian.com",
+    "domains": [
+      "atlassian.net"
+    ]
+  },
+  {
+    "slug": "jira",
+    "name": "Atlassian Jira",
+    "feedType": "statuspage",
+    "feedUrl": "https://jira-software.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://jira-software.status.atlassian.com",
+    "domains": [
+      "atlassian.net"
+    ]
+  },
+  {
+    "slug": "statuspage",
+    "name": "Atlassian Statuspage",
+    "feedType": "statuspage",
+    "feedUrl": "https://metastatuspage.com/api/v2/summary.json",
+    "pageUrl": "https://metastatuspage.com",
+    "domains": [
+      "statuspage.io"
+    ]
+  },
+  {
+    "slug": "attio",
+    "name": "Attio",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.attio.com/api/v2/summary.json",
+    "pageUrl": "https://status.attio.com",
+    "domains": [
+      "attio.com"
+    ]
+  },
+  {
+    "slug": "bigcommerce",
+    "name": "BigCommerce",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.bigcommerce.com/api/v2/summary.json",
+    "pageUrl": "https://status.bigcommerce.com",
+    "domains": [
+      "bigcommerce.com"
+    ]
+  },
+  {
+    "slug": "messagebird",
+    "name": "Bird (MessageBird)",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.messagebird.com/api/v2/summary.json",
+    "pageUrl": "https://status.messagebird.com",
+    "domains": [
+      "messagebird.com",
+      "bird.com"
+    ]
+  },
+  {
+    "slug": "bitbucket",
+    "name": "Bitbucket",
+    "feedType": "statuspage",
+    "feedUrl": "https://bitbucket.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://bitbucket.status.atlassian.com",
+    "domains": [
+      "bitbucket.org"
+    ]
+  },
+  {
+    "slug": "bitrise",
+    "name": "Bitrise",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.bitrise.io/api/v2/summary.json",
+    "pageUrl": "https://status.bitrise.io",
+    "domains": [
+      "bitrise.io"
+    ]
+  },
+  {
+    "slug": "box",
+    "name": "Box",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.box.com/api/v2/summary.json",
+    "pageUrl": "https://status.box.com",
+    "domains": [
+      "box.com"
+    ]
+  },
+  {
+    "slug": "braze",
+    "name": "Braze",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.braze.com/api/v2/summary.json",
+    "pageUrl": "https://status.braze.com",
+    "domains": [
+      "braze.com"
+    ]
+  },
+  {
+    "slug": "brevo",
+    "name": "Brevo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.brevo.com/api/v2/summary.json",
+    "pageUrl": "https://status.brevo.com",
+    "domains": [
+      "brevo.com",
+      "sendinblue.com"
+    ]
+  },
+  {
+    "slug": "brex",
+    "name": "Brex",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.brex.com/api/v2/summary.json",
+    "pageUrl": "https://status.brex.com",
+    "domains": [
+      "brex.com"
+    ]
+  },
+  {
+    "slug": "browserstack",
+    "name": "BrowserStack",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.browserstack.com/api/v2/summary.json",
+    "pageUrl": "https://status.browserstack.com",
+    "domains": [
+      "browserstack.com"
+    ]
+  },
+  {
+    "slug": "buffer",
+    "name": "Buffer",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.buffer.com/api/v2/summary.json",
+    "pageUrl": "https://status.buffer.com",
+    "domains": [
+      "buffer.com"
+    ]
+  },
+  {
+    "slug": "bugsnag",
+    "name": "Bugsnag",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.bugsnag.com/api/v2/summary.json",
+    "pageUrl": "https://status.bugsnag.com",
+    "domains": [
+      "bugsnag.com"
+    ]
+  },
+  {
+    "slug": "buildkite",
+    "name": "Buildkite",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.buildkitestatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.buildkitestatus.com",
+    "domains": [
+      "buildkite.com"
+    ]
+  },
+  {
+    "slug": "bunny",
+    "name": "bunny.net",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.bunny.net/api/v2/summary.json",
+    "pageUrl": "https://status.bunny.net",
+    "domains": [
+      "bunny.net",
+      "b-cdn.net"
+    ]
+  },
+  {
+    "slug": "calendly",
+    "name": "Calendly",
+    "feedType": "statuspage",
+    "feedUrl": "https://calendlystatus.com/api/v2/summary.json",
+    "pageUrl": "https://calendlystatus.com",
+    "domains": [
+      "calendly.com"
+    ]
+  },
+  {
+    "slug": "canva",
+    "name": "Canva",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.canvastatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.canvastatus.com",
+    "domains": [
+      "canva.com"
+    ]
+  },
+  {
+    "slug": "census",
+    "name": "Census",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.getcensus.com/api/v2/summary.json",
+    "pageUrl": "https://status.getcensus.com",
+    "domains": [
+      "getcensus.com"
+    ]
+  },
+  {
+    "slug": "chargebee",
+    "name": "Chargebee",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.chargebee.com/api/v2/summary.json",
+    "pageUrl": "https://status.chargebee.com",
+    "domains": [
+      "chargebee.com"
+    ]
+  },
+  {
+    "slug": "circleci",
+    "name": "CircleCI",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.circleci.com/api/v2/summary.json",
+    "pageUrl": "https://status.circleci.com",
+    "domains": [
+      "circleci.com"
+    ]
+  },
+  {
+    "slug": "clearbit",
+    "name": "Clearbit",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.clearbit.com/api/v2/summary.json",
+    "pageUrl": "https://status.clearbit.com",
+    "domains": [
+      "clearbit.com"
+    ]
+  },
+  {
+    "slug": "clickhouse",
+    "name": "ClickHouse Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.clickhouse.com/api/v2/summary.json",
+    "pageUrl": "https://status.clickhouse.com",
+    "domains": [
+      "clickhouse.com",
+      "clickhouse.cloud"
+    ]
+  },
+  {
+    "slug": "clickup",
+    "name": "ClickUp",
+    "feedType": "statuspage",
+    "feedUrl": "https://clickup.statuspage.io/api/v2/summary.json",
+    "pageUrl": "https://clickup.statuspage.io",
+    "domains": [
+      "clickup.com"
+    ]
+  },
+  {
+    "slug": "cloudflare",
+    "name": "Cloudflare",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.cloudflarestatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.cloudflarestatus.com",
+    "domains": [
+      "cloudflare.com",
+      "workers.dev",
+      "pages.dev"
+    ]
+  },
+  {
+    "slug": "cloudinary",
+    "name": "Cloudinary",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.cloudinary.com/api/v2/summary.json",
+    "pageUrl": "https://status.cloudinary.com",
+    "domains": [
+      "cloudinary.com"
+    ]
+  },
+  {
+    "slug": "cloudways",
+    "name": "Cloudways",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.cloudways.com/api/v2/summary.json",
+    "pageUrl": "https://status.cloudways.com",
+    "domains": [
+      "cloudways.com"
+    ]
+  },
+  {
+    "slug": "cockroachdb",
+    "name": "CockroachDB Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.cockroachlabs.cloud/api/v2/summary.json",
+    "pageUrl": "https://status.cockroachlabs.cloud",
+    "domains": [
+      "cockroachlabs.com",
+      "cockroachlabs.cloud"
+    ]
+  },
+  {
+    "slug": "coda",
+    "name": "Coda",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.coda.io/api/v2/summary.json",
+    "pageUrl": "https://status.coda.io",
+    "domains": [
+      "coda.io"
+    ]
+  },
+  {
+    "slug": "cohere",
+    "name": "Cohere",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.cohere.com/api/v2/summary.json",
+    "pageUrl": "https://status.cohere.com",
+    "domains": [
+      "cohere.com"
+    ]
+  },
+  {
+    "slug": "coinbase",
+    "name": "Coinbase",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.coinbase.com/api/v2/summary.json",
+    "pageUrl": "https://status.coinbase.com",
+    "domains": [
+      "coinbase.com"
+    ]
+  },
+  {
+    "slug": "confluent",
+    "name": "Confluent Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.confluent.cloud/api/v2/summary.json",
+    "pageUrl": "https://status.confluent.cloud",
+    "domains": [
+      "confluent.cloud",
+      "confluent.io"
+    ]
+  },
+  {
+    "slug": "constantcontact",
+    "name": "Constant Contact",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.constantcontact.com/api/v2/summary.json",
+    "pageUrl": "https://status.constantcontact.com",
+    "domains": [
+      "constantcontact.com"
+    ]
+  },
+  {
+    "slug": "contentful",
+    "name": "Contentful",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.contentful.com/api/v2/summary.json",
+    "pageUrl": "https://status.contentful.com",
+    "domains": [
+      "contentful.com"
+    ]
+  },
+  {
+    "slug": "datadog",
+    "name": "Datadog",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.datadoghq.com/api/v2/summary.json",
+    "pageUrl": "https://status.datadoghq.com",
+    "domains": [
+      "datadoghq.com"
+    ]
+  },
+  {
+    "slug": "dbt",
+    "name": "dbt Labs",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.getdbt.com/api/v2/summary.json",
+    "pageUrl": "https://status.getdbt.com",
+    "domains": [
+      "getdbt.com"
+    ]
+  },
+  {
+    "slug": "deepgram",
+    "name": "Deepgram",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.deepgram.com/api/v2/summary.json",
+    "pageUrl": "https://status.deepgram.com",
+    "domains": [
+      "deepgram.com"
+    ]
+  },
+  {
+    "slug": "deno",
+    "name": "Deno Deploy",
+    "feedType": "instatus",
+    "feedUrl": "https://denostatus.com/summary.json",
+    "pageUrl": "https://denostatus.com",
+    "domains": [
+      "deno.com",
+      "deno.dev"
+    ]
+  },
+  {
+    "slug": "dialpad",
+    "name": "Dialpad",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.dialpad.com/api/v2/summary.json",
+    "pageUrl": "https://status.dialpad.com",
+    "domains": [
+      "dialpad.com"
+    ]
+  },
+  {
+    "slug": "digitalocean",
+    "name": "DigitalOcean",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.digitalocean.com/api/v2/summary.json",
+    "pageUrl": "https://status.digitalocean.com",
+    "domains": [
+      "digitalocean.com",
+      "digitaloceanspaces.com"
+    ]
+  },
+  {
+    "slug": "discord",
+    "name": "Discord",
+    "feedType": "statuspage",
+    "feedUrl": "https://discordstatus.com/api/v2/summary.json",
+    "pageUrl": "https://discordstatus.com",
+    "domains": [
+      "discord.com",
+      "discord.gg"
+    ]
+  },
+  {
+    "slug": "docusign",
+    "name": "Docusign",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.docusign.com/api/v2/summary.json",
+    "pageUrl": "https://status.docusign.com",
+    "domains": [
+      "docusign.com",
+      "docusign.net"
+    ]
+  },
+  {
+    "slug": "doppler",
+    "name": "Doppler",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.doppler.com/api/v2/summary.json",
+    "pageUrl": "https://status.doppler.com",
+    "domains": [
+      "doppler.com"
+    ]
+  },
+  {
+    "slug": "drata",
+    "name": "Drata",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.drata.com/api/v2/summary.json",
+    "pageUrl": "https://status.drata.com",
+    "domains": [
+      "drata.com"
+    ]
+  },
+  {
+    "slug": "dropbox",
+    "name": "Dropbox",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.dropbox.com/api/v2/summary.json",
+    "pageUrl": "https://status.dropbox.com",
+    "domains": [
+      "dropbox.com",
+      "dropboxapi.com"
+    ]
+  },
+  {
+    "slug": "duo",
+    "name": "Duo Security",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.duo.com/api/v2/summary.json",
+    "pageUrl": "https://status.duo.com",
+    "domains": [
+      "duo.com",
+      "duosecurity.com"
+    ]
+  },
+  {
+    "slug": "egnyte",
+    "name": "Egnyte",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.egnyte.com/api/v2/summary.json",
+    "pageUrl": "https://status.egnyte.com",
+    "domains": [
+      "egnyte.com"
+    ]
+  },
+  {
+    "slug": "elastic",
+    "name": "Elastic Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.elastic.co/api/v2/summary.json",
+    "pageUrl": "https://status.elastic.co",
+    "domains": [
+      "elastic.co",
+      "elastic-cloud.com"
+    ]
+  },
+  {
+    "slug": "elevenlabs",
+    "name": "ElevenLabs",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.elevenlabs.io/api/v2/summary.json",
+    "pageUrl": "https://status.elevenlabs.io",
+    "domains": [
+      "elevenlabs.io"
+    ]
+  },
+  {
+    "slug": "epicgames",
+    "name": "Epic Games",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.epicgames.com/api/v2/summary.json",
+    "pageUrl": "https://status.epicgames.com",
+    "domains": [
+      "epicgames.com",
+      "unrealengine.com"
+    ]
+  },
+  {
+    "slug": "expensify",
+    "name": "Expensify",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.expensify.com/api/v2/summary.json",
+    "pageUrl": "https://status.expensify.com",
+    "domains": [
+      "expensify.com"
+    ]
+  },
+  {
+    "slug": "expo",
+    "name": "Expo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.expo.dev/api/v2/summary.json",
+    "pageUrl": "https://status.expo.dev",
+    "domains": [
+      "expo.dev"
+    ]
+  },
+  {
+    "slug": "figma",
+    "name": "Figma",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.figma.com/api/v2/summary.json",
+    "pageUrl": "https://status.figma.com",
+    "domains": [
+      "figma.com"
+    ]
+  },
+  {
+    "slug": "firebase",
+    "name": "Firebase",
+    "feedType": "gcp",
+    "feedUrl": "https://status.firebase.google.com/incidents.json",
+    "pageUrl": "https://status.firebase.google.com",
+    "domains": [
+      "firebase.google.com",
+      "firebaseio.com"
+    ]
+  },
+  {
+    "slug": "fivetran",
+    "name": "Fivetran",
+    "feedType": "statuspage",
+    "feedUrl": "https://fivetran.statuspage.io/api/v2/summary.json",
+    "pageUrl": "https://fivetran.statuspage.io",
+    "domains": [
+      "fivetran.com"
+    ]
+  },
+  {
+    "slug": "flyio",
+    "name": "Fly.io",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.flyio.net/api/v2/summary.json",
+    "pageUrl": "https://status.flyio.net",
+    "domains": [
+      "fly.io",
+      "fly.dev"
+    ]
+  },
+  {
+    "slug": "fullstory",
+    "name": "Fullstory",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.fullstory.com/api/v2/summary.json",
+    "pageUrl": "https://status.fullstory.com",
+    "domains": [
+      "fullstory.com"
+    ]
+  },
+  {
+    "slug": "gandi",
+    "name": "Gandi",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.gandi.net/api/v2/summary.json",
+    "pageUrl": "https://status.gandi.net",
+    "domains": [
+      "gandi.net"
+    ]
+  },
+  {
+    "slug": "genesys",
+    "name": "Genesys Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mypurecloud.com/api/v2/summary.json",
+    "pageUrl": "https://status.mypurecloud.com",
+    "domains": [
+      "genesys.com",
+      "mypurecloud.com"
+    ]
+  },
+  {
+    "slug": "github",
+    "name": "GitHub",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.githubstatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.githubstatus.com",
+    "domains": [
+      "github.com",
+      "githubusercontent.com",
+      "ghcr.io"
+    ]
+  },
+  {
+    "slug": "gitlab",
+    "name": "GitLab",
+    "feedType": "statusio",
+    "feedUrl": "https://api.status.io/1.0/status/5b36dc6502d06804c08349f7",
+    "pageUrl": "https://status.gitlab.com",
+    "domains": [
+      "gitlab.com"
+    ]
+  },
+  {
+    "slug": "gitpod",
+    "name": "Gitpod",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.gitpodstatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.gitpodstatus.com",
+    "domains": [
+      "gitpod.io"
+    ]
+  },
+  {
+    "slug": "gocardless",
+    "name": "GoCardless",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.gocardless-status.com/api/v2/summary.json",
+    "pageUrl": "https://www.gocardless-status.com",
+    "domains": [
+      "gocardless.com"
+    ]
+  },
+  {
+    "slug": "gong",
+    "name": "Gong",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.gong.io/api/v2/summary.json",
+    "pageUrl": "https://status.gong.io",
+    "domains": [
+      "gong.io"
+    ]
+  },
+  {
+    "slug": "gcp",
+    "name": "Google Cloud",
+    "feedType": "gcp",
+    "feedUrl": "https://status.cloud.google.com/incidents.json",
+    "pageUrl": "https://status.cloud.google.com",
+    "domains": [
+      "cloud.google.com",
+      "googleapis.com"
+    ]
+  },
+  {
+    "slug": "google-workspace",
+    "name": "Google Workspace",
+    "feedType": "gcp",
+    "feedUrl": "https://www.google.com/appsstatus/dashboard/incidents.json",
+    "pageUrl": "https://www.google.com/appsstatus/dashboard/",
+    "domains": [
+      "google.com",
+      "gmail.com"
+    ]
+  },
+  {
+    "slug": "goto",
+    "name": "GoTo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.goto.com/api/v2/summary.json",
+    "pageUrl": "https://status.goto.com",
+    "domains": [
+      "goto.com",
+      "gotomeeting.com"
+    ]
+  },
+  {
+    "slug": "grafana",
+    "name": "Grafana Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.grafana.com/api/v2/summary.json",
+    "pageUrl": "https://status.grafana.com",
+    "domains": [
+      "grafana.com",
+      "grafana.net"
+    ]
+  },
+  {
+    "slug": "grammarly",
+    "name": "Grammarly",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.grammarly.com/api/v2/summary.json",
+    "pageUrl": "https://status.grammarly.com",
+    "domains": [
+      "grammarly.com"
+    ]
+  },
+  {
+    "slug": "greenhouse",
+    "name": "Greenhouse",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.greenhouse.io/api/v2/summary.json",
+    "pageUrl": "https://status.greenhouse.io",
+    "domains": [
+      "greenhouse.io"
+    ]
+  },
+  {
+    "slug": "groq",
+    "name": "Groq",
+    "feedType": "statuspage",
+    "feedUrl": "https://groqstatus.com/api/v2/summary.json",
+    "pageUrl": "https://groqstatus.com",
+    "domains": [
+      "groq.com"
+    ]
+  },
+  {
+    "slug": "gusto",
+    "name": "Gusto",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.gusto.com/api/v2/summary.json",
+    "pageUrl": "https://status.gusto.com",
+    "domains": [
+      "gusto.com"
+    ]
+  },
+  {
+    "slug": "hashicorp",
+    "name": "HashiCorp Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.hashicorp.com/api/v2/summary.json",
+    "pageUrl": "https://status.hashicorp.com",
+    "domains": [
+      "hashicorp.com",
+      "hashicorp.cloud"
+    ]
+  },
+  {
+    "slug": "heap",
+    "name": "Heap",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.heap.io/api/v2/summary.json",
+    "pageUrl": "https://status.heap.io",
+    "domains": [
+      "heap.io"
+    ]
+  },
+  {
+    "slug": "heroku",
+    "name": "Heroku",
+    "feedType": "heroku",
+    "feedUrl": "https://status.heroku.com/api/v4/current-status",
+    "pageUrl": "https://status.heroku.com",
+    "domains": [
+      "heroku.com",
+      "herokuapp.com"
+    ]
+  },
+  {
+    "slug": "hetzner",
+    "name": "Hetzner",
+    "feedType": "rss",
+    "feedUrl": "https://status.hetzner.com/en.atom",
+    "pageUrl": "https://status.hetzner.com",
+    "domains": [
+      "hetzner.com",
+      "hetzner.cloud",
+      "your-server.de"
+    ]
+  },
+  {
+    "slug": "honeybadger",
+    "name": "Honeybadger",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.honeybadger.io/api/v2/summary.json",
+    "pageUrl": "https://status.honeybadger.io",
+    "domains": [
+      "honeybadger.io"
+    ]
+  },
+  {
+    "slug": "honeycomb",
+    "name": "Honeycomb",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.honeycomb.io/api/v2/summary.json",
+    "pageUrl": "https://status.honeycomb.io",
+    "domains": [
+      "honeycomb.io"
+    ]
+  },
+  {
+    "slug": "hootsuite",
+    "name": "Hootsuite",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.hootsuite.com/api/v2/summary.json",
+    "pageUrl": "https://status.hootsuite.com",
+    "domains": [
+      "hootsuite.com"
+    ]
+  },
+  {
+    "slug": "hotjar",
+    "name": "Hotjar",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.hotjar.com/api/v2/summary.json",
+    "pageUrl": "https://status.hotjar.com",
+    "domains": [
+      "hotjar.com"
+    ]
+  },
+  {
+    "slug": "hubspot",
+    "name": "HubSpot",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.hubspot.com/api/v2/summary.json",
+    "pageUrl": "https://status.hubspot.com",
+    "domains": [
+      "hubspot.com",
+      "hubapi.com"
+    ]
+  },
+  {
+    "slug": "imgix",
+    "name": "imgix",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.imgix.com/api/v2/summary.json",
+    "pageUrl": "https://status.imgix.com",
+    "domains": [
+      "imgix.com",
+      "imgix.net"
+    ]
+  },
+  {
+    "slug": "imperva",
+    "name": "Imperva",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.imperva.com/api/v2/summary.json",
+    "pageUrl": "https://status.imperva.com",
+    "domains": [
+      "imperva.com"
+    ]
+  },
+  {
+    "slug": "incidentio",
+    "name": "incident.io",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.incident.io/api/v2/summary.json",
+    "pageUrl": "https://status.incident.io",
+    "domains": [
+      "incident.io"
+    ]
+  },
+  {
+    "slug": "influxdata",
+    "name": "InfluxDB Cloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.influxdata.com/api/v2/summary.json",
+    "pageUrl": "https://status.influxdata.com",
+    "domains": [
+      "influxdata.com"
+    ]
+  },
+  {
+    "slug": "instructure",
+    "name": "Instructure (Canvas LMS)",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.instructure.com/api/v2/summary.json",
+    "pageUrl": "https://status.instructure.com",
+    "domains": [
+      "instructure.com"
+    ]
+  },
+  {
+    "slug": "intercom",
+    "name": "Intercom / Fin",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.finstatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.finstatus.com",
+    "domains": [
+      "intercom.io",
+      "intercom.com",
+      "fin.ai"
+    ]
+  },
+  {
+    "slug": "iterable",
+    "name": "Iterable",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.iterable.com/api/v2/summary.json",
+    "pageUrl": "https://status.iterable.com",
+    "domains": [
+      "iterable.com"
+    ]
+  },
+  {
+    "slug": "jfrog",
+    "name": "JFrog",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.jfrog.io/api/v2/summary.json",
+    "pageUrl": "https://status.jfrog.io",
+    "domains": [
+      "jfrog.io",
+      "jfrog.com"
+    ]
+  },
+  {
+    "slug": "jsm",
+    "name": "Jira Service Management",
+    "feedType": "statuspage",
+    "feedUrl": "https://jira-service-management.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://jira-service-management.status.atlassian.com",
+    "domains": [
+      "atlassian.net"
+    ]
+  },
+  {
+    "slug": "jumpcloud",
+    "name": "JumpCloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.jumpcloud.com/api/v2/summary.json",
+    "pageUrl": "https://status.jumpcloud.com",
+    "domains": [
+      "jumpcloud.com"
+    ]
+  },
+  {
+    "slug": "kinsta",
+    "name": "Kinsta",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.kinsta.com/api/v2/summary.json",
+    "pageUrl": "https://status.kinsta.com",
+    "domains": [
+      "kinsta.com"
+    ]
+  },
+  {
+    "slug": "klarna",
+    "name": "Klarna",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.klarna.com/api/v2/summary.json",
+    "pageUrl": "https://status.klarna.com",
+    "domains": [
+      "klarna.com"
+    ]
+  },
+  {
+    "slug": "klaviyo",
+    "name": "Klaviyo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.klaviyo.com/api/v2/summary.json",
+    "pageUrl": "https://status.klaviyo.com",
+    "domains": [
+      "klaviyo.com"
+    ]
+  },
+  {
+    "slug": "knowbe4",
+    "name": "KnowBe4",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.knowbe4.com/api/v2/summary.json",
+    "pageUrl": "https://status.knowbe4.com",
+    "domains": [
+      "knowbe4.com"
+    ]
+  },
+  {
+    "slug": "kraken",
+    "name": "Kraken",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.kraken.com/api/v2/summary.json",
+    "pageUrl": "https://status.kraken.com",
+    "domains": [
+      "kraken.com"
+    ]
+  },
+  {
+    "slug": "lattice",
+    "name": "Lattice",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.lattice.com/api/v2/summary.json",
+    "pageUrl": "https://status.lattice.com",
+    "domains": [
+      "lattice.com"
+    ]
+  },
+  {
+    "slug": "launchdarkly",
+    "name": "LaunchDarkly",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.launchdarkly.com/api/v2/summary.json",
+    "pageUrl": "https://status.launchdarkly.com",
+    "domains": [
+      "launchdarkly.com"
+    ]
+  },
+  {
+    "slug": "lever",
+    "name": "Lever",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.lever.co/api/v2/summary.json",
+    "pageUrl": "https://status.lever.co",
+    "domains": [
+      "lever.co"
+    ]
+  },
+  {
+    "slug": "linear",
+    "name": "Linear",
+    "feedType": "statuspage",
+    "feedUrl": "https://linearstatus.com/api/v2/summary.json",
+    "pageUrl": "https://linearstatus.com",
+    "domains": [
+      "linear.app"
+    ]
+  },
+  {
+    "slug": "loom",
+    "name": "Loom",
+    "feedType": "statuspage",
+    "feedUrl": "https://loom.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://loom.status.atlassian.com",
+    "domains": [
+      "loom.com"
+    ]
+  },
+  {
+    "slug": "lovable",
+    "name": "Lovable",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.lovable.dev/api/v2/summary.json",
+    "pageUrl": "https://status.lovable.dev",
+    "domains": [
+      "lovable.dev"
+    ]
+  },
+  {
+    "slug": "lucid",
+    "name": "Lucid (Lucidchart)",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.lucid.co/api/v2/summary.json",
+    "pageUrl": "https://status.lucid.co",
+    "domains": [
+      "lucid.co",
+      "lucidchart.com"
+    ]
+  },
+  {
+    "slug": "mailgun",
+    "name": "Mailgun",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mailgun.com/api/v2/summary.json",
+    "pageUrl": "https://status.mailgun.com",
+    "domains": [
+      "mailgun.com",
+      "mailgun.net"
+    ]
+  },
+  {
+    "slug": "mailjet",
+    "name": "Mailjet",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mailjet.com/api/v2/summary.json",
+    "pageUrl": "https://status.mailjet.com",
+    "domains": [
+      "mailjet.com"
+    ]
+  },
+  {
+    "slug": "make",
+    "name": "Make",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.make.com/api/v2/summary.json",
+    "pageUrl": "https://status.make.com",
+    "domains": [
+      "make.com"
+    ]
+  },
+  {
+    "slug": "mezmo",
+    "name": "Mezmo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mezmo.com/api/v2/summary.json",
+    "pageUrl": "https://status.mezmo.com",
+    "domains": [
+      "mezmo.com",
+      "logdna.com"
+    ]
+  },
+  {
+    "slug": "azure",
+    "name": "Microsoft Azure",
+    "feedType": "rss",
+    "feedUrl": "https://azure.status.microsoft/en-us/status/feed/",
+    "pageUrl": "https://azure.status.microsoft/en-us/status",
+    "domains": [
+      "azure.com",
+      "azure.microsoft.com",
+      "windows.net"
+    ]
+  },
+  {
+    "slug": "miro",
+    "name": "Miro",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.miro.com/api/v2/summary.json",
+    "pageUrl": "https://status.miro.com",
+    "domains": [
+      "miro.com"
+    ]
+  },
+  {
+    "slug": "mixpanel",
+    "name": "Mixpanel",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mixpanel.com/api/v2/summary.json",
+    "pageUrl": "https://status.mixpanel.com",
+    "domains": [
+      "mixpanel.com"
+    ]
+  },
+  {
+    "slug": "mollie",
+    "name": "Mollie",
+    "feedType": "instatus",
+    "feedUrl": "https://status.mollie.com/summary.json",
+    "pageUrl": "https://status.mollie.com",
+    "domains": [
+      "mollie.com"
+    ]
+  },
+  {
+    "slug": "monday",
+    "name": "monday.com",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.monday.com/api/v2/summary.json",
+    "pageUrl": "https://status.monday.com",
+    "domains": [
+      "monday.com"
+    ]
+  },
+  {
+    "slug": "mongodb",
+    "name": "MongoDB Atlas",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mongodb.com/api/v2/summary.json",
+    "pageUrl": "https://status.mongodb.com",
+    "domains": [
+      "mongodb.com",
+      "mongodb.net"
+    ]
+  },
+  {
+    "slug": "monzo",
+    "name": "Monzo",
+    "feedType": "statuspage",
+    "feedUrl": "https://monzo.statuspage.io/api/v2/summary.json",
+    "pageUrl": "https://monzo.statuspage.io",
+    "domains": [
+      "monzo.com"
+    ]
+  },
+  {
+    "slug": "mural",
+    "name": "Mural",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mural.co/api/v2/summary.json",
+    "pageUrl": "https://status.mural.co",
+    "domains": [
+      "mural.co"
+    ]
+  },
+  {
+    "slug": "mux",
+    "name": "Mux",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.mux.com/api/v2/summary.json",
+    "pageUrl": "https://status.mux.com",
+    "domains": [
+      "mux.com"
+    ]
+  },
+  {
+    "slug": "navan",
+    "name": "Navan",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.navan.com/api/v2/summary.json",
+    "pageUrl": "https://status.navan.com",
+    "domains": [
+      "navan.com"
+    ]
+  },
+  {
+    "slug": "netlify",
+    "name": "Netlify",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.netlifystatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.netlifystatus.com",
+    "domains": [
+      "netlify.com",
+      "netlify.app"
+    ]
+  },
+  {
+    "slug": "netsuite",
+    "name": "NetSuite",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.netsuite.com/api/v2/summary.json",
+    "pageUrl": "https://status.netsuite.com",
+    "domains": [
+      "netsuite.com"
+    ]
+  },
+  {
+    "slug": "newrelic",
+    "name": "New Relic",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.newrelic.com/api/v2/summary.json",
+    "pageUrl": "https://status.newrelic.com",
+    "domains": [
+      "newrelic.com"
+    ]
+  },
+  {
+    "slug": "notion",
+    "name": "Notion",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.notion-status.com/api/v2/summary.json",
+    "pageUrl": "https://www.notion-status.com",
+    "domains": [
+      "notion.so",
+      "notion.com"
+    ]
+  },
+  {
+    "slug": "npm",
+    "name": "npm Registry",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.npmjs.org/api/v2/summary.json",
+    "pageUrl": "https://status.npmjs.org",
+    "domains": [
+      "npmjs.org",
+      "npmjs.com"
+    ]
+  },
+  {
+    "slug": "onesignal",
+    "name": "OneSignal",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.onesignal.com/api/v2/summary.json",
+    "pageUrl": "https://status.onesignal.com",
+    "domains": [
+      "onesignal.com"
+    ]
+  },
+  {
+    "slug": "openai",
+    "name": "OpenAI",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.openai.com/api/v2/summary.json",
+    "pageUrl": "https://status.openai.com",
+    "domains": [
+      "openai.com"
+    ]
+  },
+  {
+    "slug": "opsgenie",
+    "name": "Opsgenie",
+    "feedType": "statuspage",
+    "feedUrl": "https://opsgenie.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://opsgenie.status.atlassian.com",
+    "domains": [
+      "opsgenie.com"
+    ]
+  },
+  {
+    "slug": "optimizely",
+    "name": "Optimizely",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.optimizely.com/api/v2/summary.json",
+    "pageUrl": "https://status.optimizely.com",
+    "domains": [
+      "optimizely.com"
+    ]
+  },
+  {
+    "slug": "paddle",
+    "name": "Paddle",
+    "feedType": "statuspage",
+    "feedUrl": "https://paddlestatus.com/api/v2/summary.json",
+    "pageUrl": "https://paddlestatus.com",
+    "domains": [
+      "paddle.com"
+    ]
+  },
+  {
+    "slug": "paloalto",
+    "name": "Palo Alto Networks",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.paloaltonetworks.com/api/v2/summary.json",
+    "pageUrl": "https://status.paloaltonetworks.com",
+    "domains": [
+      "paloaltonetworks.com"
+    ]
+  },
+  {
+    "slug": "pandadoc",
+    "name": "PandaDoc",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pandadoc.com/api/v2/summary.json",
+    "pageUrl": "https://status.pandadoc.com",
+    "domains": [
+      "pandadoc.com"
+    ]
+  },
+  {
+    "slug": "pantheon",
+    "name": "Pantheon",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pantheon.io/api/v2/summary.json",
+    "pageUrl": "https://status.pantheon.io",
+    "domains": [
+      "pantheon.io"
+    ]
+  },
+  {
+    "slug": "paperspace",
+    "name": "Paperspace",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.paperspace.com/api/v2/summary.json",
+    "pageUrl": "https://status.paperspace.com",
+    "domains": [
+      "paperspace.com"
+    ]
+  },
+  {
+    "slug": "pendo",
+    "name": "Pendo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pendo.io/api/v2/summary.json",
+    "pageUrl": "https://status.pendo.io",
+    "domains": [
+      "pendo.io"
+    ]
+  },
+  {
+    "slug": "personio",
+    "name": "Personio",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.personio.de/api/v2/summary.json",
+    "pageUrl": "https://status.personio.de",
+    "domains": [
+      "personio.de",
+      "personio.com"
+    ]
+  },
+  {
+    "slug": "pinecone",
+    "name": "Pinecone",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pinecone.io/api/v2/summary.json",
+    "pageUrl": "https://status.pinecone.io",
+    "domains": [
+      "pinecone.io"
+    ]
+  },
+  {
+    "slug": "pingidentity",
+    "name": "Ping Identity",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pingidentity.com/api/v2/summary.json",
+    "pageUrl": "https://status.pingidentity.com",
+    "domains": [
+      "pingidentity.com"
+    ]
+  },
+  {
+    "slug": "plaid",
+    "name": "Plaid",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.plaid.com/api/v2/summary.json",
+    "pageUrl": "https://status.plaid.com",
+    "domains": [
+      "plaid.com"
+    ]
+  },
+  {
+    "slug": "planetscale",
+    "name": "PlanetScale",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.planetscalestatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.planetscalestatus.com",
+    "domains": [
+      "planetscale.com"
+    ]
+  },
+  {
+    "slug": "pleo",
+    "name": "Pleo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pleo.io/api/v2/summary.json",
+    "pageUrl": "https://status.pleo.io",
+    "domains": [
+      "pleo.io"
+    ]
+  },
+  {
+    "slug": "plivo",
+    "name": "Plivo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.plivo.com/api/v2/summary.json",
+    "pageUrl": "https://status.plivo.com",
+    "domains": [
+      "plivo.com"
+    ]
+  },
+  {
+    "slug": "postman",
+    "name": "Postman",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.postman.com/api/v2/summary.json",
+    "pageUrl": "https://status.postman.com",
+    "domains": [
+      "postman.com"
+    ]
+  },
+  {
+    "slug": "prismic",
+    "name": "Prismic",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.prismic.io/api/v2/summary.json",
+    "pageUrl": "https://status.prismic.io",
+    "domains": [
+      "prismic.io"
+    ]
+  },
+  {
+    "slug": "pubnub",
+    "name": "PubNub",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pubnub.com/api/v2/summary.json",
+    "pageUrl": "https://status.pubnub.com",
+    "domains": [
+      "pubnub.com"
+    ]
+  },
+  {
+    "slug": "pusher",
+    "name": "Pusher",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.pusher.com/api/v2/summary.json",
+    "pageUrl": "https://status.pusher.com",
+    "domains": [
+      "pusher.com"
+    ]
+  },
+  {
+    "slug": "pypi",
+    "name": "PyPI",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.python.org/api/v2/summary.json",
+    "pageUrl": "https://status.python.org",
+    "domains": [
+      "pypi.org",
+      "python.org"
+    ]
+  },
+  {
+    "slug": "qualtrics",
+    "name": "Qualtrics",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.qualtrics.com/api/v2/summary.json",
+    "pageUrl": "https://status.qualtrics.com",
+    "domains": [
+      "qualtrics.com"
+    ]
+  },
+  {
+    "slug": "quay",
+    "name": "Quay.io",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.quay.io/api/v2/summary.json",
+    "pageUrl": "https://status.quay.io",
+    "domains": [
+      "quay.io"
+    ]
+  },
+  {
+    "slug": "quickbooks",
+    "name": "QuickBooks (Intuit)",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.quickbooks.intuit.com/api/v2/summary.json",
+    "pageUrl": "https://status.quickbooks.intuit.com",
+    "domains": [
+      "intuit.com",
+      "quickbooks.com"
+    ]
+  },
+  {
+    "slug": "readme",
+    "name": "ReadMe",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.readme.com/api/v2/summary.json",
+    "pageUrl": "https://status.readme.com",
+    "domains": [
+      "readme.com"
+    ]
+  },
+  {
+    "slug": "recurly",
+    "name": "Recurly",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.recurly.com/api/v2/summary.json",
+    "pageUrl": "https://status.recurly.com",
+    "domains": [
+      "recurly.com"
+    ]
+  },
+  {
+    "slug": "redhat",
+    "name": "Red Hat",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.redhat.com/api/v2/summary.json",
+    "pageUrl": "https://status.redhat.com",
+    "domains": [
+      "redhat.com",
+      "openshift.com"
+    ]
+  },
+  {
+    "slug": "reddit",
+    "name": "Reddit",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.redditstatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.redditstatus.com",
+    "domains": [
+      "reddit.com"
+    ]
+  },
+  {
+    "slug": "render",
+    "name": "Render",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.render.com/api/v2/summary.json",
+    "pageUrl": "https://status.render.com",
+    "domains": [
+      "render.com",
+      "onrender.com"
+    ]
+  },
+  {
+    "slug": "replicate",
+    "name": "Replicate",
+    "feedType": "statuspage",
+    "feedUrl": "https://replicatestatus.com/api/v2/summary.json",
+    "pageUrl": "https://replicatestatus.com",
+    "domains": [
+      "replicate.com"
+    ]
+  },
+  {
+    "slug": "resend",
+    "name": "Resend",
+    "feedType": "statuspage",
+    "feedUrl": "https://resend-status.com/api/v2/summary.json",
+    "pageUrl": "https://resend-status.com",
+    "domains": [
+      "resend.com"
+    ]
+  },
+  {
+    "slug": "rippling",
+    "name": "Rippling",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.rippling.com/api/v2/summary.json",
+    "pageUrl": "https://status.rippling.com",
+    "domains": [
+      "rippling.com"
+    ]
+  },
+  {
+    "slug": "rollbar",
+    "name": "Rollbar",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.rollbar.com/api/v2/summary.json",
+    "pageUrl": "https://status.rollbar.com",
+    "domains": [
+      "rollbar.com"
+    ]
+  },
+  {
+    "slug": "rubygems",
+    "name": "RubyGems",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.rubygems.org/api/v2/summary.json",
+    "pageUrl": "https://status.rubygems.org",
+    "domains": [
+      "rubygems.org"
+    ]
+  },
+  {
+    "slug": "salesloft",
+    "name": "Salesloft",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.salesloft.com/api/v2/summary.json",
+    "pageUrl": "https://status.salesloft.com",
+    "domains": [
+      "salesloft.com"
+    ]
+  },
+  {
+    "slug": "sanity",
+    "name": "Sanity",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sanity.io/api/v2/summary.json",
+    "pageUrl": "https://status.sanity.io",
+    "domains": [
+      "sanity.io"
+    ]
+  },
+  {
+    "slug": "saucelabs",
+    "name": "Sauce Labs",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.saucelabs.com/api/v2/summary.json",
+    "pageUrl": "https://status.saucelabs.com",
+    "domains": [
+      "saucelabs.com"
+    ]
+  },
+  {
+    "slug": "scaleway",
+    "name": "Scaleway",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.scaleway.com/api/v2/summary.json",
+    "pageUrl": "https://status.scaleway.com",
+    "domains": [
+      "scaleway.com",
+      "scw.cloud"
+    ]
+  },
+  {
+    "slug": "segment",
+    "name": "Segment",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.segment.com/api/v2/summary.json",
+    "pageUrl": "https://status.segment.com",
+    "domains": [
+      "segment.com",
+      "segment.io"
+    ]
+  },
+  {
+    "slug": "sendgrid",
+    "name": "SendGrid",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sendgrid.com/api/v2/summary.json",
+    "pageUrl": "https://status.sendgrid.com",
+    "domains": [
+      "sendgrid.com",
+      "sendgrid.net"
+    ]
+  },
+  {
+    "slug": "sentinelone",
+    "name": "SentinelOne",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sentinelone.com/api/v2/summary.json",
+    "pageUrl": "https://status.sentinelone.com",
+    "domains": [
+      "sentinelone.com"
+    ]
+  },
+  {
+    "slug": "sentry",
+    "name": "Sentry",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sentry.io/api/v2/summary.json",
+    "pageUrl": "https://status.sentry.io",
+    "domains": [
+      "sentry.io"
+    ]
+  },
+  {
+    "slug": "shopify",
+    "name": "Shopify",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.shopifystatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.shopifystatus.com",
+    "domains": [
+      "shopify.com",
+      "myshopify.com"
+    ]
+  },
+  {
+    "slug": "sinch",
+    "name": "Sinch",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sinch.com/api/v2/summary.json",
+    "pageUrl": "https://status.sinch.com",
+    "domains": [
+      "sinch.com"
+    ]
+  },
+  {
+    "slug": "slack",
+    "name": "Slack",
+    "feedType": "slack",
+    "feedUrl": "https://status.slack.com/api/v2.0.0/current",
+    "pageUrl": "https://slack.com/status",
+    "domains": [
+      "slack.com"
+    ]
+  },
+  {
+    "slug": "smartsheet",
+    "name": "Smartsheet",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.smartsheet.com/api/v2/summary.json",
+    "pageUrl": "https://status.smartsheet.com",
+    "domains": [
+      "smartsheet.com"
+    ]
+  },
+  {
+    "slug": "snowflake",
+    "name": "Snowflake",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.snowflake.com/api/v2/summary.json",
+    "pageUrl": "https://status.snowflake.com",
+    "domains": [
+      "snowflake.com",
+      "snowflakecomputing.com"
+    ]
+  },
+  {
+    "slug": "snyk",
+    "name": "Snyk",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.snyk.io/api/v2/summary.json",
+    "pageUrl": "https://status.snyk.io",
+    "domains": [
+      "snyk.io"
+    ]
+  },
+  {
+    "slug": "victorops",
+    "name": "Splunk On-Call",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.victorops.com/api/v2/summary.json",
+    "pageUrl": "https://status.victorops.com",
+    "domains": [
+      "victorops.com"
+    ]
+  },
+  {
+    "slug": "sproutsocial",
+    "name": "Sprout Social",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sproutsocial.com/api/v2/summary.json",
+    "pageUrl": "https://status.sproutsocial.com",
+    "domains": [
+      "sproutsocial.com"
+    ]
+  },
+  {
+    "slug": "squareup",
+    "name": "Square",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.issquareup.com/api/v2/summary.json",
+    "pageUrl": "https://www.issquareup.com",
+    "domains": [
+      "squareup.com"
+    ]
+  },
+  {
+    "slug": "squarespace",
+    "name": "Squarespace",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.squarespace.com/api/v2/summary.json",
+    "pageUrl": "https://status.squarespace.com",
+    "domains": [
+      "squarespace.com"
+    ]
+  },
+  {
+    "slug": "statsig",
+    "name": "Statsig",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.statsig.com/api/v2/summary.json",
+    "pageUrl": "https://status.statsig.com",
+    "domains": [
+      "statsig.com"
+    ]
+  },
+  {
+    "slug": "statuscake",
+    "name": "StatusCake",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.statuscake.com/api/v2/summary.json",
+    "pageUrl": "https://status.statuscake.com",
+    "domains": [
+      "statuscake.com"
+    ]
+  },
+  {
+    "slug": "stripe",
+    "name": "Stripe",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.stripestatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.stripestatus.com",
+    "domains": [
+      "stripe.com"
+    ]
+  },
+  {
+    "slug": "sucuri",
+    "name": "Sucuri",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sucuri.net/api/v2/summary.json",
+    "pageUrl": "https://status.sucuri.net",
+    "domains": [
+      "sucuri.net"
+    ]
+  },
+  {
+    "slug": "sumologic",
+    "name": "Sumo Logic",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.sumologic.com/api/v2/summary.json",
+    "pageUrl": "https://status.sumologic.com",
+    "domains": [
+      "sumologic.com"
+    ]
+  },
+  {
+    "slug": "supabase",
+    "name": "Supabase",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.supabase.com/api/v2/summary.json",
+    "pageUrl": "https://status.supabase.com",
+    "domains": [
+      "supabase.co",
+      "supabase.com"
+    ]
+  },
+  {
+    "slug": "surveymonkey",
+    "name": "SurveyMonkey",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.surveymonkey.com/api/v2/summary.json",
+    "pageUrl": "https://status.surveymonkey.com",
+    "domains": [
+      "surveymonkey.com"
+    ]
+  },
+  {
+    "slug": "tailscale",
+    "name": "Tailscale",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.tailscale.com/api/v2/summary.json",
+    "pageUrl": "https://status.tailscale.com",
+    "domains": [
+      "tailscale.com"
+    ]
+  },
+  {
+    "slug": "talkdesk",
+    "name": "Talkdesk",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.talkdesk.com/api/v2/summary.json",
+    "pageUrl": "https://status.talkdesk.com",
+    "domains": [
+      "talkdesk.com"
+    ]
+  },
+  {
+    "slug": "travisci",
+    "name": "Travis CI",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.traviscistatus.com/api/v2/summary.json",
+    "pageUrl": "https://www.traviscistatus.com",
+    "domains": [
+      "travis-ci.com"
+    ]
+  },
+  {
+    "slug": "trello",
+    "name": "Trello",
+    "feedType": "statuspage",
+    "feedUrl": "https://trello.status.atlassian.com/api/v2/summary.json",
+    "pageUrl": "https://trello.status.atlassian.com",
+    "domains": [
+      "trello.com"
+    ]
+  },
+  {
+    "slug": "twilio",
+    "name": "Twilio",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.twilio.com/api/v2/summary.json",
+    "pageUrl": "https://status.twilio.com",
+    "domains": [
+      "twilio.com"
+    ]
+  },
+  {
+    "slug": "twitch",
+    "name": "Twitch",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.twitch.com/api/v2/summary.json",
+    "pageUrl": "https://status.twitch.com",
+    "domains": [
+      "twitch.tv"
+    ]
+  },
+  {
+    "slug": "typeform",
+    "name": "Typeform",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.typeform.com/api/v2/summary.json",
+    "pageUrl": "https://status.typeform.com",
+    "domains": [
+      "typeform.com"
+    ]
+  },
+  {
+    "slug": "udemy",
+    "name": "Udemy",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.udemy.com/api/v2/summary.json",
+    "pageUrl": "https://status.udemy.com",
+    "domains": [
+      "udemy.com"
+    ]
+  },
+  {
+    "slug": "upcloud",
+    "name": "UpCloud",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.upcloud.com/api/v2/summary.json",
+    "pageUrl": "https://status.upcloud.com",
+    "domains": [
+      "upcloud.com"
+    ]
+  },
+  {
+    "slug": "upstash",
+    "name": "Upstash",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.upstash.com/api/v2/summary.json",
+    "pageUrl": "https://status.upstash.com",
+    "domains": [
+      "upstash.com"
+    ]
+  },
+  {
+    "slug": "vanta",
+    "name": "Vanta",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.vanta.com/api/v2/summary.json",
+    "pageUrl": "https://status.vanta.com",
+    "domains": [
+      "vanta.com"
+    ]
+  },
+  {
+    "slug": "vercel",
+    "name": "Vercel",
+    "feedType": "statuspage",
+    "feedUrl": "https://www.vercel-status.com/api/v2/summary.json",
+    "pageUrl": "https://www.vercel-status.com",
+    "domains": [
+      "vercel.com",
+      "vercel.app"
+    ]
+  },
+  {
+    "slug": "vimeo",
+    "name": "Vimeo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.vimeo.com/api/v2/summary.json",
+    "pageUrl": "https://status.vimeo.com",
+    "domains": [
+      "vimeo.com"
+    ]
+  },
+  {
+    "slug": "wasabi",
+    "name": "Wasabi",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.wasabi.com/api/v2/summary.json",
+    "pageUrl": "https://status.wasabi.com",
+    "domains": [
+      "wasabisys.com"
+    ]
+  },
+  {
+    "slug": "webflow",
+    "name": "Webflow",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.webflow.com/api/v2/summary.json",
+    "pageUrl": "https://status.webflow.com",
+    "domains": [
+      "webflow.com",
+      "webflow.io"
+    ]
+  },
+  {
+    "slug": "wise",
+    "name": "Wise",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.wise.com/api/v2/summary.json",
+    "pageUrl": "https://status.wise.com",
+    "domains": [
+      "wise.com"
+    ]
+  },
+  {
+    "slug": "wistia",
+    "name": "Wistia",
+    "feedType": "instatus",
+    "feedUrl": "https://status.wistia.com/summary.json",
+    "pageUrl": "https://status.wistia.com",
+    "domains": [
+      "wistia.com"
+    ]
+  },
+  {
+    "slug": "wix",
+    "name": "Wix",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.wix.com/api/v2/summary.json",
+    "pageUrl": "https://status.wix.com",
+    "domains": [
+      "wix.com"
+    ]
+  },
+  {
+    "slug": "workato",
+    "name": "Workato",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.workato.com/api/v2/summary.json",
+    "pageUrl": "https://status.workato.com",
+    "domains": [
+      "workato.com"
+    ]
+  },
+  {
+    "slug": "xero",
+    "name": "Xero",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.xero.com/api/v2/summary.json",
+    "pageUrl": "https://status.xero.com",
+    "domains": [
+      "xero.com"
+    ]
+  },
+  {
+    "slug": "xmatters",
+    "name": "xMatters",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.xmatters.com/api/v2/summary.json",
+    "pageUrl": "https://status.xmatters.com",
+    "domains": [
+      "xmatters.com"
+    ]
+  },
+  {
+    "slug": "zapier",
+    "name": "Zapier",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.zapier.com/api/v2/summary.json",
+    "pageUrl": "https://status.zapier.com",
+    "domains": [
+      "zapier.com"
+    ]
+  },
+  {
+    "slug": "zoom",
+    "name": "Zoom",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.zoom.us/api/v2/summary.json",
+    "pageUrl": "https://status.zoom.us",
+    "domains": [
+      "zoom.us"
+    ]
+  },
+  {
+    "slug": "zoominfo",
+    "name": "ZoomInfo",
+    "feedType": "statuspage",
+    "feedUrl": "https://status.zoominfo.com/api/v2/summary.json",
+    "pageUrl": "https://status.zoominfo.com",
+    "domains": [
+      "zoominfo.com"
+    ]
+  }
+]

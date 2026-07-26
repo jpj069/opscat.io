@@ -17,6 +17,8 @@ app.use(securityHeaders);
 // before the JSON parser consumes the stream.
 app.use('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '1mb' }));
+// the public status page's "report a problem" form posts urlencoded
+app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
 // unauthenticated: health + public status page
 app.use(require('./routes/public'));
@@ -54,6 +56,7 @@ try { app.use('/api/orgs', require('./routes/orgs')); } catch (e) { /* EE module
 // /api/* routes, so it MUST be mounted last.
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/synthetics', require('./routes/synthetics'));
+app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api', require('./routes/ops'));
 
 // --- static: marketing site at /, app SPA at /app ---
@@ -100,6 +103,8 @@ require('./engine/alerts').start();
 require('./engine/synthetics').start();
 require('./engine/snmp').start();
 require('./engine/heartbeats').start();
+require('./engine/vendors').start();
+require('./engine/reports').start();
 require('./engine/retention').start();
 
 app.listen(config.port, () => {

@@ -1,8 +1,10 @@
 'use strict';
-// Unauthenticated surface: health check + public status page (JSON + HTML).
+// Unauthenticated surface: health check + public status page (JSON + HTML)
+// + anonymous "report a problem" submissions (rate-limited, honeypot-guarded).
 const express = require('express');
 const { db, getOrgSetting } = require('../db');
-const { now } = require('../util');
+const { now, sha256, RateLimiter, clampInt } = require('../util');
+const { clientIp } = require('../security');
 
 const router = express.Router();
 
@@ -53,9 +55,19 @@ function statusData(orgId) {
       updates: db.prepare(`SELECT ts, status, message FROM incident_updates
         WHERE incident_id = ? ORDER BY ts DESC LIMIT 10`).all(i.id),
     }));
-  return { overall: worst, overallLabel: STATUS_LABEL[worst], components, incidents,
-    org: getOrgSetting(orgId, 'org_name', 'OpsCat'), ts: now() };
+  const data = { overall: worst, overallLabel: STATUS_LABEL[worst], components, incidents,
+    org: getOrgSetting(orgId, 'org_name', 'OpsCat'), ts: now(),
+    reportsEnabled: reportsEnabled(orgId) };
+  // ids are needed by the report form's component picker
+  data.components.forEach((c, i) => { c.id = comps[i].id; });
+  if (getOrgSetting(orgId, 'status_reports_public', '0') === '1') {
+    data.reports60m = db.prepare(
+      'SELECT COUNT(*) c FROM status_reports WHERE org_id = ? AND ts >= ?').get(orgId, now() - 3600000).c;
+  }
+  return data;
 }
+
+function reportsEnabled(orgId) { return getOrgSetting(orgId, 'status_reports_enabled', '1') === '1'; }
 
 function published(orgId) { return getOrgSetting(orgId, 'status_published', '1') === '1'; }
 
@@ -64,6 +76,48 @@ router.get('/api/status', (req, res) => {
   if (!org || !published(org.id)) return res.status(404).json({ error: 'not published' });
   res.json(statusData(org.id));
 });
+
+// ---- user problem reports (Downdetector-style) -------------------------------
+
+const reportLimiter = new RateLimiter({ perMinute: 3, burst: 3 });
+const insReport = db.prepare(
+  'INSERT INTO status_reports (org_id, ts, component_id, message, ip_hash) VALUES (?, ?, ?, ?, ?)');
+const lastReportFrom = db.prepare(
+  'SELECT MAX(ts) t FROM status_reports WHERE org_id = ? AND ip_hash = ?');
+
+// Accepts the status-page form (urlencoded) or JSON. The `website` field is a
+// honeypot — humans never see it, bots fill it. Success and silent drops both
+// answer alike so probing reveals nothing.
+function handleReport(req, res, org, redirectTo) {
+  const done = () => (redirectTo
+    ? res.redirect(303, `${redirectTo}?reported=1`)
+    : res.json({ ok: true }));
+  if (!org || !published(org.id) || !reportsEnabled(org.id)) {
+    return redirectTo ? res.redirect(303, redirectTo || '/status') : res.status(404).json({ error: 'not published' });
+  }
+  const b = req.body || {};
+  const ip = clientIp(req);
+  if (typeof b.website === 'string' && b.website.trim() !== '') return done(); // honeypot hit
+  if (!reportLimiter.allow(`${org.id}|${ip}`)) return done();
+  const ipHash = sha256(`${org.id}|${ip}`);
+  const t = now();
+  const last = lastReportFrom.get(org.id, ipHash).t;
+  if (last && t - last < 10 * 60 * 1000) return done(); // one report per visitor per 10 min
+  let componentId = null;
+  const cid = parseInt(b.componentId, 10);
+  if (Number.isFinite(cid)) {
+    const comp = db.prepare('SELECT id FROM components WHERE id = ? AND org_id = ?').get(cid, org.id);
+    if (comp) componentId = comp.id;
+  }
+  const message = typeof b.message === 'string' ? b.message.trim().slice(0, 500) : null;
+  insReport.run(org.id, t, componentId, message || null, ipHash);
+  return done();
+}
+
+router.post('/api/status/report', (req, res) => handleReport(req, res, resolveOrg(req.query.org), null));
+router.post('/status/report', (req, res) => handleReport(req, res, resolveOrg(null), '/status'));
+router.post('/status/:slug/report', (req, res) =>
+  handleReport(req, res, resolveOrg(req.params.slug), `/status/${encodeURIComponent(req.params.slug)}`));
 
 const DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341',
   partial: '#f0883e', major: '#f85149' };
@@ -78,6 +132,7 @@ function renderStatus(req, res, org) {
     return res.status(404).send('<h1>Status page not published</h1>');
   }
   const d = statusData(org.id);
+  const reported = req.query.reported === '1';
   const compRows = d.components.map((c) => {
     const cells = c.days.map((day) =>
       `<div title="${esc(day.day)}: ${esc(day.worst)}" style="flex:1;height:18px;border-radius:1px;background:${
@@ -127,12 +182,33 @@ function renderStatus(req, res, org) {
   .pill.ok{background:rgba(63,185,80,.12);color:#3fb950}
   .pill.warn{background:rgba(227,179,65,.12);color:#e3b341}
   footer{margin-top:40px;font-size:11px;color:#484f58}
+  details.report{margin-top:24px;border:1px solid #21262d;border-radius:8px;background:#161b22}
+  details.report summary{cursor:pointer;padding:12px 16px;font-weight:600;color:#c9d1d9;font-size:13px}
+  .report-form{padding:0 16px 14px;display:flex;flex-direction:column;gap:8px}
+  .report-form select,.report-form textarea{background:#0b0e14;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;padding:8px 10px;font:12px Inter,system-ui,sans-serif}
+  .report-form textarea{min-height:64px;resize:vertical}
+  .report-form button{align-self:flex-start;background:#238636;color:#fff;border:none;border-radius:6px;
+    padding:8px 16px;font:600 12px Inter,system-ui,sans-serif;cursor:pointer}
+  .hp{position:absolute;left:-9999px;opacity:0;height:0;overflow:hidden}
+  .thanks{padding:12px 16px;border:1px solid rgba(63,185,80,.35);border-radius:8px;
+    background:rgba(63,185,80,.08);color:#3fb950;font-size:13px;font-weight:600;margin-top:24px}
+  .rcount{margin-left:auto;font-size:11px;font-weight:500;color:#8b949e}
 </style></head><body><div class="wrap">
 <h1><span class="logo"></span>${esc(d.org)} Status</h1>
 <div class="banner"><span class="dot" style="background:${DOT[d.overall]};box-shadow:0 0 8px ${DOT[d.overall]}"></span>
-${esc(d.overallLabel)}</div>
+${esc(d.overallLabel)}${Number.isFinite(d.reports60m) ? `<span class="rcount">${d.reports60m} user report${d.reports60m === 1 ? '' : 's'} in the last hour</span>` : ''}</div>
 ${compRows}
 ${incRows ? `<h2>Incidents</h2>${incRows}` : ''}
+${reported ? '<div class="thanks">Thanks — your report has been recorded and our team can see it.</div>' : ''}
+${d.reportsEnabled && !reported ? `<details class="report"><summary>Something not working for you? Report a problem</summary>
+<form class="report-form" method="post" action="${esc(req.path)}/report">
+<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+<select name="componentId"><option value="">Affected service (optional)</option>
+${d.components.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+<textarea name="message" maxlength="500" placeholder="What are you seeing? (optional)"></textarea>
+<button type="submit">Send report</button>
+</form></details>` : ''}
 <footer>Powered by OpsCat · ${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
 </div></body></html>`);
 }

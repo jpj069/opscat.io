@@ -327,4 +327,4 @@ function start() {
   iv.unref();
 }
 
-module.exports = { start, runAllNow, recordResult, RUNNERS };
+module.exports = { start, runAllNow, recordResult, RUNNERS, assertPublicHost };

@@ -147,7 +147,8 @@ router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {
 // ---- settings (admin; safe subset readable by all sessions) ----
 const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'retention_logs_days', 'onboarding_done'];
 const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal', 'onboarding_source',
-  'alert_email_from', 'auth_email_from', 'teams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers'];
+  'alert_email_from', 'auth_email_from', 'teams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers',
+  'status_reports_enabled', 'status_reports_public', 'status_reports_threshold'];
 
 router.get('/settings', (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
