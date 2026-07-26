@@ -8,7 +8,7 @@ const { db } = require('../db');
 const { now, isStr, optStr, clampInt, httpError } = require('../util');
 const sec = require('../security');
 const vendorEngine = require('../engine/vendors');
-const { FEED_TYPES } = require('../engine/vendor-feeds');
+const { FEED_TYPES, detectFeed } = require('../engine/vendor-feeds');
 const { assertPublicHost } = require('../engine/synthetics');
 
 const router = express.Router();
@@ -52,6 +52,32 @@ router.get('/:id(\\d+)', (req, res) => {
   res.json({ ...vendorView(v), components, incidents });
 });
 
+// Normalize a feed URL so identical vendors entered by different orgs converge
+// on one string — the poller dedupes fetches per exact feed_url.
+function normalizeFeedUrl(raw) {
+  const u = new URL(raw);
+  u.hostname = u.hostname.toLowerCase();
+  u.hash = '';
+  u.pathname = u.pathname.replace(/\/+$/, '') || '/';
+  return u.href;
+}
+
+// Auto-detect the machine-readable feed behind any status-page URL.
+router.post('/detect', sec.requireRole('lead'), async (req, res) => {
+  const { url } = req.body || {};
+  if (!isStr(url, 500)) return httpError(res, 400, 'url required');
+  try {
+    const d = await detectFeed(url.trim());
+    res.json({
+      feedType: d.feedType, feedUrl: normalizeFeedUrl(d.feedUrl), pageUrl: d.pageUrl, name: d.name,
+      preview: { status: d.parsed.status, components: d.parsed.components.length,
+        incidents: d.parsed.incidents.length },
+    });
+  } catch (e) {
+    httpError(res, 422, String(e.message || e).slice(0, 200));
+  }
+});
+
 router.post('/', sec.requireRole('lead'), async (req, res) => {
   const b = req.body || {};
   let entry;
@@ -71,7 +97,8 @@ router.post('/', sec.requireRole('lead'), async (req, res) => {
     catch (e) { return httpError(res, 400, e.message); }
     const slug = 'custom-' + b.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
     if (slug === 'custom-') return httpError(res, 400, 'name must contain letters or digits');
-    entry = { slug, name: b.name.trim(), feedType: b.feedType, feedUrl: b.feedUrl, pageUrl: b.pageUrl || null };
+    entry = { slug, name: b.name.trim(), feedType: b.feedType,
+      feedUrl: normalizeFeedUrl(b.feedUrl), pageUrl: b.pageUrl || null };
   }
   let info;
   try {
@@ -122,6 +149,24 @@ router.delete('/:id(\\d+)', sec.requireRole('lead'), (req, res) => {
   db.prepare('DELETE FROM vendors WHERE id = ? AND org_id = ?').run(v.id, req.orgId);
   sec.audit(req.user.id, 'vendor_delete', v.slug, req.orgId);
   res.json({ ok: true });
+});
+
+// Subscribe this org to every catalog vendor it doesn't monitor yet (used to
+// seed the public vendor grid; also handy for "watch everything" orgs).
+router.post('/subscribe-catalog', sec.requireRole('lead'), (req, res) => {
+  const existing = new Set(db.prepare('SELECT slug FROM vendors WHERE org_id = ?').all(req.orgId).map((v) => v.slug));
+  const ins = db.prepare(`INSERT INTO vendors (org_id, slug, name, feed_type, feed_url, page_url,
+    interval_s, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 300, 1, ?)`);
+  let added = 0;
+  db.transaction(() => {
+    for (const c of CATALOG) {
+      if (existing.has(c.slug)) continue;
+      ins.run(req.orgId, c.slug, c.name, c.feedType, c.feedUrl, c.pageUrl, now());
+      added++;
+    }
+  })();
+  sec.audit(req.user.id, 'vendor_subscribe_catalog', `${added} vendors`, req.orgId);
+  res.json({ added, total: existing.size + added });
 });
 
 router.post('/:id(\\d+)/poll', (req, res) => {

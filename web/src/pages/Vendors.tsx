@@ -134,7 +134,10 @@ function AddVendorModal({ existing, onClose, onAdded }:
   const [custom, setCustom] = useState(false);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [err, setErr] = useState('');
-  // custom form
+  // custom form — paste a status-page URL, detection fills the rest
+  const [detectUrl, setDetectUrl] = useState('');
+  const [detecting, setDetecting] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [feedType, setFeedType] = useState<VendorFeedType>('statuspage');
   const [feedUrl, setFeedUrl] = useState('');
@@ -152,6 +155,20 @@ function AddVendorModal({ existing, onClose, onAdded }:
     try { await api.post('/api/vendors', { slug: c.slug }); onAdded(); }
     catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
     finally { setBusySlug(null); }
+  };
+
+  const detect = async () => {
+    setErr(''); setPreview(null); setDetecting(true);
+    try {
+      const d = await api.post<{ feedType: VendorFeedType; feedUrl: string; pageUrl: string;
+        name: string | null; preview: { status: string; components: number; incidents: number } }>(
+        '/api/vendors/detect', { url: detectUrl });
+      setFeedType(d.feedType); setFeedUrl(d.feedUrl); setPageUrl(d.pageUrl);
+      if (d.name && !name.trim()) setName(d.name);
+      setPreview(`detected ${d.feedType} — status ${d.preview.status}, `
+        + `${d.preview.components} components, ${d.preview.incidents} active incidents`);
+    } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'detection failed'); }
+    finally { setDetecting(false); }
   };
 
   const addCustom = async (e: React.FormEvent) => {
@@ -208,8 +225,18 @@ function AddVendorModal({ existing, onClose, onAdded }:
         </>
       ) : (
         <form onSubmit={addCustom}>
+          <Field label="Status page URL — we detect the feed automatically">
+            <div className="row" style={{ gap: 6 }}>
+              <input autoFocus value={detectUrl} onChange={(e) => setDetectUrl(e.target.value)}
+                placeholder="https://status.example.com" style={{ flex: 1 }} />
+              <button type="button" className="btn btn-sm" onClick={detect}
+                disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</button>
+            </div>
+          </Field>
+          {preview && <div className="mono" style={{ fontSize: 10, color: SEV.green, marginBottom: 10 }}>
+            ✓ {preview}</div>}
           <Field label="Name">
-            <input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
+            <input required value={name} onChange={(e) => setName(e.target.value)}
               placeholder="Acme SaaS" />
           </Field>
           <Field label="Feed type">
@@ -226,9 +253,8 @@ function AddVendorModal({ existing, onClose, onAdded }:
               placeholder="https://status.example.com" />
           </Field>
           <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8 }}>
-            <span className="mono">statuspage</span> covers Atlassian Statuspage
-            (<span className="mono">/api/v2/summary.json</span>), <span className="mono">instatus</span> expects
-            <span className="mono"> /summary.json</span>, <span className="mono">rss</span> any RSS/Atom incident feed.
+            Detection covers Statuspage, Instatus, incident.io, status.io, Heroku, Google dashboards
+            and RSS/Atom. If it fails, pick the feed type manually.
           </div>
           {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}

@@ -303,4 +303,102 @@ function parse(feedType, body) {
   return parser(body);
 }
 
-module.exports = { FEED_TYPES, fetchFeed, parse };
+// ---- auto-detection -----------------------------------------------------------
+// Given any status-page URL, find the machine-readable feed behind it: fetch the
+// page (following redirects, SSRF-guarded per hop) to learn the canonical host,
+// then probe the known feed endpoints in order of likelihood. Used by
+// POST /api/vendors/detect and by catalog-discovery tooling.
+
+async function fetchRaw(rawUrl, accept = '*/*') {
+  let url = rawUrl;
+  for (let hop = 0; ; hop++) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') throw new Error('url must be https');
+    await assertPublicHost(parsed.hostname.replace(/^\[|\]$/g, ''));
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const resp = await fetch(url, { signal: ctrl.signal, redirect: 'manual',
+        headers: { 'User-Agent': 'OpsCat-VendorMonitor/1.0', Accept: accept } });
+      if (resp.status >= 300 && resp.status < 400) {
+        const loc = resp.headers.get('location');
+        await resp.arrayBuffer().catch(() => {});
+        if (!loc || hop >= MAX_REDIRECTS) throw new Error(`too many redirects (${resp.status})`);
+        url = new URL(loc, url).href;
+        continue;
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.length > MAX_BODY_BYTES) throw new Error('body too large');
+      return { finalUrl: url, status: resp.status, body: decodeBody(buf) };
+    } finally { clearTimeout(timer); }
+  }
+}
+
+function pageName(feedType, body) {
+  try {
+    const j = JSON.parse(body);
+    if (feedType === 'statuspage' && j.page && j.page.name) return String(j.page.name).slice(0, 120);
+    if (feedType === 'instatus' && j.page && j.page.name) return String(j.page.name).slice(0, 120);
+    if (feedType === 'statusio' && j.result && j.result.status_overall && j.result.status_overall.name) {
+      return String(j.result.status_overall.name).slice(0, 120);
+    }
+  } catch { /* not json */ }
+  return null;
+}
+
+async function detectFeed(pageUrl) {
+  const url = /^https?:\/\//.test(pageUrl) ? pageUrl : `https://${pageUrl}`;
+  const page = await fetchRaw(url, 'text/html, */*');
+  const origin = new URL(page.finalUrl).origin;
+
+  // probe the known JSON endpoints on the canonical origin, most common first
+  const PROBES = [
+    ['statuspage', `${origin}/api/v2/summary.json`],   // Atlassian Statuspage + incident.io shim
+    ['instatus', `${origin}/summary.json`],
+    ['heroku', `${origin}/api/v4/current-status`],
+    ['slack', `${origin}/api/v2.0.0/current`],
+    ['gcp', `${origin}/incidents.json`],
+  ];
+  for (const [feedType, feedUrl] of PROBES) {
+    try {
+      const r = await fetchRaw(feedUrl, 'application/json, */*');
+      if (r.status !== 200) continue;
+      const parsed = parse(feedType, r.body);
+      return { feedType, feedUrl, pageUrl: origin, name: pageName(feedType, r.body), parsed };
+    } catch { /* try next */ }
+  }
+
+  // status.io pages embed a 24-hex page id and load assets from status.io
+  if (page.status === 200 && /status\.io/i.test(page.body)) {
+    const id = /[a-f0-9]{24}/.exec(page.body);
+    if (id) {
+      try {
+        const feedUrl = `https://api.status.io/1.0/status/${id[0]}`;
+        const r = await fetchRaw(feedUrl, 'application/json');
+        const parsed = parse('statusio', r.body);
+        return { feedType: 'statusio', feedUrl, pageUrl: origin, name: pageName('statusio', r.body), parsed };
+      } catch { /* fall through */ }
+    }
+  }
+
+  // RSS/Atom fallback: <link rel="alternate"> from the page, then /history.rss
+  const candidates = [];
+  if (page.status === 200) {
+    const link = /<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*href="([^"]+)"/i.exec(page.body)
+      || /<link[^>]*href="([^"]+)"[^>]+type="application\/(?:rss|atom)\+xml"/i.exec(page.body);
+    if (link) candidates.push(new URL(link[1], page.finalUrl).href);
+  }
+  candidates.push(`${origin}/history.rss`);
+  for (const feedUrl of candidates) {
+    try {
+      const r = await fetchRaw(feedUrl, 'application/xml, text/xml, */*');
+      if (r.status !== 200) continue;
+      const parsed = parse('rss', r.body);
+      return { feedType: 'rss', feedUrl, pageUrl: origin, name: null, parsed };
+    } catch { /* try next */ }
+  }
+
+  throw new Error('no supported status feed found on this page (Statuspage, Instatus, incident.io, status.io, Heroku, Google or RSS)');
+}
+
+module.exports = { FEED_TYPES, fetchFeed, parse, detectFeed };

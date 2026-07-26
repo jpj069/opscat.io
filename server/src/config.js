@@ -13,6 +13,9 @@ module.exports = {
   dbFile: path.join(dataDir, 'opscat.db'),
   publicDir: process.env.OPSCAT_PUBLIC_DIR || path.join(__dirname, '..', 'public'),
   wwwDir: process.env.OPSCAT_WWW_DIR || path.join(__dirname, '..', 'public-www'),
+  // host that serves the public vendor-status grid at / (see routes/public.js);
+  // publishing is additionally gated by the vendor_grid_published setting
+  gridHost: (process.env.OPSCAT_GRID_HOST || 'radar.opscat.io').toLowerCase(),
   // OPSCAT_SECRET encrypts SNMP communities and signs nothing else; generated+persisted if absent.
   secret: process.env.OPSCAT_SECRET || null,
   resendApiKey: process.env.RESEND_API_KEY || null,

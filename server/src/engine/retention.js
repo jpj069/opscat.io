@@ -57,6 +57,7 @@ function prune() {
   db.prepare('DELETE FROM vendor_incidents WHERE resolved_at IS NOT NULL AND resolved_at < ?')
     .run(t - 90 * 86400000);
   db.prepare('DELETE FROM status_reports WHERE ts < ?').run(t - 30 * 86400000);
+  db.prepare('DELETE FROM vendor_reports WHERE ts < ?').run(t - 30 * 86400000);
   db.prepare('DELETE FROM audit_log WHERE ts < ?').run(t - 180 * 86400000);
 }
 

@@ -415,6 +415,16 @@ CREATE TABLE IF NOT EXISTS status_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_status_reports ON status_reports(org_id, ts);
 
+-- community "it's down for me too" reports from the PUBLIC vendor grid
+-- (platform-level, not org data — slug references the vendor catalog)
+CREATE TABLE IF NOT EXISTS vendor_reports (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug          TEXT NOT NULL,
+  ts            INTEGER NOT NULL,
+  ip_hash       TEXT NOT NULL                -- sha256(grid|ip): dedupe, never the raw address
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_reports ON vendor_reports(slug, ts);
+
 -- global platform settings (super-admin)
 CREATE TABLE IF NOT EXISTS settings (
   key           TEXT PRIMARY KEY,

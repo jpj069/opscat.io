@@ -12,8 +12,14 @@ const REALERT_MS = 10 * 60 * 1000;
 
 const countRecent = db.prepare(
   'SELECT org_id, COUNT(*) c FROM status_reports WHERE ts >= ? GROUP BY org_id');
+const countGridRecent = db.prepare(
+  'SELECT slug, COUNT(*) c FROM vendor_reports WHERE ts >= ? GROUP BY slug');
 
 const alertedUntil = new Map(); // orgId -> ts until which the current spike is considered reported
+const gridAlertedUntil = new Map(); // vendor slug -> ts (public grid community reports)
+
+const GRID_WINDOW_MS = 60 * 60 * 1000;
+const GRID_THRESHOLD = 5;
 
 function tick() {
   const t = now();
@@ -27,6 +33,18 @@ function tick() {
       severity: row.c >= threshold * 3 ? 85 : 75,
       description: `user_reports_spike — ${row.c} user reports on the status page in 15 min (threshold ${threshold})`,
     }, 'reports', false, row.org_id);
+  }
+  // community reports on the public vendor grid — surfaced to the platform org
+  // (org 1): the crowd often notices before the vendor's status page does
+  for (const row of countGridRecent.all(t - GRID_WINDOW_MS)) {
+    if (row.c < GRID_THRESHOLD) continue;
+    if ((gridAlertedUntil.get(row.slug) || 0) > t) continue;
+    gridAlertedUntil.set(row.slug, t + REALERT_MS);
+    pipeline.ingestEvent({
+      name: 'vendor_reports_spike', device: row.slug, target: null,
+      severity: row.c >= GRID_THRESHOLD * 3 ? 80 : 70,
+      description: `vendor_reports_spike ${row.slug} — ${row.c} community reports on the public grid in 60 min`,
+    }, 'reports', false, 1);
   }
 }
 

@@ -96,6 +96,12 @@ org depends on (status-page aggregation, like StatusGator/IsDown but self-hosted
   `vendor_recovered` — alert rules, cases, SSE and the Monitor react automatically.
 - A vendor can be mapped onto an **own status-page component**: the vendor's state
   then drives that component's status, uptime history and the public status page.
+- **Public vendor grid** (marketing/community output): the live status of every
+  vendor org 1 monitors, as JSON (`/api/public/vendor-grid`, 60 s cache) and as a
+  server-rendered page (`/vendor-grid`, front page on `radar.opscat.io`). Off by
+  default; publish via `vendor_grid_published=1` / `OPSCAT_GRID_PUBLISHED=1`. Seed
+  org 1 with `POST /api/vendors/subscribe-catalog`. Only curated catalog vendors
+  appear — org-created custom vendors are never exposed publicly.
 
 ## User problem reports (status page)
 
