@@ -27,6 +27,28 @@ function rollupComponentDay() {
   }
 }
 
+// Same rollup for monitored vendors (Radar heatbars): unknown counts as
+// operational (no data is not downtime), degraded/partial/major accrue downtime.
+function rollupVendorDay() {
+  const day = new Date().toISOString().slice(0, 10);
+  const vendors = db.prepare('SELECT id, status FROM vendors WHERE enabled = 1').all();
+  const upsert = db.prepare(`INSERT INTO vendor_days (vendor_id, day, worst, down_seconds)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(vendor_id, day) DO UPDATE SET
+      worst = CASE WHEN excluded.worst != 'operational' AND
+        (CASE vendor_days.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
+          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END) <
+        (CASE excluded.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
+          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END)
+        THEN excluded.worst ELSE vendor_days.worst END,
+      down_seconds = vendor_days.down_seconds + excluded.down_seconds`);
+  for (const v of vendors) {
+    const status = v.status === 'unknown' ? 'operational' : v.status;
+    const degraded = STATUS_RANK[status] >= 2;
+    upsert.run(v.id, day, status, degraded ? 60 : 0);
+  }
+}
+
 function markStaleAgents() {
   const cutoff = now() - 5 * 60 * 1000;
   const stale = db.prepare(
@@ -58,12 +80,14 @@ function prune() {
     .run(t - 90 * 86400000);
   db.prepare('DELETE FROM status_reports WHERE ts < ?').run(t - 30 * 86400000);
   db.prepare('DELETE FROM vendor_reports WHERE ts < ?').run(t - 30 * 86400000);
+  db.prepare("DELETE FROM vendor_days WHERE day < date('now', '-100 days')").run();
   db.prepare('DELETE FROM audit_log WHERE ts < ?').run(t - 180 * 86400000);
 }
 
 function start() {
   const minute = setInterval(() => {
     try { rollupComponentDay(); } catch (e) { console.error('rollup error', e.message); }
+    try { rollupVendorDay(); } catch (e) { console.error('vendor rollup error', e.message); }
   }, 60 * 1000);
   minute.unref();
   const fiveMin = setInterval(() => {
@@ -77,4 +101,4 @@ function start() {
   try { prune(); } catch (e) { console.error('retention error', e.message); }
 }
 
-module.exports = { start, prune };
+module.exports = { start, prune, rollupVendorDay };

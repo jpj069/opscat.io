@@ -234,15 +234,36 @@ function gridData() {
   const reports = new Map(db.prepare(
     'SELECT slug, COUNT(*) c FROM vendor_reports WHERE ts >= ? GROUP BY slug').all(t - 3600000)
     .map((r) => [r.slug, r.c]));
-  const vendors = db.prepare(`SELECT v.slug, v.name, v.status, v.page_url, v.last_checked_at,
+  const since = new Date(t - 45 * 86400000).toISOString().slice(0, 10);
+  const byVendorDays = new Map();
+  for (const d of db.prepare(`SELECT d.vendor_id, d.day, d.worst, d.down_seconds
+      FROM vendor_days d JOIN vendors v ON v.id = d.vendor_id
+      WHERE v.org_id = 1 AND d.day >= ? ORDER BY d.day`).all(since)) {
+    if (!byVendorDays.has(d.vendor_id)) byVendorDays.set(d.vendor_id, []);
+    byVendorDays.get(d.vendor_id).push(d);
+  }
+  const vendors = db.prepare(`SELECT v.id, v.slug, v.name, v.status, v.page_url, v.last_checked_at,
       (SELECT COUNT(*) FROM vendor_incidents i WHERE i.vendor_id = v.id AND i.resolved_at IS NULL) AS active
     FROM vendors v WHERE v.org_id = 1 AND v.enabled = 1
       AND v.slug NOT LIKE 'custom-%' ORDER BY v.name`).all()
-    .map((v) => ({ slug: v.slug, name: v.name, status: v.status,
-      activeIncidents: v.active, userReports60m: reports.get(v.slug) || 0,
-      pageUrl: v.page_url, lastCheckedAt: v.last_checked_at }));
+    .map((v) => {
+      const days = byVendorDays.get(v.id) || [];
+      const totalDown = days.reduce((a, d) => a + d.down_seconds, 0);
+      const totalSecs = Math.max(1, days.length) * 86400;
+      return { slug: v.slug, name: v.name, status: v.status,
+        activeIncidents: v.active, userReports60m: reports.get(v.slug) || 0,
+        uptimePct: (100 - (totalDown / totalSecs) * 100).toFixed(2),
+        days: days.map((d) => ({ day: d.day, worst: d.worst })),
+        pageUrl: v.page_url, lastCheckedAt: v.last_checked_at };
+    });
+  const counts = {
+    total: vendors.length,
+    green: vendors.filter((v) => v.status === 'operational').length,
+    warn: vendors.filter((v) => ['degraded', 'partial', 'maintenance'].includes(v.status)).length,
+    red: vendors.filter((v) => v.status === 'major').length,
+  };
   const disrupted = vendors.filter((v) => ['degraded', 'partial', 'major'].includes(v.status)).length;
-  gridCache = { ts: t, data: { updatedAt: t, total: vendors.length, disrupted, vendors } };
+  gridCache = { ts: t, data: { updatedAt: t, total: vendors.length, disrupted, counts, vendors } };
   return gridCache.data;
 }
 
@@ -285,25 +306,73 @@ router.get('/api/public/vendor-grid', (req, res) => {
 const GRID_DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341',
   partial: '#f0883e', major: '#f85149', unknown: '#8b949e' };
 
+const GRID_FILTERS = {
+  all: () => true,
+  green: (v) => v.status === 'operational',
+  warn: (v) => ['degraded', 'partial', 'maintenance'].includes(v.status),
+  red: (v) => v.status === 'major',
+};
+
+function reportForm(v) {
+  // the /vendor-grid/report route exists on every host; the handler redirects
+  // back to the right page for the grid host vs the main domain
+  return `<form method="post" action="/vendor-grid/report" class="rep">
+    <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <input type="hidden" name="slug" value="${esc(v.slug)}">
+    <button type="submit" title="Report: down for me too">${
+      v.userReports60m ? `⚠ ${v.userReports60m}` : 'report'}</button>
+  </form>`;
+}
+
+function heatStrip(days) {
+  const pad = Math.max(0, 45 - days.length);
+  const cells = Array.from({ length: pad }).map(() =>
+    '<i style="background:#21262d;opacity:.5"></i>').join('')
+    + days.map((day) => `<i title="${esc(day.day)}: ${esc(day.worst)}" style="background:${
+      day.worst === 'operational' ? 'rgba(63,185,80,.55)' : GRID_DOT[day.worst] || '#e3b341'}"></i>`).join('');
+  return `<span class="strip">${cells}</span>`;
+}
+
 function renderVendorGrid(req, res) {
   if (!gridPublished()) return res.status(404).send('<h1>Not published</h1>');
   const d = gridData();
   const reported = req.query.reported === '1';
-  const reportAction = ((req.hostname || '').toLowerCase() === config.gridHost ? '' : '/vendor-grid') + '/report';
-  const rows = d.vendors.map((v) => `<div class="v">
-    <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
-      <span class="dot" style="background:${GRID_DOT[v.status] || GRID_DOT.unknown}"></span>
-      <span class="vn">${esc(v.name)}</span>
-      <span class="vs" style="color:${GRID_DOT[v.status] || GRID_DOT.unknown}">${esc(v.status)}${
-        v.activeIncidents ? ` · ${v.activeIncidents} inc` : ''}</span>
-    </a>
-    <form method="post" action="${esc(reportAction)}" class="rep">
-      <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
-      <input type="hidden" name="slug" value="${esc(v.slug)}">
-      <button type="submit" title="Report: down for me too">${
-        v.userReports60m ? `⚠ ${v.userReports60m}` : 'report'}</button>
-    </form>
-  </div>`).join('');
+  const view = req.query.view === 'list' ? 'list' : 'grid';
+  const filter = GRID_FILTERS[req.query.f] ? req.query.f : 'all';
+  const shown = d.vendors.filter(GRID_FILTERS[filter]);
+  const href = (f, v) => `?f=${f}&view=${v}`;
+  const pills = [
+    ['all', `all ${d.counts.total}`, '#8b949e'],
+    ['green', `operational ${d.counts.green}`, '#3fb950'],
+    ['warn', `degraded ${d.counts.warn}`, '#f0883e'],
+    ['red', `down ${d.counts.red}`, '#f85149'],
+  ].map(([f, label, color]) => `<a class="pill ${filter === f ? 'on' : ''}" style="--pc:${color}"
+    href="${href(f, view)}">${label}</a>`).join('');
+  const toggle = `<span class="views">${
+    [['grid', 'Grid'], ['list', 'List']].map(([vw, label]) =>
+      `<a class="${view === vw ? 'on' : ''}" href="${href(filter, vw)}">${label}</a>`).join('')}</span>`;
+
+  const body = view === 'grid'
+    ? `<div class="grid">${shown.map((v) => `<div class="v">
+        <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
+          <span class="dot" style="background:${GRID_DOT[v.status] || GRID_DOT.unknown}"></span>
+          <span class="vn">${esc(v.name)}</span>
+          <span class="vs" style="color:${GRID_DOT[v.status] || GRID_DOT.unknown}">${esc(v.status)}${
+            v.activeIncidents ? ` · ${v.activeIncidents} inc` : ''}</span>
+        </a>
+        ${reportForm(v)}
+      </div>`).join('')}</div>`
+    : `<div class="list">${shown.map((v) => `<div class="lr">
+        <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
+          <span class="dot" style="background:${GRID_DOT[v.status] || GRID_DOT.unknown}"></span>
+          <span class="vn">${esc(v.name)}</span>
+        </a>
+        ${heatStrip(v.days)}
+        <span class="pct" title="uptime, last 45 days">${v.uptimePct}%</span>
+        <span class="vs" style="color:${GRID_DOT[v.status] || GRID_DOT.unknown}">${esc(v.status)}</span>
+        ${reportForm(v)}
+      </div>`).join('')}</div>`;
+  const rows = body;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=60');
   res.send(`<!doctype html><html><head><meta charset="utf-8">
@@ -332,6 +401,22 @@ function renderVendorGrid(req, res) {
   .hp{position:absolute;left:-9999px;opacity:0;height:0;overflow:hidden}
   .thanks{padding:10px 14px;border:1px solid rgba(63,185,80,.35);border-radius:8px;
      background:rgba(63,185,80,.08);color:#3fb950;font-size:12px;font-weight:600;margin-bottom:16px}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .pill{font:600 11px Inter,system-ui,sans-serif;color:var(--pc);text-decoration:none;
+     border:1px solid #30363d;border-radius:14px;padding:4px 12px;background:#161b22}
+  .pill.on{border-color:var(--pc);background:color-mix(in srgb,var(--pc) 12%,transparent)}
+  .views{margin-left:auto;display:flex;border:1px solid #30363d;border-radius:6px;overflow:hidden}
+  .views a{font:600 11px Inter,system-ui,sans-serif;color:#8b949e;text-decoration:none;padding:4px 12px}
+  .views a.on{background:#21262d;color:#f0f6fc}
+  .list{display:flex;flex-direction:column;gap:6px}
+  .lr{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid #21262d;
+     border-radius:8px;background:#161b22}
+  .lr .vlink{flex:0 0 190px;min-width:0}
+  .lr .vs{margin-left:0;flex:0 0 90px;text-align:right}
+  .strip{flex:1;display:flex;gap:2px;height:16px;min-width:120px}
+  .strip i{flex:1;border-radius:1px}
+  .pct{font-family:'JetBrains Mono',monospace;font-size:11px;color:#c9d1d9;flex:0 0 62px;text-align:right}
+  @media (max-width:640px){.lr .vlink{flex-basis:110px}.lr .vs{display:none}}
   footer{margin-top:32px;font-size:11px;color:#484f58}
   footer a{color:#58a6ff;text-decoration:none}
 </style></head><body><div class="wrap">
@@ -341,7 +426,8 @@ function renderVendorGrid(req, res) {
   Aggregated from the vendors' official status pages, refreshed continuously.
   Something down that the vendor hasn't acknowledged yet? Hit “report”.</div>
 ${reported ? '<div class="thanks">Thanks — your report has been counted.</div>' : ''}
-<div class="grid">${rows}</div>
+<div class="bar">${pills}${toggle}</div>
+${rows}
 <footer>Data is republished from each vendor's official public status page — all trademarks belong to their owners.
 Monitor your own supply chain with <a href="https://opscat.io" rel="noreferrer">OpsCat</a> ·
 JSON: <a href="/api/public/vendor-grid">/api/public/vendor-grid</a> ·

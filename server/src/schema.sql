@@ -415,6 +415,16 @@ CREATE TABLE IF NOT EXISTS status_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_status_reports ON status_reports(org_id, ts);
 
+-- one row per vendor per day: worst state seen + seconds not operational
+-- (rolled up every minute; drives the Radar heatbars/uptime)
+CREATE TABLE IF NOT EXISTS vendor_days (
+  vendor_id     INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  day           TEXT NOT NULL,               -- YYYY-MM-DD (UTC)
+  worst         TEXT NOT NULL DEFAULT 'operational',
+  down_seconds  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (vendor_id, day)
+) WITHOUT ROWID;
+
 -- community "it's down for me too" reports from the PUBLIC vendor grid
 -- (platform-level, not org data — slug references the vendor catalog)
 CREATE TABLE IF NOT EXISTS vendor_reports (
