@@ -31,7 +31,7 @@ origin (`/oauth/register` RFC 7591 · `/oauth/authorize` PKCE S256 only · `/oau
 (RFC 8414) and `/.well-known/oauth-protected-resource[/mcp]` (RFC 9728, both forms).
 The consent screen carries an **organization picker**: the token is bound to one
 organization and every tool is scoped to it, so no tool takes an org argument. Roles are
-read from `memberships` per request, never cached in the token. 17 tools (9 read, 8 write), each annotated and carrying an `outputSchema`; a read-only
+read from `memberships` per request, never cached in the token. 18 tools (9 read, 9 write), each annotated and carrying an `outputSchema`; a read-only
 credential never sees the write tools. Two resources (`opscat://org/<id>/status`,
 `.../incidents/open`). Destructive calls confirm via elicitation. Per-user connections
 are listed and revoked at `GET/DELETE /api/admin/connections`. Tool reference:
