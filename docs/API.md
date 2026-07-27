@@ -13,6 +13,16 @@ Public (no auth): `GET /api/health`, `GET /status` (HTML status page —
 per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
 (edition, public plan matrix, auth options for the login/pricing UI).
 
+**MCP server** (`POST/GET/DELETE /mcp`, Streamable HTTP, MCP revision 2025-11-25).
+Authenticated with an OAuth 2.1 Bearer token; the authorization server lives on the same
+origin (`/oauth/register` RFC 7591 · `/oauth/authorize` PKCE S256 only · `/oauth/token` ·
+`/oauth/revoke` RFC 7009), with discovery at `/.well-known/oauth-authorization-server`
+(RFC 8414) and `/.well-known/oauth-protected-resource[/mcp]` (RFC 9728, both forms).
+The consent screen carries an **organization picker**: the token is bound to one
+organization and every tool is scoped to it, so no tool takes an org argument. Roles are
+read from `memberships` per request, never cached in the token. Tool reference:
+`/mcp/llms.txt`. See `docs/MCP-PLAN.md`.
+
 **Machine-readable status page.** Append `.json` to any status page URL — `/status.json`,
 `/status/:slug.json` — and get the exact payload the page renders. The URL already
 identifies the organization, so there is no slug parameter to pass; the page links its own

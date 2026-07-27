@@ -467,3 +467,49 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action        TEXT NOT NULL,
   detail        TEXT
 );
+
+-- ── MCP / OAuth 2.1 authorization server ──────────────────────────────────
+-- Clients register dynamically (RFC 7591), are public (no secret) and must use
+-- PKCE S256. A token is bound to ONE organization, picked by the user on the
+-- consent screen — deliberately NOT to a role: the role is read from
+-- memberships at request time, so a role change or a revoked membership takes
+-- effect immediately instead of living on in an old token.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id     TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL,               -- json array
+  scopes        TEXT NOT NULL,               -- csv, the most this client may ever request
+  created_at    INTEGER NOT NULL
+) WITHOUT ROWID;
+
+-- Authorization codes: single-use, short-lived, PKCE-bound. Stored hashed so a
+-- database read cannot replay one.
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash      TEXT PRIMARY KEY,           -- sha256(code)
+  client_id      TEXT NOT NULL,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id         INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  redirect_uri   TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,              -- S256 only
+  scopes         TEXT NOT NULL,
+  resource       TEXT,                       -- RFC 8707 audience
+  expires_at     INTEGER NOT NULL,
+  created_at     INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash    TEXT NOT NULL UNIQUE,        -- sha256(token)
+  kind          TEXT NOT NULL CHECK (kind IN ('access','refresh')),
+  client_id     TEXT NOT NULL,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  scopes        TEXT NOT NULL,
+  resource      TEXT,                        -- RFC 8707 audience this token may drive
+  expires_at    INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL,
+  last_used_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id, org_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_client ON oauth_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);

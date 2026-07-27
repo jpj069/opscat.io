@@ -1,0 +1,92 @@
+# OpsCat MCP server
+
+Infrastructure ops for AI agents: read your events, cases, logs, synthetic checks,
+incidents and monitored infrastructure straight from Claude Desktop, Claude Code,
+Cursor or any MCP client.
+
+Endpoint:  https://opscat.io/mcp   (Streamable HTTP, MCP revision 2025-11-25)
+
+A self-hosted OpsCat serves the same endpoint on its own base URL.
+
+## Connecting
+
+Point your client at the endpoint above. It discovers the rest on its own:
+
+- `GET /.well-known/oauth-protected-resource` and
+  `GET /.well-known/oauth-protected-resource/mcp` (RFC 9728) — both forms are
+  served, so a client can bootstrap from our `WWW-Authenticate` challenge or by
+  deriving the URL from the resource identifier.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414).
+- `POST /oauth/register` (RFC 7591) — dynamic client registration. Public clients
+  only: no `client_secret`, PKCE `S256` mandatory (`plain` is rejected).
+
+Your browser opens the consent screen once. **If your account belongs to more than
+one organization you pick which one this connection acts in** — the token is bound
+to that organization and every tool is scoped to it. Connect a second organization
+by running the flow again; your client then holds two connections.
+
+Tokens: access 1 h, refresh 30 d with rotation (a reused refresh token is
+rejected). Audience-bound per RFC 8707, so a token minted for another resource
+cannot drive this one. Revoke with `POST /oauth/revoke`.
+
+## Scopes
+
+| Scope | Grants |
+|---|---|
+| `read` | Events, cases, logs, checks, incidents, infrastructure inventory, dashboard |
+| `write` | Reserved for the mutating tools (acknowledge cases, publish incidents, run checks) — not yet shipped |
+
+Your OpsCat role still applies on top: the scope says what the client asked for,
+your membership role says what you may do. An `analyst` holding the `write` scope
+still cannot perform `lead`-only actions — MCP mirrors the permissions the web app
+enforces, never more and never less.
+
+## Tools
+
+All read-only, all annotated (`readOnlyHint: true`), all returning
+`structuredContent` alongside their text block.
+
+- `opscat_get_dashboard` — one-call overview: active/critical events, open cases,
+  failing checks, live incidents, active maintenance. **Start here.**
+- `opscat_list_events` — deduplicated alerts. Filter by `status`
+  (`active`/`finished`/`downgraded`/`all`), `minSeverity`, `limit`.
+- `opscat_get_event` — one event with its last 20 log lines and linked case.
+- `opscat_list_cases` — the unit of on-call work. Filter by `status`.
+- `opscat_search_logs` — substring search over ingested logs. Narrow with
+  `device` and `sinceMinutes` (default 60) — this can return a lot of text.
+- `opscat_list_checks` — synthetic checks with their latest result;
+  `onlyFailing: true` for the fast "what is down" read.
+- `opscat_list_incidents` — incidents, including whether each is published to the
+  public status page.
+- `opscat_list_infrastructure` — agents, SNMP targets and heartbeats with
+  last-seen times.
+
+Severity is 0-100: >= 80 critical, >= 60 major, >= 40 minor.
+
+## Session lifecycle
+
+Stateful. `initialize` returns an `mcp-session-id` header; send it on every
+subsequent request. Only `initialize` opens a session — anything else that does
+not resolve to a live one is answered `404` (`-32001`), so re-`initialize` and
+carry on. Sessions are pruned after 1 h of inactivity, measured from the last
+request, so an in-use session is never pruned out from under you. `DELETE /mcp`
+with the session header closes cleanly.
+
+The endpoint validates `Origin` and answers `403` for one that is not
+allow-listed. Native clients send no `Origin` and are unaffected.
+
+## Not exposed, deliberately
+
+No tools for user management, API-key or credential management, organization or
+billing administration, or super-admin functions. An agent that can mint
+credentials is a privilege-escalation path with a natural-language interface.
+
+## Status page
+
+The public status page needs no MCP client and no credential — append `.json` to
+any status page URL:
+
+    https://opscat.io/status.json
+    https://opscat.io/status/<org-slug>.json
+
+`https://opscat.io/summary.json` is the origin-level alias.

@@ -69,6 +69,36 @@ function planPillColor(plan: string): string {
   return SEV.info; // free / unknown
 }
 
+// The MCP OAuth consent screen sends an unauthenticated visitor here with
+// ?next=<authorize url>. Once they are signed in, hand them straight back so the
+// connection flow continues instead of dead-ending in the dashboard.
+//
+// Captured at MODULE LOAD, into sessionStorage, because the param does not
+// survive long enough to be read from an effect: the magic-link path calls
+// history.replaceState('/app/login') before it sets the user, and social sign-in
+// navigates the whole page away to /api/auth/<provider>. Only the password login
+// would still have it in the URL.
+//
+// Only same-origin `/oauth/` paths are honoured — re-checked on read, since
+// sessionStorage is attacker-writable — so this can never become an open redirect.
+const NEXT_KEY = 'opscat-oauth-next';
+
+function isSafeNext(v: string | null): v is string {
+  return !!v && v.startsWith('/oauth/');
+}
+
+(function captureNextParam() {
+  const next = new URLSearchParams(window.location.search).get('next');
+  if (isSafeNext(next)) sessionStorage.setItem(NEXT_KEY, next);
+})();
+
+function consumeNextParam(): string | null {
+  const next = sessionStorage.getItem(NEXT_KEY);
+  if (!isSafeNext(next)) return null;
+  sessionStorage.removeItem(NEXT_KEY);
+  return next;
+}
+
 export default function App() {
   const app = useApp();
   const [booting, setBooting] = useState(true);
@@ -79,6 +109,12 @@ export default function App() {
       .catch(() => {})
       .finally(() => setBooting(false));
   }, []);
+
+  useEffect(() => {
+    if (!app.user) return;
+    const next = consumeNextParam();
+    if (next) window.location.replace(next);
+  }, [app.user]);
 
   if (booting) return <Splash />;
   if (!app.user) return <Login />;

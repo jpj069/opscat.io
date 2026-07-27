@@ -214,15 +214,40 @@ contrast: Lynk's is ~16 KB and goes into context at every session start.
 
 | | Scope | Done when |
 |---|---|---|
-| **M1** | OAuth 2.1 AS (RFC 8414 metadata, RFC 7591 DCR, PKCE S256, RFC 9728 under both `.well-known` forms, RFC 8707 audience binding) **incl. the org picker**; `resolvePrincipal`; `/mcp` transport; read tools with annotations + `outputSchema` | Claude Desktop completes consent, picks an org, and answers "which checks are failing?" |
+| **M1 — shipped** | OAuth 2.1 AS (RFC 8414 metadata, RFC 7591 DCR, PKCE S256, RFC 9728 under both `.well-known` forms, RFC 8707 audience binding) **incl. the org picker**; principal middleware; `/mcp` transport; 8 read tools with annotations + `outputSchema` | Claude Desktop completes consent, picks an org, and answers "which checks are failing?" |
 | **M2** | Write tools; audit attribution; per-token rate limit; a connections view in the UI to see and revoke authorized clients | An agent can ack a case, and the audit log names the human who authorized the client |
 | **M3** | API-key fallback for headless/CI (`api_keys.role`, `mcp` scope) | A cron job drives read tools with no browser involved |
 | **M4** | 2025-11-25 extras: elicitation to confirm destructive calls; tasks for long-running polls (`opscat_run_check`); resources for incidents + status page; icons | — |
 
-M1 is the only milestone with a hard dependency; M2–M4 are independent. M1 is
+M1 is the only milestone with a hard dependency; M2–M4 are independent. M1 was
 also the largest by a distance — the authorization server is most of it, and the
 transport plus read tools are comparatively small once a token resolves to a
 principal.
+
+### What M1 actually shipped
+
+| File | Role |
+|---|---|
+| `server/src/schema.sql` | `oauth_clients`, `oauth_codes`, `oauth_tokens` (no migration needed — `schema.sql` runs with `IF NOT EXISTS` on every boot, so new *tables* reach existing databases; only new *columns* need a migration entry) |
+| `server/src/lib/oauth.js` | DCR, PKCE codes, token issue/rotate/revoke |
+| `server/src/routes/mcp-oauth.js` | Metadata, `/oauth/*`, the consent screen with the org picker. Separate from the EE-licensed `routes/oauth.js` (SSO *into* OpsCat) — this is core |
+| `server/src/mcp/auth.js` | Bearer → principal; role read from `memberships` per request |
+| `server/src/mcp/http-session.js` | Transport, with the four invariants |
+| `server/src/mcp/tools.js` | 8 read tools, annotated, `outputSchema` on each |
+| `server/src/mcp/server.js` | Scope- and role-gated registration; ~1 KB `instructions` |
+| `server/src/routes/mcp.js` | `/mcp` + `/mcp/llms.txt` |
+| `web/src/App.tsx` | Honours `?next=/oauth/…` after login so the consent flow resumes |
+| `server/e2e-mcp.js` | 32-check end-to-end harness (`node e2e-mcp.js` against a running server) |
+
+Two things worth remembering from the build:
+
+- **`routes/oauth.js` already existed** and is EE-licensed (Google/Microsoft SSO,
+  i.e. signing *into* OpsCat). The MCP authorization server is the opposite
+  direction and is core, so it lives in `routes/mcp-oauth.js`. Nearly overwrote
+  the EE file.
+- **The consent POST cannot send the `x-opscat-csrf` header** a plain HTML form
+  has no way to set. The signed consent ticket is bound to the session id
+  instead, which is what makes the POST CSRF-safe.
 
 ### Non-goals for v1
 

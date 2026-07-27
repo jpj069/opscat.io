@@ -27,6 +27,13 @@ app.use(require('./routes/public'));
 app.use('/v1', require('./routes/heartbeat')); // public ping, token-in-URL auth
 app.use('/v1', require('./routes/ingest'));
 
+// MCP: the OAuth 2.1 authorization server (+ .well-known discovery, which MUST
+// live at the app root) and the Streamable HTTP endpoint. Both carry their own
+// auth — Bearer for /mcp, the browser session for the consent screen — so they
+// mount before the session-guarded /api routers.
+app.use(require('./routes/mcp-oauth'));
+app.use(require('./routes/mcp'));
+
 // IMPORTANT: mount specific /api/* routers BEFORE the broad '/api' ops router,
 // whose requireSession applies to everything under it. Public routes (plans,
 // signup, Google OAuth, the Stripe webhook) must be reachable without a session.
