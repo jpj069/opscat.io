@@ -76,23 +76,31 @@ export function Spark({ data, w = 56, h = 18, color = SEV.low, fill = true, dot 
   );
 }
 
+// value/sub = null → the card renders itself in loading state (same chrome,
+// placeholder where the number goes). Pass the value only once it is known.
 export function KpiCard({ label, value, color, spark, sub }:
-  { label: string; value: string; color: string; spark?: number[]; sub?: string }) {
+  { label: string; value: string | null; color: string; spark?: number[] | null; sub?: string | null }) {
   return (
     <div className="card" style={{ flex: 1, minWidth: 150 }}>
       <div className="micro" style={{ fontSize: 9 }}>{label}</div>
       <div className="row" style={{ justifyContent: 'space-between', marginTop: 6 }}>
-        <span className="mono" style={{ fontSize: 26, fontWeight: 700, color }}>{value}</span>
+        {value == null
+          ? <Skeleton w={76} h={26} radius={4} />
+          : <span className="mono" style={{ fontSize: 26, fontWeight: 700, color }}>{value}</span>}
         {spark && <Spark data={spark} w={64} h={24} color={color} />}
       </div>
-      {sub && <div style={{ fontSize: 10, color: 'var(--text2)', marginTop: 4 }}>{sub}</div>}
+      {/* sub === null means "a sub-line is coming" → reserve it, no layout jump */}
+      {sub === null
+        ? <Skeleton w={54} h={9} style={{ marginTop: 7 }} />
+        : sub && <div style={{ fontSize: 10, color: 'var(--text2)', marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
 
-// Stacked area chart (event volume by severity band).
+// Stacked area chart (event volume by severity band). data == null → loading.
 export function StackedArea({ data, w = 460, h = 140 }:
-  { data: { d: string; c: number; h: number; m: number; l: number }[]; w?: number; h?: number }) {
+  { data: { d: string; c: number; h: number; m: number; l: number }[] | null; w?: number; h?: number }) {
+  if (data == null) return <ChartSkeleton h={h} />;
   if (!data.length) return <div style={{ color: 'var(--text3)', fontSize: 11 }}>no data yet</div>;
   const keys: ('l' | 'm' | 'h' | 'c')[] = ['l', 'm', 'h', 'c'];
   const colors = { l: SEV.low, m: SEV.medium, h: SEV.high, c: SEV.critical };
@@ -120,8 +128,11 @@ export function StackedArea({ data, w = 460, h = 140 }:
   );
 }
 
+// points == null → loading (an empty array stays the honest "no data yet").
 export function LineChart({ points, labels, color = SEV.green, w = 460, h = 140, fmt }:
-  { points: number[]; labels?: string[]; color?: string; w?: number; h?: number; fmt?: (v: number) => string }) {
+  { points: number[] | null; labels?: string[]; color?: string; w?: number; h?: number;
+    fmt?: (v: number) => string }) {
+  if (points == null) return <ChartSkeleton h={h} />;
   if (!points.length) return <div style={{ color: 'var(--text3)', fontSize: 11 }}>no data yet</div>;
   const max = Math.max(...points, 1); const min = Math.min(...points, 0);
   const range = max - min || 1;
@@ -145,7 +156,8 @@ export function LineChart({ points, labels, color = SEV.green, w = 460, h = 140,
 }
 
 export function HBars({ items, color = SEV.low, max: maxOverride }:
-  { items: { n: string; v: number; c?: string }[]; color?: string; max?: number }) {
+  { items: { n: string; v: number; c?: string }[] | null; color?: string; max?: number }) {
+  if (items == null) return <BarsSkeleton />;
   const max = maxOverride ?? Math.max(...items.map((i) => i.v), 1);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -198,6 +210,22 @@ export function TableScroll({ minWidth = 620, children }:
   );
 }
 
+// Design-system standard: THE page header. Title left, actions right, and it
+// WRAPS — a toolbar that cannot wrap pushes the whole page sideways on phones
+// (a `<select>` fed by user data is the usual culprit; see tokens.css). Use this
+// instead of hand-rolling `.row` + `.page-title` per page.
+export function PageHeader({ title, children }:
+  { title: string; children?: React.ReactNode }) {
+  return (
+    <div className="row row-wrap" style={{ justifyContent: 'space-between', gap: 10 }}>
+      <h1 className="page-title">{title}</h1>
+      {children && (
+        <div className="row row-wrap" style={{ gap: 10, minWidth: 0 }}>{children}</div>
+      )}
+    </div>
+  );
+}
+
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
@@ -210,4 +238,160 @@ export function Field({ label, children }: { label: string; children: React.Reac
 export function GlowDot({ color, size = 8 }: { color: string; size?: number }) {
   return <span style={{ width: size, height: size, borderRadius: '50%', background: color,
     boxShadow: `0 0 6px ${color}`, display: 'inline-block', flexShrink: 0 }} />;
+}
+
+// ------------------------------------------------------------------ skeletons
+//
+// Design-system rule: a skeleton is DERIVED, never hand-drawn. Each component
+// below either reuses the very layout the loaded UI uses (the same
+// `gridTemplateColumns` constant, the same `.tbl-row`/`.card` chrome, the same
+// `Row` wrapper) or is deliberately field-agnostic (bars, lines, cards). That
+// way a column added to a table or a field added to a form carries over on its
+// own — there is no second copy of the layout to keep in sync.
+//
+// Convention across the app: `null` data = still loading, `[]` = loaded & empty.
+
+export function Skeleton({ w = '100%', h = 10, radius = 3, style }:
+  { w?: number | string; h?: number | string; radius?: number; style?: React.CSSProperties }) {
+  return <span className="skel" aria-hidden="true"
+    style={{ width: w, height: h, borderRadius: radius, ...style }} />;
+}
+
+// Marks a region as busy for screen readers — visual placeholders are aria-hidden.
+// Exported so page-local skeletons (built from that page's own row/field
+// components) get the same semantics without re-writing the label.
+export function Busy({ children }: { children: React.ReactNode }) {
+  return (
+    <div role="status" aria-busy="true">
+      <span className="sr-only">Loading…</span>
+      {children}
+    </div>
+  );
+}
+
+// Stable pseudo-random in [0,1) — placeholder widths vary per cell but never
+// re-shuffle between renders (Math.random would flicker on every re-render).
+function jitter(a: number, b: number): number {
+  const n = Math.sin((a + 1) * 12.9898 + (b + 1) * 78.233) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+// Splits a grid-template-columns string into its tracks, respecting
+// minmax()/clamp() parentheses so `minmax(150px,1.3fr)` stays one track.
+function gridTracks(template: string): string[] {
+  const out: string[] = [];
+  let depth = 0; let cur = '';
+  for (const ch of template.trim()) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    if (/\s/.test(ch) && depth === 0) { if (cur) { out.push(cur); cur = ''; } continue; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// THE table placeholder: pass the same `gridTemplateColumns` string the head and
+// the rows use, and the skeleton inherits the column count, widths and row
+// metrics automatically. `flush` drops the horizontal row padding for tables
+// that sit inside an already-padded card; `dense` matches log-density rows.
+export function TableSkeleton({ cols, rows = 5, flush = false, dense = false }:
+  { cols: string; rows?: number; flush?: boolean; dense?: boolean }) {
+  const tracks = gridTracks(cols);
+  const py = dense ? 'var(--log-py)' : 'var(--row-py)';
+  return (
+    <Busy>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className="tbl-row" style={{ gridTemplateColumns: cols,
+          padding: `${py} ${flush ? '0' : '16px'}` }}>
+          {tracks.map((_t, c) => (
+            // percentage width fits any track type (px, fr, minmax) — the grid
+            // cell already carries the real column width
+            <Skeleton key={c} w={`${Math.round((0.48 + jitter(r, c) * 0.38) * 100)}%`} />
+          ))}
+        </div>
+      ))}
+    </Busy>
+  );
+}
+
+// Stacked text lines — for prose/detail blocks with no fixed field layout.
+export function TextSkeleton({ lines = 3, w = '100%' }: { lines?: number; w?: number | string }) {
+  return (
+    <Busy>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {Array.from({ length: lines }, (_, i) => (
+          <Skeleton key={i} w={i === lines - 1 ? '55%' : w} />
+        ))}
+      </div>
+    </Busy>
+  );
+}
+
+// Chart placeholder — occupies exactly the height the chart will take, so the
+// card does not resize when the data lands.
+export function ChartSkeleton({ h = 140, bars = 14 }: { h?: number; bars?: number }) {
+  return (
+    <Busy>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: h, padding: '10px 0 16px' }}>
+        {Array.from({ length: bars }, (_, i) => (
+          <Skeleton key={i} w="100%" h={`${Math.round((0.25 + jitter(i, 7) * 0.7) * 100)}%`} radius={2}
+            style={{ flex: 1 }} />
+        ))}
+      </div>
+    </Busy>
+  );
+}
+
+// Horizontal bar list — same three-part row layout HBars renders (label, bar, value).
+export function BarsSkeleton({ rows = 5, labelW = 130 }: { rows?: number; labelW?: number }) {
+  return (
+    <Busy>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="row">
+            <Skeleton w={Math.round(labelW * (0.5 + jitter(i, 3) * 0.45))} />
+            <div style={{ flex: 1 }}><Skeleton h={8} radius={4} /></div>
+            <Skeleton w={24} />
+          </div>
+        ))}
+      </div>
+    </Busy>
+  );
+}
+
+// Generic stacked list (feed/master list items) — field-agnostic on purpose.
+export function ListSkeleton({ rows = 4, lines = 2, divided = true }:
+  { rows?: number; lines?: number; divided?: boolean }) {
+  return (
+    <Busy>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} style={{ display: 'flex', flexDirection: 'column', gap: 7,
+          padding: '11px 14px', borderBottom: divided ? '1px solid var(--bg3)' : undefined }}>
+          {Array.from({ length: lines }, (_, l) => (
+            <Skeleton key={l} w={`${Math.round((0.4 + jitter(r, l) * 0.5) * 100)}%`} />
+          ))}
+        </div>
+      ))}
+    </Busy>
+  );
+}
+
+// Grid of card placeholders (tile rows that are not KPI cards).
+export function CardsSkeleton({ count = 4, w = 150, h = 104 }:
+  { count?: number; w?: number; h?: number }) {
+  return (
+    <Busy>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {Array.from({ length: count }, (_, i) => (
+          <div key={i} style={{ width: w, height: h, background: 'var(--bg2)', borderRadius: 8,
+            border: '1px solid var(--bg3)', padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
+            <Skeleton w="60%" />
+            <Skeleton w="45%" h={20} radius={4} />
+            <Skeleton w="80%" h={8} />
+          </div>
+        ))}
+      </div>
+    </Busy>
+  );
 }

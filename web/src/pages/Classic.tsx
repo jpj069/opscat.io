@@ -96,7 +96,8 @@ export default function Classic() {
       <div style={{ overflow: 'auto', flex: 1, lineHeight: 1.28 }}>
         {logs.length === 0 && (
           <div style={{ padding: 8, color: pal.text, opacity: 0.6 }}>
-            {ql ? 'no matching log lines' : 'waiting for log stream…'}
+            {app.logsLoading ? 'fetching log history…'
+              : ql ? 'no matching log lines' : 'waiting for log stream…'}
           </div>
         )}
         {logs.map((l, i) => (
@@ -124,7 +125,9 @@ export default function Classic() {
       <div style={{ overflow: 'auto', flex: 1, lineHeight: 1.42 }}>
         {events.length === 0 && (
           <div style={{ padding: 8, color: pal.text, opacity: 0.6 }}>
-            {ql ? 'no matching events' : 'no active events — all quiet'}
+            {/* the terminal view keeps its text-only idiom — no shimmer here */}
+            {app.eventsLoading ? 'fetching events…'
+              : ql ? 'no matching events' : 'no active events — all quiet'}
           </div>
         )}
         {events.map((e) => {
@@ -150,23 +153,22 @@ export default function Classic() {
   );
 
   return (
-    <div style={{
+    <div className={full ? undefined : 'page-console'} style={{
       position: full ? 'fixed' : 'relative', inset: full ? 0 : undefined,
-      zIndex: full ? 9999 : undefined, height: '100%', width: full ? '100%' : undefined,
+      // full-screen: fixed + height 100% = the viewport. Otherwise the height comes
+      // from .page-console, which phones override to a svh window (tokens.css).
+      zIndex: full ? 9999 : undefined, height: full ? '100%' : undefined,
+      width: full ? '100%' : undefined,
       background: pal.bg, color: pal.text, fontFamily: MONO, fontSize: 12,
       display: 'flex', flexDirection: 'column',
     }}>
-      {/* in-screen topbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+      {/* in-screen topbar — wraps instead of pushing the pane sideways on phones */}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '6px 8px',
         borderBottom: `1px solid ${pal.head}`, flexShrink: 0 }}>
         <span style={{ color: pal.logs, textDecoration: 'underline', cursor: 'pointer' }}>cl</span>
         <span style={{ color: pal.logs, textDecoration: 'underline', cursor: 'pointer' }}>ed</span>
-        <select value={app.settings.backend_label || 'backend'} onChange={() => { /* single option */ }}
-          style={termInput}>
-          <option>{app.settings.backend_label || 'backend'}</option>
-        </select>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search…"
-          style={{ ...termInput, flex: 1, maxWidth: 320 }} />
+          style={{ ...termInput, flex: '1 1 140px', maxWidth: 320 }} />
         <div style={{ flex: 1 }} />
         <button onClick={() => setOrient('horizontal')} style={txtBtn(orient === 'horizontal')} title="stacked">[H]</button>
         <button onClick={() => setOrient('vertical')} style={txtBtn(orient === 'vertical')} title="side-by-side">[V]</button>

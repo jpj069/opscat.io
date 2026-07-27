@@ -183,13 +183,150 @@ Current: 1 VPS ≈ everything. The seams are already cut so each step below is i
    failover, floating IP / DNS failover, remote probes already independent by design.
    Status page can be hosted separately (static export) so it survives platform outages.
 
+## Frontend mobile layout
+
+The app shell is a drawer + single column below 720px (`.shell-rail`, `tokens.css`).
+The recurring failure mode is not the shell but **toolbars that cannot wrap**: a flex
+item's `min-width: auto` refuses to shrink below its content, and a `<select>` takes
+the width of its longest option — so one long check target or org name pushes a whole
+page sideways. The invariants:
+
+- `PageHeader` (`web/src/ui.tsx`) is THE page header: title + actions, wrapping. Other
+  toolbars use `.row row-wrap`; plain `.row` deliberately stays nowrap because table
+  cells use it for avatar/label pairs.
+- Form controls carry `min-width: 0; max-width: 100%` globally — they always shrink.
+  Give a control an explicit width/flex when it should be bigger.
+- Horizontal scrolling happens ONLY in `.tbl-scroll` (`TableScroll`), never on `.card`
+  or `.page`: `overflow-x` forces `overflow-y: auto` too, and a flex child that hides
+  overflow can collapse below its content height.
+- Known exception: the Classic terminal view keeps its fixed character grid and is ~2px
+  wider than a 390px viewport. Making it genuinely phone-friendly means a pan
+  container (min-width + one horizontal scroller) — a product decision, not done.
+
+## Frontend scroll architecture (why phones scroll the document)
+
+Desktop is a classic app shell: `html, body, #root` are exactly window-height, the shell
+owns the viewport (`.shell`) and the page scrolls **inside** it (`.page`). On phones that
+same structure costs real screen space, so **below 720px the DOCUMENT scrolls instead**.
+
+iOS Safari collapses its bottom toolbar into the small floating pill **only when the root
+scroller moves**. With an inner scroller it never sees a page-scroll gesture, so the
+toolbar stays fully expanded forever — and because `height: 100%` means the *visible*
+area, the page visibly ends at it. Measured on an iPhone 16 / iOS 18.7 (Safari 26.5.2)
+via `100svh` vs `100lvh`: **695 px instead of 735 px**, i.e. 40 px permanently blocked.
+The marketing site never had the problem because it has no `height: 100%` at all.
+
+The mobile block in `tokens.css` therefore drops `height: 100%` from `html, body, #root`
+and `.shell`, and makes `.shell-top` `position: sticky`. Two consequences worth knowing:
+
+- **Never put `overflow-x: hidden` on `.page`.** Next to `overflow-y: visible` CSS
+  computes it to `auto`, which turns `.page` back into a scroll container and silently
+  undoes all of this. Sideways overflow is prevented structurally (see § Frontend mobile
+  layout), not with a clamp.
+- **Layout that phones must override belongs in a class, not inline.** A media query
+  cannot beat an inline style — hence `.shell`, `.shell-main`, `.shell-top`,
+  `.shell-body`, `.screen-center` instead of the inline styles App.tsx used to carry.
+
+Pages come in three shapes:
+
+| Class | Desktop | Phone |
+|---|---|---|
+| `.page` | fills, scrolls inside | flows into the document |
+| `.page-fill` + `.fill-scroll` | fills, inner scroller (Logs) | flows into the document |
+| `.page-console` | fills, inner scroller | keeps its own `calc(100svh - 48px)` window |
+
+`.page-console` is for surfaces that have no meaning as an endlessly growing document —
+the Classic terminal, the Monitor split view, the Incidents master/detail. They keep their
+own window on phones, and Safari's toolbar consequently stays expanded **there** — an
+accepted trade for those three. `svh` (not `dvh`/`vh`) so nothing is ever cut off behind
+the toolbar.
+
+**Known accepted defect:** pulling past the top rubber-bands the document, and the strip
+exposed above it takes the **`body`** background, not the topbar's — so a fast upward
+swipe flashes a hairline of page colour. Verified on the device that this is not the
+sticky header (it also happens with a static header), not fixable from inside the document
+(a pseudo-element above the header paints in the wrong place), and not fixable via
+`html { background: … }` (WebKit does not use it there — the flash stayed at the top while
+the bottom went clean). The only cures are `overscroll-behavior-y: none`, which also
+removes pull-to-refresh, or giving the topbar the page background, which costs its
+contrast — a shadow cannot substitute in dark mode. Left as is deliberately.
+
+## Frontend dropdowns (Select / MultiSelect)
+
+`web/src/Select.tsx` is THE dropdown; the native `<select>` stays only where the option
+list is short, static and part of a plain form. Three problems drove it: a native select
+is sized by its **longest option** (data dictates layout width), it cannot be searched or
+hold multiple values, and on a phone iOS replaces it with its own wheel.
+
+What it must not lose is the one thing the native control does well: it never triggers
+the iOS focus-zoom. The component keeps that by never putting a sub-16px text field on
+screen — the trigger is a button (buttons cannot be typed into, so iOS never zooms) and
+the only real input, the search box, is a full 16px inside the panel.
+
+- **Phone (≤720px): bottom sheet, search in the FOOTER**, options above it. Search at the
+  top vanishes behind the keyboard the instant you type: `position: fixed` anchors to the
+  *layout* viewport and iOS does not shrink that for the keyboard. Hence `--kb`, measured
+  from `visualViewport` (`innerHeight − vv.height − vv.offsetTop`) and re-measured after
+  the keyboard animation. Verified on a real iPhone before the component was written.
+  Option rows are 44px; swiping the sheet down closes it (the grab handle promises that
+  gesture, so it has to work).
+- **Desktop: an anchored popover in a portal** — `position: fixed` from the trigger's
+  rect, so no clipping ancestor (`.tbl-scroll`, a card) can cut it off; flips upward when
+  there is no room below.
+- **Search appears at ≥13 options** (`searchable="auto"`). 13, not 10, so a month or
+  hour picker does not get a search box it does not need. Override with
+  `searchable={true|false}`.
+- **MultiSelect** shows pills in the trigger up to 5 selections; beyond that the trigger
+  goes compact (one pill + "+N more") and the full set lives in an overview that opens
+  **upward** over the trigger — an overview that pushed the form down would move the very
+  field the user is looking at. Two pills already need three lines at 390px, which is why
+  "compact" means one.
+- **a11y:** trigger is `role="combobox"` + `aria-expanded`, panel is `role="listbox"` with
+  `aria-selected` / `aria-activedescendant`; arrows move the highlight, Enter picks,
+  Escape closes (handler on `document` — after a drag the focus is outside the panel),
+  and focus returns to the trigger on close.
+
+## Frontend loading states (skeletons)
+
+Every async surface in the UI renders a **skeleton placeholder**, never a "loading…"
+label. The rule that keeps those placeholders from going stale: **a skeleton is
+derived, never hand-drawn.**
+
+- **Data convention:** `null` = still loading, `[]` = loaded and empty, values = loaded.
+  Fetch state therefore needs no extra boolean; a page keeps its `useState<T[] | null>`.
+  Live SSE data has no null phase, so `state.tsx` exposes `eventsLoading` / `logsLoading`
+  for the first fetch per org (Monitor/Classic/Dashboard read them).
+- **Tables:** `<TableSkeleton cols={THE_SAME_GRID_CONST} />` takes the exact
+  `gridTemplateColumns` string the head and rows use and reuses `.tbl-row`, so column
+  count, widths, row height and borders come from the real layout. Add or reorder a
+  column → the placeholder follows on its own. Consequence: every table keeps its grid
+  template in **one** constant (`COLS`, `RULE_COLS`, `ORG_GRID`, …) — never inline it
+  twice.
+- **Self-placeholdering atoms:** `KpiCard`, `StackedArea`, `LineChart` and `HBars` render
+  their own placeholder when handed `null` (chart placeholders keep the chart's height,
+  so nothing jumps when data lands). Pages pass `ana?.volume ?? null` and are done —
+  Dashboard/Analytics render their real structure from the first paint instead of
+  swapping in a separate loading screen.
+- **Page-local shapes** compose the page's own row component (e.g. Settings'
+  `FormSkeleton` builds on the real `Row`) and wrap it in `<Busy>` for the
+  `role="status"` + screen-reader label.
+- **Generic shapes** (`Skeleton`, `TextSkeleton`, `ListSkeleton`, `CardsSkeleton`,
+  `BarsSkeleton`, `ChartSkeleton`) are deliberately field-agnostic — they stand in for
+  content without claiming to mirror specific fields, so they cannot drift either.
+- **Motion:** one shimmer defined once (`.skel` in `tokens.css`), disabled under
+  `prefers-reduced-motion`. The Classic terminal view keeps its text-only idiom.
+- **Guard:** `web/scripts/check-loading-states.mjs` (runs in `npm run build`, therefore
+  in the Docker build and the deploy) fails on any new ad-hoc `loading…` text outside
+  `ui.tsx`. A deliberate text-only case opts out with a `skeleton-exempt` comment.
+
 ## Repository layout
 
 ```
 server/    Express API + engines (server/src/ee/** = Enterprise Edition)
 web/       React + Vite UI (built into server/public at docker build; UI icons come
            from lucide-react, brand marks are inline SVGs in web/src/icons.tsx —
-           no unicode-glyph icons, no emojis)
+           no unicode-glyph icons, no emojis; loading states = skeletons from
+           web/src/ui.tsx, guarded by web/scripts/check-loading-states.mjs)
 sdk/js/    @opscat/sdk — dependency-free log SDK (Node + browser)
 agent/     opscat-agent.js — dependency-free server agent (+ --probe mode)
 marketing/ static marketing site served at opscat.io/ (private repo only)

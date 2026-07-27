@@ -3,7 +3,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
-import { LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll } from '../ui';
+import {
+  LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, CardsSkeleton, BarsSkeleton, Skeleton, PageHeader,
+} from '../ui';
+import { Select } from '../Select';
 import type { SynthLocation, SynthCheck, SynthResult, SynthSeriesPoint } from '../types';
 
 const CHECK_GRID = '110px 1fr 80px 90px 90px 120px';
@@ -24,8 +27,9 @@ export default function Synthetics() {
   const [locations, setLocations] = useState<SynthLocation[] | null>(null);
   const [checks, setChecks] = useState<SynthCheck[] | null>(null);
   const [results, setResults] = useState<SynthResult[]>([]);
-  const [series, setSeries] = useState<SynthSeriesPoint[]>([]);
-  const [route, setRoute] = useState<Hop[]>([]);
+  // null = still fetching for the current selection, [] = fetched, nothing to show
+  const [series, setSeries] = useState<SynthSeriesPoint[] | null>(null);
+  const [route, setRoute] = useState<Hop[] | null>(null);
   const [selCheck, setSelCheck] = useState<number | null>(null);
   const [selLoc, setSelLoc] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
@@ -57,20 +61,28 @@ export default function Synthetics() {
     if (locations && selLoc == null && locations.length) setSelLoc(locations[0].id);
   }, [locations]);
 
-  // series for selected check × location
+  // a new selection means the panels below are loading again — the 30s `tick`
+  // refresh deliberately does NOT reset them, so it never flashes a skeleton
+  useEffect(() => { setSeries(null); }, [selCheck, selLoc]);
+  useEffect(() => { setRoute(null); }, [selLoc]);
+
+  // series for selected check × location — stays `null` (loading) until checks and
+  // locations are in and a selection could be made, then [] if there is nothing
   useEffect(() => {
+    if (checks === null || locations === null) return;
     if (selCheck == null || selLoc == null) { setSeries([]); return; }
     api.get<SynthSeriesPoint[]>(`/api/synthetics/results/series?checkId=${selCheck}&locationId=${selLoc}&hours=24`)
       .then(setSeries).catch(() => setSeries([]));
-  }, [selCheck, selLoc, tick]);
+  }, [checks, locations, selCheck, selLoc, tick]);
 
   // traceroute for selected location
   useEffect(() => {
+    if (locations === null) return;
     if (selLoc == null) { setRoute([]); return; }
     api.get<any>(`/api/synthetics/results/route?locationId=${selLoc}`)
       .then((d) => setRoute(d?.hops ?? d?.meta?.hops ?? (Array.isArray(d) ? d : [])))
       .catch(() => setRoute([]));
-  }, [selLoc, tick]);
+  }, [locations, selLoc, tick]);
 
   const runChecks = async () => {
     setRunning(true);
@@ -102,38 +114,35 @@ export default function Synthetics() {
     return undefined;
   };
 
-  const seriesPts = series.filter((s) => s.latencyMs != null);
-  const seriesVals = seriesPts.map((s) => s.latencyMs as number);
-  const step = Math.max(1, Math.ceil(seriesPts.length / 5));
-  const chartLabels = seriesPts.map((s, i) =>
+  const seriesPts = series?.filter((s) => s.latencyMs != null) ?? null;
+  const seriesVals = seriesPts?.map((s) => s.latencyMs as number) ?? null;
+  const sparkVals = seriesVals ?? [];
+  const step = Math.max(1, Math.ceil((seriesPts?.length ?? 0) / 5));
+  const chartLabels = seriesPts?.map((s, i) =>
     (i % step === 0 ? `${String(new Date(s.ts).getHours()).padStart(2, '0')}:00` : ''));
 
-  const maxHop = Math.max(...route.map((h) => h.ms ?? 0), 1);
+  const maxHop = Math.max(...(route ?? []).map((h) => h.ms ?? 0), 1);
 
   return (
     <div className="page">
-      {/* header */}
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Synthetics</h1>
-        <div className="row" style={{ gap: 10 }}>
-          <select value={selCheck ?? ''} onChange={(e) => setSelCheck(Number(e.target.value))}
-            style={{ fontSize: 11 }}>
-            {enabledChecks.length === 0 && <option value="">no enabled checks</option>}
-            {enabledChecks.map((c) => <option key={c.id} value={c.id}>{c.type} {c.target}</option>)}
-          </select>
-          {canWrite && (
-            <button className="btn btn-primary" onClick={runChecks} disabled={running}>
-              {running ? 'running…' : 'Run checks now'}
-            </button>
-          )}
-        </div>
-      </div>
+      <PageHeader title="Synthetics">
+        {/* check targets are user data: unsearchable, and a native select would be
+            sized by its longest target. Select caps its own width instead. */}
+        <Select title="Check" placeholder="no enabled checks" aria-label="Check"
+          style={{ flex: 1, maxWidth: 260 }}
+          value={selCheck === null ? '' : String(selCheck)}
+          onChange={(v) => setSelCheck(Number(v))}
+          options={enabledChecks.map((c) => ({ value: String(c.id), label: `${c.type} ${c.target}` }))} />
+        {canWrite && (
+          <button className="btn btn-primary" onClick={runChecks} disabled={running}>
+            {running ? 'running…' : 'Run checks now'}
+          </button>
+        )}
+      </PageHeader>
 
       {/* location cards */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-        {locations === null && (
-          <div className="mono" style={{ color: 'var(--text3)', fontSize: 11 }}>loading…</div>
-        )}
+        {locations === null && <CardsSkeleton count={4} w={150} h={116} />}
         {locations && locations.length === 0 && (
           <div style={{ color: 'var(--text3)', fontSize: 11 }}>No probe locations configured.</div>
         )}
@@ -157,7 +166,7 @@ export default function Synthetics() {
               <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: pingColor, margin: '8px 0 2px' }}>
                 {ms == null ? '—' : <>{Math.round(ms)}<span style={{ fontSize: 11, color: 'var(--text3)' }}> ms</span></>}
               </div>
-              {active && seriesVals.length >= 2 && <Spark data={seriesVals} w={64} h={20} color={SEV.cyan} />}
+              {active && sparkVals.length >= 2 && <Spark data={sparkVals} w={64} h={20} color={SEV.cyan} />}
               <div className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginTop: 4 }}>
                 jitter {jitter != null ? jitter : '—'} · loss {loss}%
               </div>
@@ -174,13 +183,22 @@ export default function Synthetics() {
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
         <div className="card" style={{ flex: 1, minWidth: 320 }}>
           <div className="card-title">
-            Latency 24h — {selectedCheck ? selectedCheck.target : '—'} from {selectedLoc ? selectedLoc.city : '—'}
+            {/* one text node when loaded — .card-title is a flex row, so separate
+                children would lose the spaces between the words */}
+            {checks === null || locations === null ? (
+              <>Latency 24h <Skeleton w={150} h={9} /></>
+            ) : (
+              `Latency 24h — ${selectedCheck ? selectedCheck.target : '—'} `
+              + `from ${selectedLoc ? selectedLoc.city : '—'}`
+            )}
           </div>
           <LineChart points={seriesVals} labels={chartLabels} color={SEV.cyan} fmt={(v) => `${Math.round(v)}ms`} />
         </div>
         <div className="card" style={{ flex: 1, minWidth: 320 }}>
           <div className="card-title">Route</div>
-          {route.length === 0
+          {route === null
+            ? <BarsSkeleton rows={5} labelW={120} />
+            : route.length === 0
             ? <div style={{ color: 'var(--text3)', fontSize: 11 }}>no route data yet</div>
             : route.map((h, i) => {
               const last = i === route.length - 1;
@@ -212,9 +230,7 @@ export default function Synthetics() {
           <span>Status</span>
           <span style={{ textAlign: 'right' }}>Actions</span>
         </div>
-        {checks === null && (
-          <div className="mono" style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>loading…</div>
-        )}
+        {checks === null && <TableSkeleton cols={CHECK_GRID} rows={4} />}
         {checks && checks.length === 0 && (
           <div style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>No checks configured yet.</div>
         )}

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field, TableScroll } from '../ui';
+import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
 import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
@@ -44,12 +44,11 @@ export default function Rules() {
 
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Alert Rules</h1>
+      <PageHeader title="Alert Rules">
         {canEdit && (
           <button className="btn btn-primary" onClick={() => setEditing('new')}>+ New Rule</button>
         )}
-      </div>
+      </PageHeader>
 
       <div className="card" style={{ padding: 0 }}>
         <TableScroll minWidth={700}>
@@ -58,7 +57,7 @@ export default function Rules() {
           <span>Cooldown</span><span>On</span><span />
         </div>
         {!rules ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+          <TableSkeleton cols={RULE_COLS} rows={4} />
         ) : rules.length === 0 ? (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             no rules yet</div>
@@ -91,7 +90,7 @@ export default function Rules() {
           <span>Time</span><span>Rule</span><span>Event</span><span>Channel</span><span>Status</span>
         </div>
         {!notifs ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+          <TableSkeleton cols={NOTIF_COLS} rows={4} />
         ) : notifs.length === 0 ? (
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             no notifications yet</div>

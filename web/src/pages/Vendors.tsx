@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll } from '../ui';
+import { Modal, StatusPill, Field, TableScroll, TableSkeleton } from '../ui';
 import { RefreshCwIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
 
@@ -75,7 +75,7 @@ export default function Vendors() {
           <span>Vendor</span><span>Status</span><span>Incidents</span><span>Feed</span><span>Checked</span><span />
         </div>
         {!rows ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+          <TableSkeleton cols={COLS} rows={6} />
         ) : rows.length === 0 ? (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             no vendors monitored yet — hit “+ Add vendor” to watch the status pages of the services you depend on</div>

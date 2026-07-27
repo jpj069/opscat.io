@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll } from '../ui';
+import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
 const TABS = ['all', 'open', 'assigned', 'closed'] as const;
@@ -35,7 +36,7 @@ export default function Cases() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Cases</h1>
+      <PageHeader title="Cases" />
 
       <div className="row" style={{ gap: 4, borderBottom: '1px solid var(--bg3)' }}>
         {TABS.map((t) => (
@@ -58,7 +59,7 @@ export default function Cases() {
           <span style={{ textAlign: 'right' }}>Duration</span>
         </div>
         {!cases ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+          <TableSkeleton cols={COLS} rows={6} />
         ) : rows.length === 0 ? (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             {tab === 'all' ? 'no cases yet' : `no ${tab} cases`}
@@ -132,10 +133,12 @@ function CaseEditor({ c, users, onClose, onSaved }:
         </select>
       </Field>
       <Field label="Assignee">
-        <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-          <option value="">— unassigned</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </select>
+        {/* the team list is data — it can grow past the point where scrolling a
+            native option list is reasonable, so this one searches itself */}
+        <Select title="Assignee" placeholder="— unassigned" aria-label="Assignee"
+          value={assignee} onChange={setAssignee}
+          options={[{ value: '', label: '— unassigned' },
+            ...users.map((u) => ({ value: String(u.id), label: u.name }))]} />
       </Field>
       <Field label="Root Cause">
         <input value={rootCause} onChange={(e) => setRootCause(e.target.value)}

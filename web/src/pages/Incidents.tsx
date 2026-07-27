@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
-import { SevBadge, StatusPill, Modal, Field } from '../ui';
+import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton } from '../ui';
 import type { Incident } from '../types';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
@@ -47,7 +47,7 @@ export default function Incidents() {
   );
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+    <div className="page-console" style={{ display: 'flex', minHeight: 0 }}>
       {/* ---------------------------------------------------------- list */}
       <div style={{ width: 340, flexShrink: 0, borderRight: '1px solid var(--bg3)',
         display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -57,9 +57,7 @@ export default function Incidents() {
           <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Incident</button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {incidents === null && (
-            <div className="mono" style={{ padding: 24, color: 'var(--text3)', fontSize: 11 }}>loading…</div>
-          )}
+          {incidents === null && <ListSkeleton rows={5} lines={3} />}
           {incidents && incidents.length === 0 && (
             <div style={{ padding: 24, color: 'var(--text3)', fontSize: 11 }}>
               No incidents yet — declare one with “+ New Incident”.
@@ -90,7 +88,9 @@ export default function Incidents() {
 
       {/* ---------------------------------------------------------- detail */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', minWidth: 0 }}>
-        {!selected
+        {incidents === null
+          ? <TextSkeleton lines={6} />
+          : !selected
           ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>Select an incident to view its timeline and RCA.</div>
           : <IncidentDetail key={selected.id} incident={selected} reload={load} />}
       </div>

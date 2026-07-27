@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha, relTime } from '../format';
-import { Toggle, GlowDot, Modal, Field, TableScroll } from '../ui';
+import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
 const GRID = '20px 1fr 110px 150px 260px 70px';
@@ -71,19 +71,15 @@ export default function StatusPageAdmin() {
 
   return (
     <div className="page">
-      {/* header */}
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Status Page</h1>
-        <div className="row" style={{ gap: 16 }}>
-          {isAdmin && (
-            <span className="row" style={{ gap: 8 }}>
-              <Toggle on={published} onClick={togglePublish} />
-              <span className="micro" style={{ fontSize: 9 }}>{published ? 'Published' : 'Unpublished'}</span>
-            </span>
-          )}
-          <a className="btn" href="/status" target="_blank" rel="noreferrer">View public page ↗</a>
-        </div>
-      </div>
+      <PageHeader title="Status Page">
+        {isAdmin && (
+          <span className="row" style={{ gap: 8 }}>
+            <Toggle on={published} onClick={togglePublish} />
+            <span className="micro" style={{ fontSize: 9 }}>{published ? 'Published' : 'Unpublished'}</span>
+          </span>
+        )}
+        <a className="btn" href="/status" target="_blank" rel="noreferrer">View public page ↗</a>
+      </PageHeader>
 
       {/* overall banner */}
       <div className="card" style={{ borderColor: alpha(overallColor, 0.4), background: alpha(overallColor, 0.06) }}>
@@ -108,9 +104,7 @@ export default function StatusPageAdmin() {
           <span>45-day uptime</span>
           <span style={{ textAlign: 'right' }}>Uptime</span>
         </div>
-        {components === null && (
-          <div className="mono" style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>loading…</div>
-        )}
+        {components === null && <TableSkeleton cols={GRID} rows={5} />}
         {components && components.length === 0 && (
           <div style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>No components yet.</div>
         )}

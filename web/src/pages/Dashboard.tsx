@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, fmtDuration } from '../format';
-import { Avatar, KpiCard, StackedArea, LineChart, HBars } from '../ui';
+import { Avatar, KpiCard, StackedArea, LineChart, HBars, Skeleton, BarsSkeleton, PageHeader } from '../ui';
 import type { DashboardData, AnalyticsData } from '../types';
 
 const BANDS: Record<'critical' | 'high' | 'medium' | 'low', [number, number]> = {
@@ -30,36 +30,31 @@ export default function Dashboard() {
     return { k, count, color: SEV[k], weight: WEIGHTS[k] };
   }).filter((b) => b.count > 0), [app.events]);
 
-  if (!dash || !ana) {
-    return (
-      <div className="page">
-        <h1 className="page-title">Dashboard</h1>
-        <div style={{ color: 'var(--text3)', fontSize: 12 }}>loading…</div>
-      </div>
-    );
-  }
-
-  const maxCases = Math.max(...dash.casesByAnalyst.map((a) => a.count), 1);
-  const mttrPoints = ana.mttrDaily.map((m) => m.v);
-  const mttrLabels = ana.mttrDaily.map((m) => m.d.slice(5));
+  // The page always renders its real structure — every card below feeds its own
+  // placeholder from `null` data, so the skeleton IS the layout and cannot drift.
+  const maxCases = Math.max(...(dash?.casesByAnalyst ?? []).map((a) => a.count), 1);
+  const mttrPoints = ana?.mttrDaily.map((m) => m.v) ?? null;
+  const mttrLabels = ana?.mttrDaily.map((m) => m.d.slice(5));
 
   return (
     <div className="page">
-      <h1 className="page-title">Dashboard</h1>
+      <PageHeader title="Dashboard" />
 
       {/* KPI row */}
       <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-        <KpiCard label="ACTIVE CRITICAL" value={String(dash.sevCounts.critical)} color={SEV.critical}
-          spark={ana.volume.map((v) => v.c)} />
-        <KpiCard label="OPEN CASES" value={String(dash.openCases)} color={SEV.medium} />
-        <KpiCard label="AVG MTTR 7D" value={fmtDuration(dash.mttrMs)} color={SEV.green} spark={mttrPoints} />
-        <KpiCard label="LOGS 24H" value={String(dash.logs24)} color={SEV.low} />
+        <KpiCard label="ACTIVE CRITICAL" value={dash && String(dash.sevCounts.critical)} color={SEV.critical}
+          spark={ana?.volume.map((v) => v.c)} />
+        <KpiCard label="OPEN CASES" value={dash && String(dash.openCases)} color={SEV.medium} />
+        <KpiCard label="AVG MTTR 7D" value={dash && fmtDuration(dash.mttrMs)} color={SEV.green} spark={mttrPoints} />
+        <KpiCard label="LOGS 24H" value={dash && String(dash.logs24)} color={SEV.low} />
       </div>
 
       {/* Severity Impact Map */}
       <div className="card">
         <div className="card-title">Severity Impact Map</div>
-        {bands.length === 0 ? (
+        {app.eventsLoading ? (
+          <Skeleton h={64} radius={6} />
+        ) : bands.length === 0 ? (
           <div style={{ color: 'var(--text3)', fontSize: 11 }}>no active events — all quiet.</div>
         ) : (
           <>
@@ -89,7 +84,7 @@ export default function Dashboard() {
       <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
         <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Event Volume 7d</div>
-          <StackedArea data={ana.volume} />
+          <StackedArea data={ana?.volume ?? null} />
         </div>
         <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">MTTR 7d</div>
@@ -102,11 +97,13 @@ export default function Dashboard() {
       <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
         <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Top Event Types</div>
-          <HBars items={ana.topTypes} color={SEV.low} />
+          <HBars items={ana?.topTypes ?? null} color={SEV.low} />
         </div>
         <div className="card" style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Cases by Analyst</div>
-          {dash.casesByAnalyst.length === 0 ? (
+          {!dash ? (
+            <BarsSkeleton rows={4} labelW={110} />
+          ) : dash.casesByAnalyst.length === 0 ? (
             <div style={{ color: 'var(--text3)', fontSize: 11 }}>no cases yet</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

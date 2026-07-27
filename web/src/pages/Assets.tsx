@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll } from '../ui';
+import { Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
 import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
@@ -59,10 +59,9 @@ export default function Assets() {
 
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Assets</h1>
+      <PageHeader title="Assets">
         {canEdit && <button className="btn btn-primary" onClick={() => setAdding(true)}>+ Add</button>}
-      </div>
+      </PageHeader>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
         {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'vendor', 'source'] as const).map((k) => (
@@ -80,7 +79,7 @@ export default function Assets() {
           <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
         </div>
         {!shown ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+          <TableSkeleton cols={COLS} rows={6} />
         ) : shown.length === 0 ? (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             nothing monitored yet — hit “+ Add” to bring in your first server, device, app or check</div>

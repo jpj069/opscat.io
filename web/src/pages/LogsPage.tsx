@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { fmtDateTime, logSevColor } from '../format';
+import { TableSkeleton, PageHeader } from '../ui';
 import type { LogRow } from '../types';
 
 const HOURS = [1, 2, 6, 12, 24];
@@ -51,15 +52,15 @@ export default function LogsPage() {
   }, [base, filter]);
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '20px 24px', gap: 14 }}>
-      <h1 className="page-title">Logs</h1>
+    <div className="page-fill" style={{ padding: '20px 24px', gap: 14 }}>
+      <PageHeader title="Logs" />
 
-      <div className="row" style={{ gap: 10 }}>
+      <div className="row row-wrap" style={{ gap: 10 }}>
         <select value={hours} onChange={(e) => setHours(Number(e.target.value))}>
           {HOURS.map((h) => <option key={h} value={h}>{h} h</option>)}
         </select>
         <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
-          style={{ flex: 1, maxWidth: 400 }} />
+          style={{ flex: '1 1 150px', maxWidth: 400 }} />
         <button className="btn btn-sm" onClick={() => setFilter('')}>Clear</button>
         <div style={{ flex: 1 }} />
         <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{rows.length} lines</span>
@@ -67,12 +68,17 @@ export default function LogsPage() {
 
       <div className="card" style={{ flex: 1, minHeight: 0, padding: 0, display: 'flex',
         flexDirection: 'column', overflow: 'hidden' }}>
+        {/* the ONE horizontal scroller for this table (design-system TableScroll):
+            head + rows scroll sideways together, rows scroll vertically inside */}
+        <div className="tbl-scroll" style={{ flex: 1, minHeight: 0, display: 'flex',
+          flexDirection: 'column' }}>
+        <div style={{ minWidth: 620, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Time</span><span>Device</span><span>Line</span>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
+        <div className="fill-scroll">
           {!fetched ? (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>loading…</div>
+            <TableSkeleton cols={COLS} rows={14} dense />
           ) : rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
               {filter.trim() ? 'no matching log lines' : 'no logs in window'}
@@ -87,6 +93,8 @@ export default function LogsPage() {
                 {l.line}</span>
             </div>
           ))}
+        </div>
+        </div>
         </div>
       </div>
     </div>

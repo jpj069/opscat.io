@@ -20,6 +20,10 @@ export interface AppState {
   nav: string; setNav: (n: string) => void;
   events: EventRow[];
   logs: LogRow[];
+  // first load per org still in flight — consumers show skeletons instead of
+  // claiming "nothing here" before the data has arrived
+  eventsLoading: boolean;
+  logsLoading: boolean;
   refreshEvents: () => void;
   connected: boolean;
   selectedEvent: number | null; setSelectedEvent: (id: number | null) => void;
@@ -31,8 +35,12 @@ export interface AppState {
 const Ctx = createContext<AppState>(null as unknown as AppState);
 export const useApp = () => useContext(Ctx);
 
+// Every id in App.tsx's NAV must be listed here, or a reload / deep link on that
+// page silently drops the user back to Monitor (nav clicks still work, because
+// setNav pushes the URL itself — which is why this is easy to miss).
 const PAGES = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'statuspage',
-  'synthetics', 'vendors', 'logs', 'rules', 'analytics', 'users', 'settings', 'platform'];
+  'synthetics', 'vendors', 'logs', 'rules', 'analytics', 'users', 'pipeline', 'settings',
+  'platform'];
 
 function navFromPath(): string {
   const m = /^\/app\/?([a-z]*)/.exec(location.pathname);
@@ -49,6 +57,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [nav, setNavState] = useState(navFromPath());
   const [events, setEvents] = useState<EventRow[]>([]);
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [logsLoading, setLogsLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<number | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -70,7 +80,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshEvents = () => {
-    api.get<EventRow[]>('/api/events').then(setEvents).catch(() => { /* session gone */ });
+    api.get<EventRow[]>('/api/events').then(setEvents)
+      .catch(() => { /* session gone */ })
+      .finally(() => setEventsLoading(false));
   };
 
   const setUser = (u: User | null, csrf?: string) => {
@@ -108,8 +120,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // org-scoped data + live stream — reruns whenever the active org changes
   useEffect(() => {
     if (!user || activeOrgId == null) { streamStop.current?.(); streamStop.current = null; setConnected(false); return; }
+    setEventsLoading(true); setLogsLoading(true);
     refreshEvents();
-    api.get<LogRow[]>('/api/logs?hours=2&limit=200').then((rows) => setLogs(rows.reverse())).catch(() => {});
+    api.get<LogRow[]>('/api/logs?hours=2&limit=200').then((rows) => setLogs(rows.reverse()))
+      .catch(() => {})
+      .finally(() => setLogsLoading(false));
     // lightweight roster for assignee pickers (works for every role; the full
     // user table with emails stays behind lead+ on the Users page).
     api.get<{ id: number; name: string; color: string; role: string }[]>('/api/team')
@@ -140,9 +155,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AppState>(() => ({
     user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition,
     theme, setTheme: setThemeState, density, setDensity: setDensityState,
-    nav, setNav, events, logs, refreshEvents, connected, selectedEvent, setSelectedEvent,
-    users, settings, logout,
-  }), [user, orgs, activeOrgId, edition, theme, density, nav, events, logs, connected, selectedEvent, users, settings]);
+    nav, setNav, events, logs, eventsLoading, logsLoading, refreshEvents, connected,
+    selectedEvent, setSelectedEvent, users, settings, logout,
+  }), [user, orgs, activeOrgId, edition, theme, density, nav, events, logs, eventsLoading,
+    logsLoading, connected, selectedEvent, users, settings]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

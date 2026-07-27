@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { SEV, fmtDuration } from '../format';
-import { KpiCard, StackedArea, LineChart, HBars } from '../ui';
+import { KpiCard, StackedArea, LineChart, HBars, PageHeader } from '../ui';
 import type { AnalyticsData } from '../types';
 
 type Range = '24h' | '7d' | '30d';
@@ -18,60 +18,56 @@ export default function Analytics() {
       .then(setAna).catch(() => {}).finally(() => setLoading(false));
   }, [range]);
 
-  const mttrPoints = ana ? ana.mttrDaily.map((m) => m.v) : [];
-  const mttrLabels = ana ? ana.mttrDaily.map((m) => m.d.slice(5)) : [];
+  const mttrPoints = ana?.mttrDaily.map((m) => m.v) ?? null;
+  const mttrLabels = ana?.mttrDaily.map((m) => m.d.slice(5));
 
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Analytics</h1>
-        <div className="row" style={{ gap: 6 }}>
-          {(['24h', '7d', '30d'] as Range[]).map((r) => (
-            <button key={r} className={`chip ${range === r ? 'active' : ''}`}
-              onClick={() => setRange(r)}>{r}</button>
-          ))}
+      <PageHeader title="Analytics">
+        {(['24h', '7d', '30d'] as Range[]).map((r) => (
+          <button key={r} className={`chip ${range === r ? 'active' : ''}`}
+            onClick={() => setRange(r)}>{r}</button>
+        ))}
+      </PageHeader>
+
+      {/* The layout renders from the first paint; each card placeholders itself
+          from `null` data. On a range switch the previous numbers stay visible
+          at reduced opacity (stale-while-revalidating) instead of flashing. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, opacity: ana && loading ? 0.6 : 1 }}>
+        {/* KPI row */}
+        <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+          <KpiCard label="TOTAL EVENTS" value={ana && String(ana.totals.events)} color={SEV.high} />
+          <KpiCard label="AVG MTTR" value={ana && fmtDuration(ana.totals.mttrMs)} color={SEV.medium} />
+          <KpiCard label="RESOLUTION RATE" value={ana && `${ana.totals.resolutionRate}%`} color={SEV.green} />
+          <KpiCard label="NOTIFICATIONS" value={ana && String(ana.totals.notifications)} color={SEV.purple}
+            sub={ana && `${ana.totals.notificationsFailed} failed`} />
+        </div>
+
+        {/* Volume + MTTR */}
+        <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+            <div className="card-title">Event Volume</div>
+            <StackedArea data={ana?.volume ?? null} />
+          </div>
+          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+            <div className="card-title">MTTR</div>
+            <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
+              fmt={(v) => `${Math.round(v / 60000)}m`} />
+          </div>
+        </div>
+
+        {/* Top types + servers */}
+        <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+            <div className="card-title">Top Event Types</div>
+            <HBars items={ana?.topTypes ?? null} color={SEV.low} />
+          </div>
+          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+            <div className="card-title">Most Active Servers</div>
+            <HBars items={ana?.topServers ?? null} color={SEV.cyan} />
+          </div>
         </div>
       </div>
-
-      {!ana ? (
-        <div style={{ color: 'var(--text3)', fontSize: 12 }}>loading…</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, opacity: loading ? 0.6 : 1 }}>
-          {/* KPI row */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-            <KpiCard label="TOTAL EVENTS" value={String(ana.totals.events)} color={SEV.high} />
-            <KpiCard label="AVG MTTR" value={fmtDuration(ana.totals.mttrMs)} color={SEV.medium} />
-            <KpiCard label="RESOLUTION RATE" value={`${ana.totals.resolutionRate}%`} color={SEV.green} />
-            <KpiCard label="NOTIFICATIONS" value={String(ana.totals.notifications)} color={SEV.purple}
-              sub={`${ana.totals.notificationsFailed} failed`} />
-          </div>
-
-          {/* Volume + MTTR */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-            <div className="card" style={{ flex: 1, minWidth: 280 }}>
-              <div className="card-title">Event Volume</div>
-              <StackedArea data={ana.volume} />
-            </div>
-            <div className="card" style={{ flex: 1, minWidth: 280 }}>
-              <div className="card-title">MTTR</div>
-              <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
-                fmt={(v) => `${Math.round(v / 60000)}m`} />
-            </div>
-          </div>
-
-          {/* Top types + servers */}
-          <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-            <div className="card" style={{ flex: 1, minWidth: 280 }}>
-              <div className="card-title">Top Event Types</div>
-              <HBars items={ana.topTypes} color={SEV.low} />
-            </div>
-            <div className="card" style={{ flex: 1, minWidth: 280 }}>
-              <div className="card-title">Most Active Servers</div>
-              <HBars items={ana.topServers} color={SEV.cyan} />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

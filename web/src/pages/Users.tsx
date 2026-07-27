@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Avatar, GlowDot, Modal, Field, TableScroll } from '../ui';
+import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
 import type { UserRow } from '../types';
 
 const ROLES = ['admin', 'cto', 'lead', 'analyst'];
@@ -48,12 +48,11 @@ export default function Users() {
 
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 className="page-title">Users</h1>
+      <PageHeader title="Users">
         {isAdmin && (
           <button className="btn btn-primary" onClick={() => setInvite(true)}>+ Invite user</button>
         )}
-      </div>
+      </PageHeader>
 
       {err && <div className="card" style={{ color: '#f85149', fontSize: 12 }}>{err}</div>}
 
@@ -64,10 +63,7 @@ export default function Users() {
           <span>Status</span><span>Last seen</span><span>Actions</span>
         </div>
 
-        {users === null && (
-          <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}
-            className="mono">loading…</div>
-        )}
+        {users === null && <TableSkeleton cols={GRID} rows={5} />}
         {users !== null && users.length === 0 && (
           <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
             No users yet.

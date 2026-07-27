@@ -3,13 +3,16 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
-import { Avatar, SevBadge, Spark } from '../ui';
+import { Avatar, SevBadge, Spark, TableSkeleton } from '../ui';
 import { PanelTopIcon, PanelLeftIcon, SquareIcon } from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
 const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
   critical: [80, 101], high: [60, 80], medium: [40, 60], low: [20, 40],
 };
+// one source of truth per grid: the rows AND their loading placeholder read it
+const EVENT_COLS = '44px 86px 52px 60px minmax(120px,0.8fr) minmax(160px,1.2fr) 30px';
+const LOG_COLS = '64px 130px 1fr';
 
 export default function Monitor() {
   const app = useApp();
@@ -68,7 +71,8 @@ export default function Monitor() {
         <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{events.length} events</span>
       </div>
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        {events.length === 0 && (
+        {app.eventsLoading && <TableSkeleton cols={EVENT_COLS} rows={7} />}
+        {!app.eventsLoading && events.length === 0 && (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
             No active events{filter !== 'all' ? ` in band "${filter}"` : ''} — all quiet.
           </div>
@@ -79,7 +83,7 @@ export default function Monitor() {
           return (
             <div key={e.id} onClick={() => app.setSelectedEvent(e.id)}
               style={{ display: 'grid', cursor: 'pointer', alignItems: 'center',
-                gridTemplateColumns: '44px 86px 52px 60px minmax(120px,0.8fr) minmax(160px,1.2fr) 30px',
+                gridTemplateColumns: EVENT_COLS,
                 gap: 8, padding: 'var(--row-py) 16px', borderBottom: '1px solid var(--bg3)',
                 borderLeft: selected ? `2px solid ${c}` : '2px solid transparent',
                 background: selected ? alpha(c, 0.06) : undefined }}>
@@ -130,8 +134,9 @@ export default function Monitor() {
       </div>
       <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column-reverse' }}>
         <div>
+          {app.logsLoading && <TableSkeleton cols={LOG_COLS} rows={10} dense />}
           {logs.map((l, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '64px 130px 1fr', gap: 10,
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: LOG_COLS, gap: 10,
               padding: 'var(--log-py) 16px', borderBottom: '1px solid var(--bg3)' }}>
               <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtTime(l.ts)}</span>
               <span className="mono" style={{ fontSize: 10, color: 'var(--text1)', overflow: 'hidden',
@@ -147,7 +152,7 @@ export default function Monitor() {
 
   const vert = layout === 'vertical';
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="page-console" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="row" style={{ padding: '10px 16px 0', gap: 6 }}>
         <span className="micro" style={{ fontSize: 9 }}>LAYOUT</span>
         {([['horizontal', PanelTopIcon], ['vertical', PanelLeftIcon], ['events', SquareIcon]] as const).map(([l, Icon]) => (

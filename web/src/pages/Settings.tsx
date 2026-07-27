@@ -3,13 +3,20 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
-import { Modal, Field, Toggle, StatusPill, TableScroll } from '../ui';
+import {
+  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader,
+} from '../ui';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, Settings as SettingsMap, SnmpTarget,
 } from '../types';
 
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
+
+// one source of truth per table: head, rows and TableSkeleton all read these
+const KEYS_GRID = '1fr 120px 140px 110px 120px 90px';
+const AGENTS_GRID = '1fr 100px 140px 100px 80px 100px 90px 60px';
+const TARGETS_GRID = '1fr 160px 70px 90px 110px 110px 80px';
 
 interface SystemInfo {
   uptimeS?: number; dbBytes?: number; nodeVersion?: string;
@@ -119,7 +126,7 @@ export default function Settings() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Settings</h1>
+      <PageHeader title="Settings" />
 
       {/* 0. Plan & Billing */}
       <BillingCard />
@@ -128,7 +135,7 @@ export default function Settings() {
       <div className="card">
         <div className="card-title">Platform</div>
         {settings === null
-          ? <Loading />
+          ? <FormSkeleton rows={4} />
           : <>
               {textRow('org_name', 'Organization name')}
               {textRow('backend_label', 'Backend label')}
@@ -141,7 +148,7 @@ export default function Settings() {
       <div className="card">
         <div className="card-title">Notifications</div>
         {settings === null
-          ? <Loading />
+          ? <FormSkeleton rows={5} />
           : <>
               {textRow('alert_email_from', 'Alert email from',
                 { placeholder: 'OpsCat Alerts <alerts@opscat.io>' })}
@@ -175,14 +182,14 @@ export default function Settings() {
             <button className="btn btn-sm" onClick={() => setModal('key')}>+ Create key</button>
           </div>
           <TableScroll minWidth={720}>
-          <div className="tbl-head" style={{ gridTemplateColumns: '1fr 120px 140px 110px 120px 90px', padding: '8px 0' }}>
+          <div className="tbl-head" style={{ gridTemplateColumns: KEYS_GRID, padding: '8px 0' }}>
             <span>Name</span><span>Prefix</span><span>Scopes</span>
             <span>Created</span><span>Last used</span><span>Active</span>
           </div>
-          {keys === null && <Loading />}
+          {keys === null && <TableSkeleton cols={KEYS_GRID} rows={3} flush />}
           {keys?.length === 0 && <Empty>No API keys yet.</Empty>}
           {keys?.map((k) => (
-            <div key={k.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 140px 110px 120px 90px',
+            <div key={k.id} style={{ display: 'grid', gridTemplateColumns: KEYS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: 'var(--text0)' }}>{k.name}</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>{k.prefix}…</span>
@@ -205,14 +212,14 @@ export default function Settings() {
             {leadPlus && <button className="btn btn-sm" onClick={() => setModal('agent')}>+ Register agent</button>}
           </div>
           <TableScroll minWidth={840}>
-          <div className="tbl-head" style={{ gridTemplateColumns: '1fr 100px 140px 100px 80px 100px 90px 60px', padding: '8px 0' }}>
+          <div className="tbl-head" style={{ gridTemplateColumns: AGENTS_GRID, padding: '8px 0' }}>
             <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
             <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
           </div>
-          {agents === null && <Loading />}
+          {agents === null && <TableSkeleton cols={AGENTS_GRID} rows={3} flush />}
           {agents?.length === 0 && <Empty>No agents registered.</Empty>}
           {agents?.map((a) => (
-            <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 140px 100px 80px 100px 90px 60px',
+            <div key={a.id} style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
               <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{a.name}
                 {a.version && <span style={{ color: 'var(--text3)' }}> v{a.version}</span>}</span>
@@ -246,14 +253,14 @@ export default function Settings() {
             <button className="btn btn-sm" onClick={() => setModal('target')}>+ Add target</button>
           </div>
           <TableScroll minWidth={780}>
-          <div className="tbl-head" style={{ gridTemplateColumns: '1fr 160px 70px 90px 110px 110px 80px', padding: '8px 0' }}>
+          <div className="tbl-head" style={{ gridTemplateColumns: TARGETS_GRID, padding: '8px 0' }}>
             <span>Name</span><span>Host</span><span>Port</span><span>Interval</span>
             <span>Enabled</span><span>Last status</span><span></span>
           </div>
-          {targets === null && <Loading />}
+          {targets === null && <TableSkeleton cols={TARGETS_GRID} rows={3} flush />}
           {targets?.length === 0 && <Empty>No SNMP targets configured.</Empty>}
           {targets?.map((t) => (
-            <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 70px 90px 110px 110px 80px',
+            <div key={t.id} style={{ display: 'grid', gridTemplateColumns: TARGETS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: 'var(--text0)' }}>{t.name}</span>
               <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
@@ -282,7 +289,7 @@ export default function Settings() {
       {!sysHidden && (
         <div className="card">
           <div className="card-title">System</div>
-          {sys === null ? <Loading /> : (
+          {sys === null ? <FormSkeleton rows={4} /> : (
             <>
               <Row label="Uptime">
                 <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>
@@ -350,7 +357,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
         While a window is active, events keep recording but no alerts are sent
         (the notification log shows them as suppressed).
       </div>
-      {windows === null && <Loading />}
+      {windows === null && <ListSkeleton rows={2} lines={1} divided={false} />}
       {windows?.length === 0 && <Empty>No maintenance windows.</Empty>}
       {windows?.map((w) => (
         <div key={w.id} className="row" style={{ gap: 10, padding: '6px 0',
@@ -406,22 +413,28 @@ function fmtBillingDate(v: number | string | null): string {
   return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 
-function UsageBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+// used == null → the bar renders its own placeholder, keeping label + metrics row
+function UsageBar({ label, used, limit }: { label: string; used: number | null; limit: number }) {
+  const loading = used == null;
   const unlimited = limit < 0;
-  const pct = unlimited || limit === 0 ? 0 : Math.min(100, (used / limit) * 100);
+  const pct = loading || unlimited || limit === 0 ? 0 : Math.min(100, (used / limit) * 100);
   const color = unlimited ? '#3fb950' : pct >= 90 ? '#f85149' : pct >= 70 ? '#e3b341' : '#3fb950';
   return (
     <div>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
         <span style={{ fontSize: 10, color: 'var(--text2)' }}>{label}</span>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--text1)' }}>
-          {used} / {unlimited ? 'Unlimited' : limit}
-        </span>
+        {loading ? <Skeleton w={48} h={9} /> : (
+          <span className="mono" style={{ fontSize: 10, color: 'var(--text1)' }}>
+            {used} / {unlimited ? 'Unlimited' : limit}
+          </span>
+        )}
       </div>
-      <div style={{ height: 6, background: 'var(--bg3)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${unlimited ? 100 : pct}%`, height: '100%', background: color,
-          opacity: unlimited ? 0.3 : 1 }} />
-      </div>
+      {loading ? <Skeleton h={6} radius={3} /> : (
+        <div style={{ height: 6, background: 'var(--bg3)', borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ width: `${unlimited ? 100 : pct}%`, height: '100%', background: color,
+            opacity: unlimited ? 0.3 : 1 }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -515,13 +528,17 @@ function BillingCard() {
     </div>
   );
 
-  // loading
+  // loading — same chrome as the loaded card: pill row + usage grid placeholders
   if (status === null && !failed) {
     return (
       <div className="card">
         <div className="card-title">Plan &amp; Billing</div>
         {bannerEl}
-        <Loading />
+        <Skeleton w={92} h={18} radius={10} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
+          gap: 14, marginTop: 16 }}>
+          {USAGE_METRICS.map((m) => <UsageBar key={m.key} label={m.label} used={null} limit={0} />)}
+        </div>
       </div>
     );
   }
@@ -618,7 +635,7 @@ function BillingCard() {
 
 // ---------------------------------------------------------------- small helpers
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0' }}>
       <span style={{ width: 200, flexShrink: 0, fontSize: 11, color: 'var(--text2)' }}>{label}</span>
@@ -626,8 +643,17 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     </div>
   );
 }
-function Loading() {
-  return <div className="mono" style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>loading…</div>;
+// Built from the real <Row>, so label/field geometry can never drift apart.
+function FormSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <Busy>
+      {Array.from({ length: rows }, (_, i) => (
+        <Row key={i} label={<Skeleton w={`${58 + (i % 3) * 14}%`} />}>
+          <Skeleton h={28} radius={5} />
+        </Row>
+      ))}
+    </Busy>
+  );
 }
 function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>{children}</div>;

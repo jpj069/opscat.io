@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
-import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field } from './ui';
+import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy } from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
@@ -92,9 +92,20 @@ export default function App() {
   return <Shell />;
 }
 
+// Boot gate: we do not know yet whether the app shell or the login form comes
+// next, so this stays a neutral placeholder rather than a fake shell.
 function Splash() {
-  return <div style={{ height: '100%', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', color: 'var(--text3)' }} className="mono">loading…</div>;
+  return (
+    <div className="screen-center" style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <Busy>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 220 }}>
+          <Skeleton h={14} w="55%" />
+          <Skeleton h={10} />
+          <Skeleton h={10} w="80%" />
+        </div>
+      </Busy>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- login
@@ -176,7 +187,7 @@ function Login() {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', overflowY: 'auto', padding: 16 }}>
+    <div className="screen-center" style={{ padding: 16 }}>
       <form onSubmit={submit} className="card" style={{ width: '100%', maxWidth: 340, margin: 'auto', padding: 28 }}>
         <div className="row" style={{ gap: 10, marginBottom: 18 }}>
           <BrandMark size={30} />
@@ -296,7 +307,7 @@ function Shell() {
   const activeCases = useMemo(() => app.events.filter((e) => e.severity >= 60).length, [app.events]);
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div className="shell">
       {/* sidebar — on phones a slide-in drawer (.shell-rail in tokens.css) */}
       {drawer && <div className="overlay-dim" style={{ zIndex: 94 }} onClick={() => setDrawer(false)} />}
       <aside className={`shell-rail ${drawer ? 'open' : ''}`}
@@ -396,11 +407,9 @@ function Shell() {
       </aside>
 
       {/* main column */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {/* topbar */}
-        <header style={{ height: 48, flexShrink: 0, background: 'var(--bg1)',
-          borderBottom: '1px solid var(--bg3)', display: 'flex', alignItems: 'center',
-          gap: 14, padding: '0 16px' }}>
+      <div className="shell-main">
+        {/* topbar — sticky on phones, where the document itself scrolls */}
+        <header className="shell-top">
           <button className="shell-burger" onClick={() => setDrawer(true)} title="Menu">
             <MenuIcon size={17} /></button>
           <OrgSwitcher edition={edition} />
@@ -460,7 +469,7 @@ function Shell() {
           </button>
         </header>
 
-        <main style={{ flex: 1, minHeight: 0, background: 'var(--bg0)' }}>
+        <main className="shell-body">
           <Page />
         </main>
       </div>

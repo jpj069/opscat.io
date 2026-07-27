@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, sevColor } from '../format';
-import { KpiCard, LineChart, TableScroll } from '../ui';
+import { KpiCard, LineChart, TableScroll, TableSkeleton } from '../ui';
 import type { ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats } from '../types';
 
 type Tab = 'throughput' | 'classifiers';
@@ -61,9 +61,10 @@ function Throughput() {
   const fmtCount = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
   if (err) return <div className="card" style={{ color: SEV.critical, fontSize: 12 }}>{err}</div>;
-  if (!stats) return <div className="mono" style={{ padding: 20, color: 'var(--text3)', fontSize: 12 }}>loading…</div>;
 
-  const stepLabel = stats.step < 86400000 ? 'hour' : 'day';
+  // No loading branch: KpiCard and LineChart render their own placeholder when
+  // handed null, so the page keeps its real structure from the first paint.
+  const stepLabel = !stats || stats.step < 86400000 ? 'hour' : 'day';
   return (
     <>
       <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 12 }}>
@@ -77,22 +78,25 @@ function Throughput() {
         </span>
       </div>
       <div className="row" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 14, alignItems: 'stretch' }}>
-        <KpiCard label="LOG LINES" value={fmtCount(stats.totals.lines)} color={SEV.cyan}
-          spark={stats.buckets.map((b) => b.lines)} sub={`ingested in the last ${stats.range}`} />
-        <KpiCard label="VOLUME" value={fmtBytes(stats.totals.bytes)} color={SEV.purple}
-          spark={stats.buckets.map((b) => b.bytes)} sub="raw line bytes" />
-        <KpiCard label="CLASSIFIED HITS" value={fmtCount(stats.totals.events)} color={SEV.medium}
-          spark={stats.buckets.map((b) => b.events)} sub="lines that matched a rule" />
-        <KpiCard label={`PEAK / ${stepLabel.toUpperCase()}`} value={fmtCount(peak)} color={SEV.green}
-          sub={`busiest ${stepLabel} in range`} />
+        <KpiCard label="LOG LINES" value={stats ? fmtCount(stats.totals.lines) : null} color={SEV.cyan}
+          spark={stats?.buckets.map((b) => b.lines)}
+          sub={stats ? `ingested in the last ${stats.range}` : null} />
+        <KpiCard label="VOLUME" value={stats ? fmtBytes(stats.totals.bytes) : null} color={SEV.purple}
+          spark={stats?.buckets.map((b) => b.bytes)} sub="raw line bytes" />
+        <KpiCard label="CLASSIFIED HITS" value={stats ? fmtCount(stats.totals.events) : null} color={SEV.medium}
+          spark={stats?.buckets.map((b) => b.events)} sub="lines that matched a rule" />
+        <KpiCard label={`PEAK / ${stepLabel.toUpperCase()}`} value={stats ? fmtCount(peak) : null}
+          color={SEV.green} sub={`busiest ${stepLabel} in range`} />
       </div>
       <div className="card">
         <div className="card-title">Log lines per {stepLabel}</div>
-        <LineChart points={stats.buckets.map((b) => b.lines)} labels={labels} color={SEV.cyan} fmt={fmtCount} />
+        <LineChart points={stats?.buckets.map((b) => b.lines) ?? null} labels={labels}
+          color={SEV.cyan} fmt={fmtCount} />
       </div>
       <div className="card">
         <div className="card-title">Volume per {stepLabel}</div>
-        <LineChart points={stats.buckets.map((b) => b.bytes)} labels={labels} color={SEV.purple} fmt={fmtBytes} />
+        <LineChart points={stats?.buckets.map((b) => b.bytes) ?? null} labels={labels}
+          color={SEV.purple} fmt={fmtBytes} />
       </div>
     </>
   );
@@ -207,7 +211,7 @@ function Classifiers() {
           Shipped with OpsCat, evaluated after your custom rules. Lines matching no rule fall
           back to their syslog severity (crit and above still become events).
         </div>
-        {builtin === null && <div className="mono" style={{ padding: 16, color: 'var(--text3)', fontSize: 12 }}>loading…</div>}
+        {builtin === null && <TableSkeleton cols={GRID} rows={5} />}
         {builtin && (
           <TableScroll minWidth={640}>
             <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
