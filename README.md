@@ -42,7 +42,7 @@ edition with `OPSCAT_EDITION=community` (default).
 | `web/` | React + Vite + TypeScript UI, built into the server image |
 | `sdk/js/` | `@opscat/sdk` — dependency-free logging SDK (Node ≥18 + browsers) |
 | `agent/` | `opscat-agent.js` — dependency-free server agent + probe mode + installer |
-| `docs/` | [ARCHITECTURE](docs/ARCHITECTURE.md) · [API](docs/API.md) · [OPERATIONS](docs/OPERATIONS.md) |
+| `docs/` | [ARCHITECTURE](docs/ARCHITECTURE.md) · [API](docs/API.md) · [OPERATIONS](docs/OPERATIONS.md) · [MCP-PLAN](docs/MCP-PLAN.md) |
 
 ## Quick start (development)
 

@@ -9,9 +9,18 @@ Two surfaces:
   agent tokens (`oca_…`) or probe keys (`ocp_…`). Keys are created in the UI (Settings)
   and shown exactly once.
 
-Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HTML status
-page — per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
+Public (no auth): `GET /api/health`, `GET /status` (HTML status page —
+per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
 (edition, public plan matrix, auth options for the login/pricing UI).
+
+**Machine-readable status page.** Append `.json` to any status page URL — `/status.json`,
+`/status/:slug.json` — and get the exact payload the page renders. The URL already
+identifies the organization, so there is no slug parameter to pass; the page links its own
+JSON in the footer. `/summary.json` is the origin-level alias for a single-org instance or
+a status page on its own domain, and is the shape OpsCat's own vendor detector probes for
+(`engine/vendor-feeds.js`), so an OpsCat status page is auto-detectable by OpsCat.
+`GET /api/status[?org=slug]` remains as an alias. All forms 404 with
+`{"error":"not published"}` when the org is unknown or its page is unpublished.
 
 **Multi-tenancy:** API keys, agent tokens and probe keys are each bound to one
 organization; all queries are scoped to it. A **user** may belong to several

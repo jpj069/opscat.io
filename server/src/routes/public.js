@@ -134,6 +134,12 @@ function renderStatus(req, res, org) {
   }
   const d = statusData(org.id);
   const reported = req.query.reported === '1';
+  // Same payload this page renders, as JSON — linked in the footer so a visitor
+  // can automate against the page without reading the docs. Derived from THIS
+  // page's own URL (just append `.json`), so it stays correct for the default
+  // org, a slug page, and later a status page on its own domain.
+  const base = req.path.replace(/\/+$/, '');
+  const jsonUrl = base ? `${base}.json` : '/summary.json';
   const compRows = d.components.map((c) => {
     const cells = c.days.map((day) =>
       `<div title="${esc(day.day)}: ${esc(day.worst)}" style="flex:1;height:18px;border-radius:1px;background:${
@@ -183,6 +189,8 @@ function renderStatus(req, res, org) {
   .pill.ok{background:rgba(63,185,80,.12);color:#3fb950}
   .pill.warn{background:rgba(227,179,65,.12);color:#e3b341}
   footer{margin-top:40px;font-size:11px;color:#484f58}
+  footer a{color:#6e7681;text-decoration:none;border-bottom:1px solid #21262d}
+  footer a:hover{color:#8b949e;border-bottom-color:#30363d}
   details.report{margin-top:24px;border:1px solid #21262d;border-radius:8px;background:#161b22}
   details.report summary{cursor:pointer;padding:12px 16px;font-weight:600;color:#c9d1d9;font-size:13px}
   .report-form{padding:0 16px 14px;display:flex;flex-direction:column;gap:8px}
@@ -210,9 +218,30 @@ ${d.components.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).joi
 <textarea name="message" maxlength="500" placeholder="What are you seeing? (optional)"></textarea>
 <button type="submit">Send report</button>
 </form></details>` : ''}
-<footer>Powered by OpsCat · ${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
+<footer>Powered by OpsCat · Machine-readable: <a href="${esc(jsonUrl)}">${esc(jsonUrl)}</a> ·
+${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
 </div></body></html>`);
 }
+
+// Machine-readable status: the SAME payload the HTML page renders, reachable by
+// appending `.json` to the page's own URL. Consumers should never have to
+// translate a page URL into a different endpoint with a slug parameter — the URL
+// already identifies the organization, so the JSON derives from it.
+//
+// These MUST be registered before `/status/:slug`, which would otherwise match
+// `/status/acme.json` with slug="acme.json".
+//
+// `/summary.json` is the origin-level alias, for a single-org instance or a
+// status page on its own domain. It is the shape OpsCat's own vendor detector
+// probes for (Instatus-style, see engine/vendor-feeds.js) — so an OpsCat status
+// page is auto-detectable by OpsCat, and by anything else following the same
+// convention.
+function statusJson(req, res, org) {
+  if (!org || !published(org.id)) return res.status(404).json({ error: 'not published' });
+  res.json(statusData(org.id));
+}
+router.get(['/status.json', '/summary.json'], (req, res) => statusJson(req, res, resolveOrg(null)));
+router.get('/status/:slug.json', (req, res) => statusJson(req, res, resolveOrg(req.params.slug)));
 
 router.get('/status', (req, res) => renderStatus(req, res, resolveOrg(null)));
 router.get('/status/:slug', (req, res) => renderStatus(req, res, resolveOrg(req.params.slug)));
