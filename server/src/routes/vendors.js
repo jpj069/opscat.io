@@ -12,7 +12,7 @@ const { FEED_TYPES, detectFeed } = require('../engine/vendor-feeds');
 const { assertPublicHost } = require('../engine/synthetics');
 
 const router = express.Router();
-router.use(sec.requireSession);
+router.use(sec.requireSessionOrToken);
 
 const CATALOG = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', 'data', 'vendor-catalog.json'), 'utf8'));

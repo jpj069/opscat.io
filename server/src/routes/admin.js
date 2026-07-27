@@ -120,18 +120,50 @@ router.get('/apikeys', sec.requireRole('lead'), (req, res) => {
 });
 
 router.post('/apikeys', sec.requireRole('lead'), (req, res) => {
-  const { name, scopes } = req.body || {};
+  const { name, scopes, role } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  const allowed = ['ingest', 'agent', 'probe'];
+  // `api` lets the key drive the full operations REST API (see security.js
+  // requireSessionOrToken), so it also carries the ROLE it acts with.
+  const allowed = ['ingest', 'agent', 'probe', 'api'];
   const sc = (Array.isArray(scopes) ? scopes : ['ingest']).filter((s) => allowed.includes(s));
   if (!sc.length) return httpError(res, 400, 'at least one valid scope required');
+  // A key must never outrank the person minting it, or `lead` could hand out an
+  // `admin` credential and escalate through it.
+  const wanted = sec.ROLE_RANK[role] ? role : 'analyst';
+  if (sec.ROLE_RANK[wanted] > sec.ROLE_RANK[req.user.role]) {
+    return httpError(res, 403, 'cannot grant a key a higher role than your own');
+  }
   if (!withinPlan(req, res, 'apiKeys')) return undefined;
   const key = 'ock_' + crypto.randomBytes(24).toString('hex');
-  db.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, active, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?)`)
-    .run(req.orgId, name, key.slice(0, 12), sha256(key), sc.join(','), req.user.id, now());
-  sec.audit(req.user.id, 'apikey_create', name, req.orgId);
+  db.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .run(req.orgId, name, key.slice(0, 12), sha256(key), sc.join(','), wanted, req.user.id, now());
+  sec.audit(req.user.id, 'apikey_create', `${name} scopes=${sc.join('+')} role=${wanted}`, req.orgId);
   res.json({ key, note: 'store this key now — it is not retrievable later' });
+});
+
+// ── authorized MCP clients (OAuth grants) ─────────────────────────────────
+// A user manages their OWN connections: these are grants they personally
+// authorized, not org-wide configuration, so this is not role-gated.
+router.get('/connections', (req, res) => {
+  const oauth = require('../lib/oauth');
+  res.json(oauth.listGrants(req.user.id)
+    .filter((g) => g.orgId === req.orgId)
+    .map((g) => ({
+      clientId: g.clientId,
+      name: g.client ? g.client.name : g.clientId,
+      scopes: g.scopes,
+      createdAt: g.createdAt,
+      lastUsedAt: g.lastUsedAt,
+    })));
+});
+
+router.delete('/connections/:clientId', (req, res) => {
+  const oauth = require('../lib/oauth');
+  const removed = oauth.revokeGrant(String(req.params.clientId), req.user.id, req.orgId);
+  if (!removed) return httpError(res, 404, 'connection not found');
+  sec.audit(req.user.id, 'mcp.revoke', `client=${req.params.clientId}`, req.orgId);
+  res.json({ ok: true });
 });
 
 router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {

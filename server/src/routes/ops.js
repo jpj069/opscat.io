@@ -10,7 +10,7 @@ const sec = require('../security');
 const pipeline = require('../engine/pipeline');
 
 const router = express.Router();
-router.use(sec.requireSession);
+router.use(sec.requireSessionOrToken);
 
 const hub = new SseHub();
 pipeline.on('log', (l) => hub.broadcast('log', l, l.orgId));
@@ -527,3 +527,7 @@ router.patch('/incidents/:id', sec.requireRole('lead'), (req, res) => {
 });
 
 module.exports = router;
+// The live-update bus, so writes made outside this router (the MCP tools) can
+// push the same SSE frames the UI already listens for.
+module.exports.hub = hub;
+module.exports.publicEvent = publicEvent;

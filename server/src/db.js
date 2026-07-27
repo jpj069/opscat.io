@@ -155,6 +155,13 @@ const MIGRATIONS = [
   () => {
     addColumn('agents', 'auto_update', 'INTEGER NOT NULL DEFAULT 1');
   },
+  // idx 7 -> version 8: API keys can drive the full REST API, not just ingest.
+  // A key now carries the ROLE it acts with; `analyst` (least privilege) is the
+  // default, so every pre-existing ingest key stays read-only even if someone
+  // later grants it the `api` scope.
+  () => {
+    addColumn('api_keys', 'role', "TEXT NOT NULL DEFAULT 'analyst'");
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

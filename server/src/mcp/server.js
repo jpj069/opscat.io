@@ -6,11 +6,13 @@
 // the model's attempts and reads as a broken server.
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const config = require('../config');
+const { db } = require('../db');
 const { TOOLS } = require('./tools');
 const sec = require('../security');
 
 const SERVER_NAME = 'opscat';
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = '1.1.0';
 
 // Kept deliberately small (<2 KB). This text is injected at EVERY session start,
 // so only genuinely cross-tool rules belong here — per-tool behaviour lives in
@@ -24,7 +26,18 @@ Events are deduplicated alerts; a case is the unit of on-call work opened from a
 
 Your connection is bound to ONE organization, chosen when it was authorized — every tool is scoped to it and no tool takes an organization argument.
 
+Writes are attributed in the audit log to the person who authorized this connection. Publishing an incident puts it on a PUBLIC status page; deleting a maintenance window resumes alerting immediately. Both ask for confirmation.
+
 Log searches can return a lot of text: narrow with device and sinceMinutes.`;
+
+// SEP-973: one icon on the server implementation, so a client can identify
+// OpsCat in a server list. Deliberately NOT one per tool — for a single-product
+// surface that is noise, and the tool title already carries the meaning.
+const SERVER_ICONS = [{
+  src: `${config.baseUrl}/mcp/icon.svg`,
+  mimeType: 'image/svg+xml',
+  sizes: ['any'],
+}];
 
 const ROLE_RANK = sec.ROLE_RANK;
 
@@ -33,9 +46,66 @@ function toolAvailable(tool, principal) {
   return ROLE_RANK[principal.role] >= ROLE_RANK[tool.role];
 }
 
+// ── resources ──────────────────────────────────────────────────────────────
+// Resources are for context an agent should be able to READ WITHOUT deciding to
+// call a tool — the client can attach them to a conversation directly. Two are
+// worth exposing: the live public status page for this org, and the currently
+// open incidents.
+
+function registerResources(server, principal) {
+  server.registerResource(
+    'status-page',
+    `opscat://org/${principal.orgId}/status`,
+    {
+      title: 'Public status page',
+      description: 'The organization\'s public status page payload: component health, uptime and published incidents.',
+      mimeType: 'application/json',
+    },
+    async (uri) => {
+      // Reuse the exact payload the public page renders, so the agent and the
+      // public see the same thing.
+      const { statusData } = require('../routes/public');
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(statusData(principal.orgId), null, 2),
+        }],
+      };
+    },
+  );
+
+  server.registerResource(
+    'open-incidents',
+    `opscat://org/${principal.orgId}/incidents/open`,
+    {
+      title: 'Open incidents',
+      description: 'Incidents that have not been resolved, with their update history.',
+      mimeType: 'application/json',
+    },
+    async (uri) => {
+      const rows = db.prepare(`SELECT * FROM incidents WHERE org_id = ? AND resolved_at IS NULL
+        ORDER BY started_at DESC LIMIT 25`).all(principal.orgId);
+      const incidents = rows.map((i) => ({
+        id: i.id, label: `INC-${1000 + i.id}`, title: i.title, severity: i.severity,
+        status: i.status, published: !!i.published, startedAt: i.started_at,
+        updates: db.prepare(`SELECT ts, status, message FROM incident_updates
+          WHERE incident_id = ? ORDER BY ts DESC LIMIT 10`).all(i.id),
+      }));
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify({ incidents, count: incidents.length }, null, 2),
+        }],
+      };
+    },
+  );
+}
+
 function createMcpServer(principal) {
   const server = new McpServer(
-    { name: SERVER_NAME, version: SERVER_VERSION },
+    { name: SERVER_NAME, version: SERVER_VERSION, icons: SERVER_ICONS },
     { instructions: INSTRUCTIONS },
   );
 
@@ -47,9 +117,11 @@ function createMcpServer(principal) {
       inputSchema: tool.inputSchema,
       outputSchema: tool.outputSchema,
       annotations: { title: tool.title, ...tool.annotations },
-    }, async (args) => {
+    }, async (args, extra) => {
       try {
-        return tool.handler(args || {}, principal);
+        // ctx carries what a handler needs to talk BACK to the client —
+        // elicitation for destructive confirms.
+        return await tool.handler(args || {}, principal, { server, extra });
       } catch (err) {
         console.error(`[mcp] ${tool.name} failed:`, err && err.message);
         return { content: [{ type: 'text', text: `Tool failed: ${err && err.message}` }], isError: true };
@@ -57,7 +129,9 @@ function createMcpServer(principal) {
     });
   }
 
+  registerResources(server, principal);
+
   return server;
 }
 
-module.exports = { createMcpServer, SERVER_NAME, SERVER_VERSION, INSTRUCTIONS, toolAvailable };
+module.exports = { createMcpServer, SERVER_NAME, SERVER_VERSION, INSTRUCTIONS, toolAvailable, SERVER_ICONS };

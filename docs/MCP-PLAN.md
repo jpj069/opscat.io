@@ -215,14 +215,28 @@ contrast: Lynk's is ~16 KB and goes into context at every session start.
 | | Scope | Done when |
 |---|---|---|
 | **M1 — shipped** | OAuth 2.1 AS (RFC 8414 metadata, RFC 7591 DCR, PKCE S256, RFC 9728 under both `.well-known` forms, RFC 8707 audience binding) **incl. the org picker**; principal middleware; `/mcp` transport; 8 read tools with annotations + `outputSchema` | Claude Desktop completes consent, picks an org, and answers "which checks are failing?" |
-| **M2** | Write tools; audit attribution; per-token rate limit; a connections view in the UI to see and revoke authorized clients | An agent can ack a case, and the audit log names the human who authorized the client |
-| **M3** | API-key fallback for headless/CI (`api_keys.role`, `mcp` scope) | A cron job drives read tools with no browser involved |
-| **M4** | 2025-11-25 extras: elicitation to confirm destructive calls; tasks for long-running polls (`opscat_run_check`); resources for incidents + status page; icons | — |
+| **M2 — shipped** | 8 write tools; audit attribution to the authorizing human; per-token rate limit; a "Connected apps" view in Settings to see and revoke grants | An agent acks a case, and the audit log names the human who authorized the client |
+| **M3 — shipped, widened** | `Authorization: Bearer` on the whole operations REST API — MCP tokens AND `api`-scoped API keys with their own role | A cron job drives `/api/events` with no browser and no MCP client |
+| **M4 — shipped, minus Tasks** | Resources (status page, open incidents); SEP-973 server icon; elicitation confirms on destructive calls | A client attaches the status page as context; publishing an incident asks first |
 
-M1 is the only milestone with a hard dependency; M2–M4 are independent. M1 was
-also the largest by a distance — the authorization server is most of it, and the
-transport plus read tools are comparatively small once a token resolves to a
+M1 was the largest by a distance — the authorization server is most of it, and
+the transport plus tools are comparatively small once a token resolves to a
 principal.
+
+**M3 was deliberately widened.** The plan had it as an API-key fallback *for MCP*.
+The better shape, and what shipped, is token auth on the operations REST API
+itself: the same endpoints the web app uses accept `Authorization: Bearer` from
+either an MCP access token or an `api`-scoped API key. OpsCat is therefore
+scriptable without MCP at all, and MCP becomes one client of that surface rather
+than a private side door. Account, API-key, billing, org and super-admin routes
+stay session-only.
+
+**Tasks (SEP-1686) were NOT built.** SDK 1.29 ships the task *types* and the
+low-level `tasks/*` request handlers, but `McpServer` has no `registerToolTask` —
+the identifier appears only inside an error message. Hand-rolling the protocol
+against an experimental surface with no supported server API would be a liability,
+so the long-running tool (`opscat_run_checks`) stays synchronous until the SDK
+exposes it.
 
 ### What M1 actually shipped
 

@@ -193,6 +193,149 @@ async function main() {
   const stale = await mcp({ jsonrpc: '2.0', method: 'tools/list', id: 5 }, { 'mcp-session-id': 'does-not-exist' });
   chk('a stale session id → 404', stale.status === 404, `got ${stale.status}`);
 
+  // ── 5b. M2 write tools ───────────────────────────────────────────────────
+  const writeNames = tools.filter((t) => t.name.match(/update|action|create|delete|run|poll/)).map((t) => t.name);
+  chk('write tools are listed for a read+write token', writeNames.length >= 8, writeNames.join(','));
+  chk('destructive tool is annotated destructiveHint:true',
+    tools.find((t) => t.name === 'opscat_delete_maintenance')?.annotations?.destructiveHint === true, 'missing');
+  chk('outward-reaching tool is annotated openWorldHint:true',
+    tools.find((t) => t.name === 'opscat_run_checks')?.annotations?.openWorldHint === true, 'missing');
+
+  // a real case to act on
+  const anyCase = db.prepare('SELECT id FROM cases WHERE org_id = ? LIMIT 1').get(org.id)
+    || (() => {
+      db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
+        VALUES (?,?,?,?,?,'open',?)`).run(org.id, null, 'e2e case', 'e2e-host', 50, Date.now());
+      return db.prepare('SELECT id FROM cases WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(org.id);
+    })();
+  const upd = await parse(await mcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 10,
+    params: { name: 'opscat_update_case', arguments: { id: anyCase.id, note: 'set by e2e', status: 'assigned' } },
+  }, S));
+  chk('opscat_update_case writes', upd.result?.structuredContent?.status === 'assigned',
+    JSON.stringify(upd).slice(0, 200));
+  const noteRow = db.prepare('SELECT note, status FROM cases WHERE id = ?').get(anyCase.id);
+  chk('the write actually landed in the database', noteRow.note === 'set by e2e', JSON.stringify(noteRow));
+
+  const auditRow = db.prepare(`SELECT user_id, action, detail FROM audit_log
+    WHERE org_id = ? AND action = 'case_update' ORDER BY id DESC LIMIT 1`).get(org.id);
+  chk('the mutation is audited against the authorizing human',
+    auditRow && auditRow.user_id === user.id, JSON.stringify(auditRow));
+  chk('the audit entry names the MCP client',
+    auditRow && auditRow.detail.includes('mcp client='), auditRow && auditRow.detail);
+
+  // destructive tool must not act without confirmation
+  db.prepare('INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)')
+    .run(org.id, 'e2e window', Date.now(), Date.now() + 3600000, Date.now());
+  const win = db.prepare('SELECT id FROM maintenance_windows WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(org.id);
+  const noConfirm = await parse(await mcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 11,
+    params: { name: 'opscat_delete_maintenance', arguments: { id: win.id } },
+  }, S));
+  chk('destructive tool refuses without confirmation', noConfirm.result?.isError === true,
+    JSON.stringify(noConfirm).slice(0, 200));
+  chk('maintenance window still exists after the refusal',
+    !!db.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'row was deleted anyway');
+  const confirmed = await parse(await mcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 12,
+    params: { name: 'opscat_delete_maintenance', arguments: { id: win.id, confirm: true } },
+  }, S));
+  chk('destructive tool proceeds with confirm:true', confirmed.result?.structuredContent?.deleted === true,
+    JSON.stringify(confirmed).slice(0, 200));
+  chk('maintenance window is gone', !db.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'still there');
+
+  // ── 5c. M4 resources + icons ─────────────────────────────────────────────
+  const resList = await parse(await mcp({ jsonrpc: '2.0', method: 'resources/list', id: 13 }, S));
+  const resources = resList.result?.resources || [];
+  chk('resources/list exposes the status page and open incidents', resources.length >= 2,
+    JSON.stringify(resources.map((r) => r.name)));
+  const statusRes = resources.find((r) => r.name === 'status-page');
+  const readRes = await parse(await mcp({
+    jsonrpc: '2.0', method: 'resources/read', id: 14, params: { uri: statusRes.uri },
+  }, S));
+  const body = readRes.result?.contents?.[0]?.text;
+  chk('resources/read returns the status payload', !!body && body.includes('overallLabel'), String(body).slice(0, 120));
+
+  chk('initialize advertises a server icon (SEP-973)', initBody.includes('/mcp/icon.svg'), 'no icon in InitializeResult');
+  const icon = await fetch(`${B}/mcp/icon.svg`);
+  chk('the advertised icon URL resolves', icon.status === 200 && (icon.headers.get('content-type') || '').includes('svg'),
+    `${icon.status} ${icon.headers.get('content-type')}`);
+
+  // ── 5d. scope gating: a read-only token sees no write tools ──────────────
+  const roClient = await (await fetch(`${B}/oauth/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_name: 'RO', redirect_uris: ['http://127.0.0.1:9999/cb'], scope: 'read' }),
+  })).json();
+  const roVerifier = crypto.randomBytes(32).toString('base64url');
+  const roChallenge = crypto.createHash('sha256').update(roVerifier).digest('base64url');
+  const roUrl = new URL(`${B}/oauth/authorize`);
+  for (const [k, v] of Object.entries({
+    response_type: 'code', client_id: roClient.client_id, redirect_uri: 'http://127.0.0.1:9999/cb',
+    code_challenge: roChallenge, code_challenge_method: 'S256', scope: 'read', resource: `${config.baseUrl}/mcp`,
+  })) roUrl.searchParams.set(k, v);
+  const roTicket = /name="ticket" value="([^"]+)"/.exec(await (await fetch(roUrl, { headers: { cookie } })).text())?.[1];
+  const roConsent = await fetch(`${B}/oauth/authorize/consent`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ ticket: roTicket, org_id: String(org.id), decision: 'allow' }), redirect: 'manual',
+  });
+  const roCode = new URL(roConsent.headers.get('location')).searchParams.get('code');
+  const roTok = await (await tokenReq({
+    grant_type: 'authorization_code', client_id: roClient.client_id, code: roCode,
+    redirect_uri: 'http://127.0.0.1:9999/cb', code_verifier: roVerifier,
+  })).json();
+  const roMcp = (body2, extra = {}) => fetch(`${B}/mcp`, {
+    method: 'POST', headers: { ...H, authorization: `Bearer ${roTok.access_token}`, ...extra },
+    body: JSON.stringify(body2),
+  });
+  const roInit = await roMcp({
+    jsonrpc: '2.0', method: 'initialize', id: 1,
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ro', version: '1' } },
+  });
+  const roSid = { 'mcp-session-id': roInit.headers.get('mcp-session-id') };
+  const roTools = (await parse(await roMcp({ jsonrpc: '2.0', method: 'tools/list', id: 2 }, roSid))).result?.tools || [];
+  chk('a read-only token sees ZERO write tools',
+    roTools.every((t) => !t.name.match(/update|action|create|delete|run_checks|poll/)),
+    roTools.map((t) => t.name).filter((n) => n.match(/update|action|create|delete|run_checks|poll/)).join(','));
+  chk('a read-only token still sees the read tools', roTools.length >= 8, `${roTools.length}`);
+
+  // ── 5e. M3 generic REST API via token ────────────────────────────────────
+  const restRead = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${AT}` } });
+  chk('REST /api/events with an OAuth token → 200', restRead.status === 200, `got ${restRead.status}`);
+  const restReadRo = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${roTok.access_token}` } });
+  chk('REST read works with a read-only token', restReadRo.status === 200, `got ${restReadRo.status}`);
+  const restWriteRo = await fetch(`${B}/api/cases/${anyCase.id}`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${roTok.access_token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ note: 'should not work' }),
+  });
+  chk('REST write with a read-only token → 403', restWriteRo.status === 403, `got ${restWriteRo.status}`);
+  const restWrite = await fetch(`${B}/api/cases/${anyCase.id}`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${AT}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ note: 'via rest token' }),
+  });
+  chk('REST write with a write-scoped token → 200 (no CSRF header needed)', restWrite.status === 200, `got ${restWrite.status}`);
+  const adminViaToken = await fetch(`${B}/api/admin/apikeys`, { headers: { authorization: `Bearer ${AT}` } });
+  chk('admin routes stay session-only (token → 401)', adminViaToken.status === 401, `got ${adminViaToken.status}`);
+
+  // API key with / without the `api` scope
+  const mkKey = (scopes, role) => {
+    const raw = `ock_${crypto.randomBytes(24).toString('hex')}`;
+    db.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
+      VALUES (?,?,?,?,?,?,1,?,?)`).run(org.id, `e2e ${scopes}`, raw.slice(0, 12),
+      crypto.createHash('sha256').update(raw).digest('hex'), scopes, role, user.id, Date.now());
+    return raw;
+  };
+  const apiKey = mkKey('ingest,api', 'lead');
+  const ingestOnly = mkKey('ingest', 'analyst');
+  const keyRead = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${apiKey}` } });
+  chk('REST /api/events with an `api`-scoped key → 200', keyRead.status === 200, `got ${keyRead.status}`);
+  const keyNoScope = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${ingestOnly}` } });
+  chk('an ingest-only key cannot drive the REST API → 403', keyNoScope.status === 403, `got ${keyNoScope.status}`);
+  const keyRoleGate = await fetch(`${B}/api/rules`, {
+    method: 'POST', headers: { authorization: `Bearer ${mkKey('api', 'analyst')}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'nope', channel: 'email' }),
+  });
+  chk("an analyst-role key is refused a lead-only route → 403", keyRoleGate.status === 403, `got ${keyRoleGate.status}`);
+
   // ── 6. revocation ────────────────────────────────────────────────────────
   await fetch(`${B}/oauth/revoke`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: AT }),

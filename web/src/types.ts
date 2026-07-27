@@ -118,6 +118,10 @@ export interface ApiKeyRow {
   id: number; name: string; prefix: string; scopes: string[]; active: boolean;
   createdAt: number; lastUsedAt: number | null;
 }
+export interface McpConnection {
+  clientId: string; name: string; scopes: string[];
+  createdAt: number; lastUsedAt: number | null;
+}
 export interface SnmpTarget {
   id: number; name: string; host: string; port: number; version: string;
   oids: { oid: string; label: string }[]; intervalS: number; enabled: boolean;

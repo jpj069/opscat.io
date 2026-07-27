@@ -142,6 +142,89 @@ function requireRole(minRole) {
   };
 }
 
+// ── token auth for the REST API ────────────────────────────────────────────
+// Lets the same /api endpoints the UI uses be driven by a script, a cron job or
+// any HTTP client — not only from a browser session and not only through MCP.
+//
+// Two credentials resolve here, both presented as `Authorization: Bearer`:
+//
+//   • an API key with the `api` scope   → acts with the key's own `role`
+//   • an MCP OAuth access token          → acts as its user, with that user's
+//                                          membership role in the bound org
+//
+// Both produce exactly the request shape `requireSession` produces (req.user,
+// req.org, req.orgId, req.user.role), so no route handler needs to know how the
+// request authenticated.
+//
+// CSRF is deliberately NOT enforced for Bearer: CSRF exists to protect *cookie*
+// auth, and a browser cannot be tricked into attaching someone else's
+// Authorization header.
+//
+// Mounted only on the operational routers (ops, synthetics, vendors). Account,
+// API-key, billing, org and super-admin administration stay session-only — a
+// credential that can mint another credential is a privilege-escalation path.
+const apiTokenLimiter = new RateLimiter({ perMinute: 300, burst: 60 });
+
+function bearerPrincipal(req, res, next, token) {
+  const { getMembership } = require('./db');
+  const org = (id) => getOrg.get(id);
+
+  // 1. OAuth access token (MCP). Same credential, wider surface.
+  const oauth = require('./lib/oauth');
+  const tok = oauth.verifyAccessToken(token);
+  if (tok) {
+    const needed = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
+    const scopes = String(tok.scopes || '').split(',').filter(Boolean);
+    if (!scopes.includes(needed)) return httpError(res, 403, `token lacks scope '${needed}'`);
+    const user = getUser.get(tok.user_id);
+    if (!user || !user.active) return httpError(res, 401, 'account disabled');
+    const membership = getMembership(user.id, tok.org_id);
+    if (!membership) return httpError(res, 403, 'no organization membership');
+    const o = org(tok.org_id);
+    if (!o) return httpError(res, 401, 'organization missing');
+    if (o.status === 'suspended' && !user.is_super_admin) return httpError(res, 403, 'organization suspended');
+    if (!apiTokenLimiter.allow(`t${tok.id}`)) return httpError(res, 429, 'rate limit exceeded');
+    user.role = membership.role;
+    req.user = user;
+    req.org = o;
+    req.orgId = o.id;
+    req.authKind = 'oauth';
+    return next();
+  }
+
+  // 2. API key with the `api` scope.
+  const row = getKeyByHash.get(sha256(token));
+  if (!row) return httpError(res, 401, 'invalid token');
+  if (!row.scopes.split(',').includes('api')) return httpError(res, 403, "key lacks scope 'api'");
+  const o = org(row.org_id);
+  if (!o) return httpError(res, 401, 'organization missing');
+  if (o.status === 'suspended') return httpError(res, 403, 'organization suspended');
+  if (!apiTokenLimiter.allow(`k${row.id}`)) return httpError(res, 429, 'rate limit exceeded');
+  touchKey.run(now(), row.id);
+  // A key is not a person. It acts as the user who created it, so audit entries
+  // and assignments still name a human; the key's own role caps what it may do.
+  req.user = {
+    id: row.created_by ?? null,
+    email: `apikey:${row.prefix}`,
+    name: row.name,
+    role: row.role || 'analyst',
+    is_super_admin: 0,
+    active: 1,
+  };
+  req.org = o;
+  req.orgId = o.id;
+  req.apiKey = row;
+  req.authKind = 'apikey';
+  return next();
+}
+
+function requireSessionOrToken(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (m) return bearerPrincipal(req, res, next, m[1]);
+  return requireSession(req, res, next);
+}
+
 // API-key auth for /v1 ingest surfaces. Key via Authorization: Bearer or X-Api-Key or ?key=
 function requireApiKey(scope) {
   return (req, res, next) => {
@@ -184,6 +267,6 @@ function audit(userId, action, detail, orgId = 1) {
 
 module.exports = {
   ROLE_RANK, authLimiter, parseCookies, setSessionCookie, clearSessionCookie,
-  createSession, clientIp, requireSession, requireRole, requireSuperAdmin, requireApiKey,
+  createSession, clientIp, requireSession, requireSessionOrToken, requireRole, requireSuperAdmin, requireApiKey,
   securityHeaders, audit,
 };

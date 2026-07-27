@@ -26,6 +26,13 @@ router.get('/mcp/llms.txt', (_req, res) => {
   res.sendFile(LLMS_TXT);
 });
 
+// SEP-973 server icon, referenced from the InitializeResult implementation.
+router.get('/mcp/icon.svg', (_req, res) => {
+  res.type('image/svg+xml');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, '..', 'mcp', 'icon.svg'));
+});
+
 // Browser origins allowed to drive the endpoint. A native MCP client sends no
 // Origin at all and is unaffected; this only constrains browser-based clients.
 const ALLOWED_ORIGINS = [config.baseUrl, 'https://claude.ai', 'https://claude.com'];

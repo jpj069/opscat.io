@@ -479,3 +479,6 @@ router.get('/', (req, res, next) => {
 });
 
 module.exports = router;
+// The status payload, so the MCP `status-page` resource serves exactly what the
+// public page and its .json endpoint serve — one source, no drift.
+module.exports.statusData = statusData;

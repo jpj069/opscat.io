@@ -9,7 +9,7 @@ const synthEngine = require('../engine/synthetics');
 const plans = require('../plans');
 
 const router = express.Router();
-router.use(sec.requireSession);
+router.use(sec.requireSessionOrToken);
 
 // Returns true if allowed; otherwise sends a 402 and returns false.
 function withinPlan(req, res, resource) {

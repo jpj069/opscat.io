@@ -13,6 +13,17 @@ Public (no auth): `GET /api/health`, `GET /status` (HTML status page —
 per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
 (edition, public plan matrix, auth options for the login/pricing UI).
 
+**Token auth for the operations API.** `/api/events`, `/api/cases`, `/api/incidents`,
+`/api/synthetics/*`, `/api/vendors/*` and the rest of the operations surface accept
+`Authorization: Bearer` as well as a browser session, so scripts and cron jobs need
+neither a cookie nor an MCP client. Two credentials resolve: an **MCP access token**
+(acts as its user with their membership role; `read` scope for GET, `write` for
+mutations) or an **API key with the `api` scope** (acts with the key's own `role`, which
+can never exceed the role of whoever created it). No CSRF header is required for Bearer —
+CSRF protects cookie auth. Account, API-key, billing, organization and super-admin
+endpoints stay **session-only**: a credential that can mint another credential is a
+privilege-escalation path.
+
 **MCP server** (`POST/GET/DELETE /mcp`, Streamable HTTP, MCP revision 2025-11-25).
 Authenticated with an OAuth 2.1 Bearer token; the authorization server lives on the same
 origin (`/oauth/register` RFC 7591 · `/oauth/authorize` PKCE S256 only · `/oauth/token` ·
@@ -20,7 +31,10 @@ origin (`/oauth/register` RFC 7591 · `/oauth/authorize` PKCE S256 only · `/oau
 (RFC 8414) and `/.well-known/oauth-protected-resource[/mcp]` (RFC 9728, both forms).
 The consent screen carries an **organization picker**: the token is bound to one
 organization and every tool is scoped to it, so no tool takes an org argument. Roles are
-read from `memberships` per request, never cached in the token. Tool reference:
+read from `memberships` per request, never cached in the token. 17 tools (9 read, 8 write), each annotated and carrying an `outputSchema`; a read-only
+credential never sees the write tools. Two resources (`opscat://org/<id>/status`,
+`.../incidents/open`). Destructive calls confirm via elicitation. Per-user connections
+are listed and revoked at `GET/DELETE /api/admin/connections`. Tool reference:
 `/mcp/llms.txt`. See `docs/MCP-PLAN.md`.
 
 **Machine-readable status page.** Append `.json` to any status page URL — `/status.json`,

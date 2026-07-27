@@ -34,7 +34,7 @@ cannot drive this one. Revoke with `POST /oauth/revoke`.
 | Scope | Grants |
 |---|---|
 | `read` | Events, cases, logs, checks, incidents, infrastructure inventory, dashboard |
-| `write` | Reserved for the mutating tools (acknowledge cases, publish incidents, run checks) — not yet shipped |
+| `write` | Update cases, act on events, open/update incidents, schedule maintenance, run checks, poll vendors |
 
 Your OpsCat role still applies on top: the scope says what the client asked for,
 your membership role says what you may do. An `analyst` holding the `write` scope
@@ -43,8 +43,12 @@ enforces, never more and never less.
 
 ## Tools
 
-All read-only, all annotated (`readOnlyHint: true`), all returning
-`structuredContent` alongside their text block.
+Every tool is annotated (`readOnlyHint` / `destructiveHint` / `idempotentHint` /
+`openWorldHint`) and returns `structuredContent` alongside its text block. A
+read-only credential does not see the write tools at all — they are absent from
+`tools/list`, not merely refused on call.
+
+### Read (`read` scope)
 
 - `opscat_get_dashboard` — one-call overview: active/critical events, open cases,
   failing checks, live incidents, active maintenance. **Start here.**
@@ -60,8 +64,45 @@ All read-only, all annotated (`readOnlyHint: true`), all returning
   public status page.
 - `opscat_list_infrastructure` — agents, SNMP targets and heartbeats with
   last-seen times.
+- `opscat_list_vendors` — third-party providers whose status pages OpsCat tracks;
+  `onlyDisrupted: true` for the supply-chain problem list.
 
 Severity is 0-100: >= 80 critical, >= 60 major, >= 40 minor.
+
+### Write (`write` scope)
+
+- `opscat_update_case` — status, root cause, note. The "acknowledge and write
+  down what you found" tool.
+- `opscat_event_action` — `finish` (also closes the case), `downgrade`, `note`.
+- `opscat_create_incident` — opens an incident. Created **unpublished**: it is not
+  on the public status page until you publish it.
+- `opscat_post_incident_status` — move to `investigating`/`identified`/
+  `monitoring`/`resolved` and append an update. On a published incident this text
+  is **publicly visible**.
+- `opscat_update_incident` — title, severity, RCA, and `published`. Publishing
+  asks for confirmation first (see below).
+- `opscat_create_maintenance` / `opscat_delete_maintenance` — maintenance windows
+  suppress alerting. Deleting one is destructive and asks for confirmation.
+- `opscat_run_checks` — run this org's synthetic checks now (`openWorldHint`: it
+  contacts the external targets).
+- `opscat_poll_vendor` — re-fetch one vendor's status feed now (`openWorldHint`).
+
+**Confirmation.** Publishing an incident and deleting a maintenance window ask
+the user through MCP elicitation. If your client does not support elicitation the
+tool refuses and tells you to re-run with `confirm: true` — it never proceeds
+silently.
+
+**Roles apply on top of scopes.** The scope says what the client asked for; your
+membership role says what you may do. Incidents and maintenance need `lead`;
+cases, events, checks and vendor polls are available to `analyst` — exactly the
+split the web app enforces.
+
+## Resources
+
+- `opscat://org/<id>/status` — the public status page payload, identical to what
+  the page and its `.json` endpoint serve.
+- `opscat://org/<id>/incidents/open` — unresolved incidents with their update
+  history.
 
 ## Session lifecycle
 
@@ -80,6 +121,26 @@ allow-listed. Native clients send no `Origin` and are unaffected.
 No tools for user management, API-key or credential management, organization or
 billing administration, or super-admin functions. An agent that can mint
 credentials is a privilege-escalation path with a natural-language interface.
+
+## Driving OpsCat without MCP
+
+The same operations API the web app uses accepts `Authorization: Bearer`, so a
+script or a cron job needs no browser session and no MCP client:
+
+    curl -H "Authorization: Bearer $TOKEN" https://opscat.io/api/events
+    curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+         -d '{"status":"closed"}' https://opscat.io/api/cases/42
+
+Two credentials work there:
+
+- an **MCP access token** (the one from the flow above) — acts as you, with your
+  membership role, `read` scope for GET and `write` for anything else;
+- an **API key with the `api` scope**, created under Settings -> API Keys — acts
+  with the role assigned to the key, capped at the role of whoever created it.
+
+No CSRF header is needed for Bearer requests (CSRF protects cookie auth). Account,
+API-key, billing, organization and super-admin endpoints stay session-only: a
+credential that can mint another credential would be a privilege-escalation path.
 
 ## Status page
 

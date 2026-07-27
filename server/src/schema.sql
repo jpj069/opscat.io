@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name          TEXT NOT NULL,
   prefix        TEXT NOT NULL,               -- first 12 chars for display
   key_hash      TEXT NOT NULL UNIQUE,        -- sha256(full key)
-  scopes        TEXT NOT NULL DEFAULT 'ingest',  -- csv: ingest,agent,probe
+  scopes        TEXT NOT NULL DEFAULT 'ingest',  -- csv: ingest,agent,probe,api
+  role          TEXT NOT NULL DEFAULT 'analyst', -- role an `api`-scoped key acts with
   active        INTEGER NOT NULL DEFAULT 1,
   created_by    INTEGER REFERENCES users(id),
   created_at    INTEGER NOT NULL,

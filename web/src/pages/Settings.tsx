@@ -8,7 +8,7 @@ import {
 } from '../ui';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
-  MaintenanceWindow, Settings as SettingsMap, SnmpTarget,
+  MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
 } from '../types';
 
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
@@ -17,6 +17,7 @@ const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 const KEYS_GRID = '1fr 120px 140px 110px 120px 90px';
 const AGENTS_GRID = '1fr 100px 140px 100px 80px 100px 90px 60px';
 const TARGETS_GRID = '1fr 160px 70px 90px 110px 110px 80px';
+const CONNECTIONS_GRID = '1fr 130px 120px 120px 90px';
 
 interface SystemInfo {
   uptimeS?: number; dbBytes?: number; nodeVersion?: string;
@@ -45,6 +46,7 @@ export default function Settings() {
   const [agentsHidden, setAgentsHidden] = useState(false);
   const [targets, setTargets] = useState<SnmpTarget[] | null>(null);
   const [targetsHidden, setTargetsHidden] = useState(false);
+  const [connections, setConnections] = useState<McpConnection[] | null>(null);
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [sysHidden, setSysHidden] = useState(false);
 
@@ -58,9 +60,14 @@ export default function Settings() {
   const reloadKeys = () => api.get<ApiKeyRow[]>('/api/admin/apikeys').then(setKeys).catch(() => {});
   const reloadAgents = () => api.get<AgentRow[]>('/api/admin/agents').then(setAgents).catch(() => {});
   const reloadTargets = () => api.get<SnmpTarget[]>('/api/admin/snmp/targets').then(setTargets).catch(() => {});
+  // Connections are the caller's OWN authorized MCP clients, not org config —
+  // every role sees their own, so this is not behind the lead+ gate.
+  const reloadConnections = () => api.get<McpConnection[]>('/api/admin/connections')
+    .then(setConnections).catch(() => setConnections([]));
 
   useEffect(() => {
     api.get<SettingsMap>('/api/admin/settings').then(setSettings).catch(() => setSettings({}));
+    reloadConnections();
 
     if (leadPlus) {
       api.get<ApiKeyRow[]>('/api/admin/apikeys').then(setKeys)
@@ -203,6 +210,36 @@ export default function Settings() {
           </TableScroll>
         </div>
       )}
+
+      {/* 3b. Connected apps (MCP / OAuth grants) — the caller's own */}
+      <div className="card">
+        <div className="card-title"><span>Connected apps</span></div>
+        <p style={{ fontSize: 11, color: 'var(--text2)', margin: '0 0 10px' }}>
+          AI clients you authorized to act on your behalf in this organization. Revoking
+          takes effect immediately.
+        </p>
+        <TableScroll minWidth={620}>
+        <div className="tbl-head" style={{ gridTemplateColumns: CONNECTIONS_GRID, padding: '8px 0' }}>
+          <span>Application</span><span>Permissions</span>
+          <span>Connected</span><span>Last used</span><span></span>
+        </div>
+        {connections === null && <TableSkeleton cols={CONNECTIONS_GRID} rows={2} flush />}
+        {connections?.length === 0 && <Empty>No connected apps.</Empty>}
+        {connections?.map((c) => (
+          <div key={c.clientId} style={{ display: 'grid', gridTemplateColumns: CONNECTIONS_GRID,
+            gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--text0)' }}>{c.name}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{c.scopes.join(', ')}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(c.createdAt)}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(c.lastUsedAt)}</span>
+            <button className="btn btn-sm"
+              onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
+              Revoke
+            </button>
+          </div>
+        ))}
+        </TableScroll>
+      </div>
 
       {/* 4. Agents */}
       {!agentsHidden && (
