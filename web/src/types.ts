@@ -137,11 +137,30 @@ export interface AgentRow {
 }
 export type Settings = Record<string, string>;
 
+// ---------------------------------------------------------------- log pipeline
+
+export interface PipelineBucket { bucket: number; lines: number; bytes: number; events: number; }
+export interface PipelineStats {
+  range: '24h' | '7d' | '30d'; step: number;
+  buckets: PipelineBucket[];
+  totals: { lines: number; bytes: number; events: number };
+}
+// custom rule as stored (org_settings key 'classifiers'); builtin rows use the same shape
+export interface ClassifierRule {
+  pattern: string; flags?: string; name: string; severity: number; targetGroup?: number | null;
+}
+export interface ClassifiersResponse { builtin: ClassifierRule[]; custom: ClassifierRule[]; }
+export interface ClassifyTestResult {
+  match: { name: string; severity: number; target: string | null;
+    source: 'custom' | 'builtin' | 'syslog'; pattern: string | null } | null;
+  caseThreshold: number;
+}
+
 // ---------------------------------------------------------------- cloud / billing
 
 export interface PlanLimits {
   users: number; retentionDays: number; checks: number; sensors: number;
-  snmpTargets: number; agents: number; apiKeys: number;
+  snmpTargets: number; agents: number; apiKeys: number; ingestLinesPerDay: number;
 }
 export interface PlanInfo {
   key: string; name: string; priceMonthly: number; priceYearly: number;
@@ -155,6 +174,7 @@ export interface PlansResponse {
 
 export interface BillingUsage {
   users: number; checks: number; sensors: number; agents: number; apiKeys: number; snmpTargets: number;
+  ingestLinesToday: number;
 }
 export interface BillingStatus {
   plan: string; planName: string;

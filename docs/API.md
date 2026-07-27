@@ -63,6 +63,9 @@ done through the admin users API below.
 
 Log lines run through the classifier pipeline (see `server/src/engine/pipeline.js`): lines
 scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-open a case.
+Custom classifier rules are per-organization (Pipeline page / `/api/admin/pipeline/classifiers`)
+and are evaluated before the built-ins. On the cloud edition, log-line endpoints additionally
+enforce the plan's `ingestLinesPerDay` limit and answer `429` once the day's allowance is spent.
 
 ## Agents (`/v1`, agent token)
 
@@ -116,6 +119,9 @@ one-liner shown in onboarding and Settings → Agents:
 - `GET/POST/PATCH/DELETE /api/admin/snmp/targets` (lead+) — `{name,host,port,version:'2c'|'3',community?,oids:[{oid,label}],intervalS}`; v3 instead of community: `{v3User, v3Level:'noAuthNoPriv'|'authNoPriv'|'authPriv', v3AuthProtocol:'sha'|'md5', v3AuthKey, v3PrivProtocol:'aes'|'des', v3PrivKey}` (keys stored encrypted, never returned)
 - `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,autoUpdate,lastSeenAt,online}`), POST (lead+, `{name,group,autoUpdate?}` default true) → `{token}` once, PATCH `/:id` `{autoUpdate}`, `GET /api/admin/agents/:id/metrics?hours=`
 - `GET/PATCH /api/admin/settings` — keys: `org_name, backend_label, status_published, retention_logs_days, onboarding_done, onboarding_role, onboarding_goal, onboarding_source, alert_email_from, auth_email_from, teams_webhook_url, telegram_bot_token, pushover_token, classifiers, status_reports_enabled, status_reports_public, status_reports_threshold`. `onboarding_done` is `'0'` on a fresh cloud org and flipped to `'1'` when its admin finishes/skips the first-run setup flow; `onboarding_role/goal/source` capture the personalization answers (source = acquisition channel, only asked on a user's first org) for later analysis
+- `GET /api/admin/pipeline/stats?range=24h|7d|30d` → `{range, step, buckets:[{bucket,lines,bytes,events}], totals:{lines,bytes,events}}` — ingest throughput from the hourly `ingest_stats` counters (hour buckets for 24h, day buckets otherwise, gaps zero-filled)
+- `GET /api/admin/pipeline/classifiers` → `{builtin:[…], custom:[…]}` (rule shape: `{pattern, flags, name, severity, targetGroup?}`); `PUT` (admin) replaces the org's custom rules `{classifiers:[…]}` (≤100 rules, patterns validated, live reload — no restart)
+- `POST /api/admin/pipeline/test` — `{line, sev?}` → `{match:{name,severity,target,source:'custom'|'builtin'|'syslog',pattern}|null, caseThreshold}` — dry-runs a sample line through the org's classifier chain, nothing is stored
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 
 ## Billing (cloud edition, `/api/billing`)

@@ -1,12 +1,13 @@
 'use strict';
 // Log → event pipeline: classify lines, score severity, dedupe into events,
 // auto-open cases, notify the alert engine and SSE stream.
-const { db, getSetting } = require('../db');
+const { db, getOrgSetting } = require('../db');
 const { now } = require('../util');
 
 // Built-in classifiers, evaluated in order; first match wins.
-// Custom classifiers can be added via settings key 'classifiers' (JSON array
-// of {pattern, flags, name, severity, targetGroup}) and take precedence.
+// Custom classifiers are per-organization (org_settings key 'classifiers',
+// JSON array of {pattern, flags, name, severity, targetGroup}) and take
+// precedence over the built-ins. Managed via /api/admin/pipeline/classifiers.
 const BUILTIN_CLASSIFIERS = [
   { re: /ddos[_ ]?(underattack|attack)[\s:]*([^\s]*)/i, name: 'ddos', sev: 95, target: 2 },
   { re: /out of memory|oom[- _]?kill|memory cgroup out of memory/i, name: 'out_of_memory', sev: 85 },
@@ -29,38 +30,69 @@ const BUILTIN_CLASSIFIERS = [
   { re: /\bwarn(ing)?\b/i, name: 'warning', sev: 22 },
 ];
 
-let customClassifiers = null;
-function loadClassifiers() {
+// compiled custom classifiers per org, invalidated by loadClassifiers()
+const customCache = new Map();
+function customClassifiersFor(orgId) {
+  let list = customCache.get(orgId);
+  if (list) return list;
+  list = [];
   try {
-    const raw = getSetting('classifiers');
-    customClassifiers = raw
-      ? JSON.parse(raw).map((c) => ({
-          re: new RegExp(c.pattern, c.flags || 'i'),
-          name: c.name, sev: c.severity, target: c.targetGroup,
-        }))
-      : [];
-  } catch { customClassifiers = []; }
+    const raw = getOrgSetting(orgId, 'classifiers');
+    if (raw) {
+      list = JSON.parse(raw).map((c) => ({
+        re: new RegExp(c.pattern, c.flags || 'i'),
+        name: c.name, sev: c.severity, target: c.targetGroup,
+      }));
+    }
+  } catch { list = []; }
+  customCache.set(orgId, list);
+  return list;
 }
-loadClassifiers();
+// call after saving an org's classifiers (no arg: drop every org's cache)
+function loadClassifiers(orgId) {
+  if (orgId == null) customCache.clear();
+  else customCache.delete(orgId);
+}
 
 // Map syslog severity (0..7) to a score floor so explicitly-critical syslog
 // lines create events even without a pattern match.
 const SYSLOG_FLOOR = [92, 88, 82, 55, 35, 15, 0, 0];
 
-function classify(line, syslogSev) {
-  for (const c of [...(customClassifiers || []), ...BUILTIN_CLASSIFIERS]) {
-    const m = c.re.exec(line);
-    if (m) {
-      return {
-        name: c.name,
-        severity: c.sev,
-        target: c.target && m[c.target] ? String(m[c.target]).slice(0, 200) : null,
-      };
+function classify(line, syslogSev, orgId = 1) {
+  for (const [source, list] of [['custom', customClassifiersFor(orgId)], ['builtin', BUILTIN_CLASSIFIERS]]) {
+    for (const c of list) {
+      const m = c.re.exec(line);
+      if (m) {
+        return {
+          name: c.name,
+          severity: c.sev,
+          target: c.target && m[c.target] ? String(m[c.target]).slice(0, 200) : null,
+          source, pattern: c.re.source,
+        };
+      }
     }
   }
   const floor = SYSLOG_FLOOR[Math.min(7, Math.max(0, syslogSev ?? 6))];
-  if (floor >= 20) return { name: 'syslog_sev' + syslogSev, severity: floor, target: null };
+  if (floor >= 20) {
+    return { name: 'syslog_sev' + syslogSev, severity: floor, target: null, source: 'syslog', pattern: null };
+  }
   return null;
+}
+
+// serializable rule listing for the admin UI (never exposes compiled regexes)
+function listClassifiers(orgId) {
+  const custom = [];
+  try {
+    const raw = getOrgSetting(orgId, 'classifiers');
+    if (raw) custom.push(...JSON.parse(raw));
+  } catch { /* corrupt value behaves like "none" — same as classify() */ }
+  return {
+    builtin: BUILTIN_CLASSIFIERS.map((c) => ({
+      pattern: c.re.source, flags: c.re.flags, name: c.name,
+      severity: c.sev, targetGroup: c.target ?? null,
+    })),
+    custom,
+  };
 }
 
 const insLog = db.prepare(
@@ -78,6 +110,11 @@ const insCase = db.prepare(`INSERT INTO cases (org_id, event_id, name, device, s
   VALUES (?, ?, ?, ?, ?, 'open', ?)`);
 const findOpenCaseForEvent = db.prepare(
   "SELECT id FROM cases WHERE event_id = ? AND status != 'closed'");
+const bumpStats = db.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, bytes, events)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = lines + excluded.lines,
+    bytes = bytes + excluded.bytes, events = events + excluded.events`);
+const hourBucket = (t) => Math.floor(t / 3600000) * 3600000;
 
 const CASE_THRESHOLD = 60;
 
@@ -98,6 +135,7 @@ function emit(type, payload) {
 function ingestLogs(entries, source, orgId = 1) {
   const t = now();
   let accepted = 0;
+  let bytes = 0;
   const touchedEvents = [];
   const emittedLogs = [];
 
@@ -112,9 +150,10 @@ function ingestLogs(entries, source, orgId = 1) {
       if (ts > t + 5 * 60 * 1000 || ts < t - 30 * 24 * 3600 * 1000) ts = t; // reject silly timestamps
       insLog.run(orgId, ts, device, line, sev, source, e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null);
       accepted++;
+      bytes += Buffer.byteLength(line);
       emittedLogs.push({ orgId, ts, device, line, sev });
 
-      const cls = classify(line, sev);
+      const cls = classify(line, sev, orgId);
       if (!cls) continue;
       const ip = e.meta && typeof e.meta.ip === 'string' ? e.meta.ip.slice(0, 45) : null;
       const dedupe = `${cls.name}|${device}|${cls.target || ''}`;
@@ -138,6 +177,7 @@ function ingestLogs(entries, source, orgId = 1) {
       bumpBucket.run(ev.id, Math.floor(ts / 60000));
       touchedEvents.push(ev);
     }
+    if (accepted) bumpStats.run(orgId, hourBucket(t), accepted, bytes, touchedEvents.length);
   })();
 
   for (const l of emittedLogs) emit('log', l);
@@ -173,9 +213,10 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
       if (sev >= CASE_THRESHOLD) insCase.run(orgId, ev.id, name, device, sev, t);
     }
     bumpBucket.run(ev.id, Math.floor(t / 60000));
+    bumpStats.run(orgId, hourBucket(t), 0, 0, 1);
   })();
   emit('event', ev);
   return { accepted: 1, events: 1 };
 }
 
-module.exports = { ingestLogs, ingestEvent, classify, loadClassifiers, on, CASE_THRESHOLD };
+module.exports = { ingestLogs, ingestEvent, classify, loadClassifiers, listClassifiers, on, CASE_THRESHOLD };

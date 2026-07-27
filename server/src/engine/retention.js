@@ -82,6 +82,7 @@ function prune() {
   db.prepare('DELETE FROM vendor_reports WHERE ts < ?').run(t - 30 * 86400000);
   db.prepare("DELETE FROM vendor_days WHERE day < date('now', '-100 days')").run();
   db.prepare('DELETE FROM audit_log WHERE ts < ?').run(t - 180 * 86400000);
+  db.prepare('DELETE FROM ingest_stats WHERE bucket < ?').run(t - 400 * 86400000);
 }
 
 function start() {

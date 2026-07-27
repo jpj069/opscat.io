@@ -576,6 +576,10 @@ function BillingCard() {
         {USAGE_METRICS.map((m) => (
           <UsageBar key={m.key} label={m.label} used={s.usage[m.key]} limit={s.limits[m.key]} />
         ))}
+        {s.usage.ingestLinesToday != null && s.limits.ingestLinesPerDay != null && (
+          <UsageBar label="Log lines (today)" used={s.usage.ingestLinesToday}
+            limit={s.limits.ingestLinesPerDay} />
+        )}
       </div>
 
       {/* upgrade */}

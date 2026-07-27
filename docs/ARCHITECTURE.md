@@ -45,7 +45,10 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 ## Data flow: log → event → case → alert
 
 1. `POST /v1/ingest/logs` (SDK, syslog shippers, curl) — batch of lines, API key scoped `ingest`.
-2. Pipeline classifies each line (configurable regex classifiers) → severity score 0–100.
+2. Pipeline classifies each line (regex classifiers; per-org custom rules from the
+   Pipeline admin page run before the built-ins) → severity score 0–100. Hourly
+   `ingest_stats` counters (lines/bytes/event hits) feed the Pipeline throughput
+   charts and the cloud plans' daily ingest allowance.
 3. Lines scoring ≥ 20 are aggregated into **events**, deduped by `(name, device, target)`:
    hits counter + per-minute buckets (sparklines), first/last seen.
 4. Events scoring ≥ 60 auto-open a **case** (C-1xxx). Analysts assign/close/downgrade in the UI.

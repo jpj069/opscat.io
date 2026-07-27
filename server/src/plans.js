@@ -14,24 +14,28 @@ const { db } = require('./db');
 const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
-    limits: { users: 3, retentionDays: 7, checks: 3, sensors: 1, snmpTargets: 2, agents: 2, apiKeys: 2 },
+    limits: { users: 3, retentionDays: 7, checks: 3, sensors: 1, snmpTargets: 2, agents: 2, apiKeys: 2,
+      ingestLinesPerDay: 50000 },
     features: ['status_page', 'email_alerts', 'multi_org'],
   },
   pro: {
     key: 'pro', name: 'Pro', priceMonthly: 29, priceYearly: 290,
-    limits: { users: 10, retentionDays: 30, checks: 25, sensors: 5, snmpTargets: 20, agents: 25, apiKeys: 10 },
+    limits: { users: 10, retentionDays: 30, checks: 25, sensors: 5, snmpTargets: 20, agents: 25, apiKeys: 10,
+      ingestLinesPerDay: 1000000 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'multi_org'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
-    limits: { users: 30, retentionDays: 90, checks: 100, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: 50 },
+    limits: { users: 30, retentionDays: 90, checks: 100, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: 50,
+      ingestLinesPerDay: 10000000 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'priority_support', 'sensor_autoprovision', 'multi_org'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
-    limits: { users: -1, retentionDays: 365, checks: -1, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: -1 },
+    limits: { users: -1, retentionDays: 365, checks: -1, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: -1,
+      ingestLinesPerDay: -1 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
       'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'sla', 'multi_org'],
   },
@@ -75,6 +79,27 @@ function checkLimit(orgId, planKey, resource) {
   return { ok: used < limit, limit, used };
 }
 
+// Daily ingest allowance from the hourly ingest_stats counters (UTC day).
+// Called on the hot ingest path — one indexed SUM over at most 24 rows.
+const ingestTodayStmt = db.prepare(
+  'SELECT COALESCE(SUM(lines), 0) c FROM ingest_stats WHERE org_id = ? AND bucket >= ?');
+const orgPlanStmt = db.prepare('SELECT plan FROM organizations WHERE id = ?');
+
+function ingestLinesToday(orgId) {
+  const t = Date.now();
+  return ingestTodayStmt.get(orgId, t - (t % 86400000)).c;
+}
+
+// Returns {ok, limit, used} — ok=false means today's log line allowance is spent.
+function checkIngestVolume(orgId) {
+  if (!enforce) return { ok: true, limit: -1, used: 0 };
+  const org = orgPlanStmt.get(orgId);
+  const limit = limitFor(org ? org.plan : 'free', 'ingestLinesPerDay');
+  if (limit === -1) return { ok: true, limit: -1, used: 0 };
+  const used = ingestLinesToday(orgId);
+  return { ok: used < limit, limit, used };
+}
+
 function publicPlans() {
   return Object.values(PLANS).map((p) => ({
     key: p.key, name: p.name, priceMonthly: p.priceMonthly, priceYearly: p.priceYearly,
@@ -82,4 +107,5 @@ function publicPlans() {
   }));
 }
 
-module.exports = { PLANS, planFor, hasFeature, checkLimit, limitFor, setEnforce, publicPlans };
+module.exports = { PLANS, planFor, hasFeature, checkLimit, limitFor, setEnforce, publicPlans,
+  checkIngestVolume, ingestLinesToday };

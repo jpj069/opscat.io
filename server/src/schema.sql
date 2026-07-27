@@ -277,6 +277,16 @@ CREATE TABLE IF NOT EXISTS snmp_results (
   PRIMARY KEY (target_id, oid, ts)
 ) WITHOUT ROWID;
 
+-- hourly ingest counters per org (pipeline throughput: lines/bytes/events)
+CREATE TABLE IF NOT EXISTS ingest_stats (
+  org_id        INTEGER NOT NULL,
+  bucket        INTEGER NOT NULL,            -- hour start (ms since epoch)
+  lines         INTEGER NOT NULL DEFAULT 0,
+  bytes         INTEGER NOT NULL DEFAULT 0,
+  events        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (org_id, bucket)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS alert_rules (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        INTEGER NOT NULL DEFAULT 1,

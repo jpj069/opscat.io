@@ -171,9 +171,81 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
     } catch { return httpError(res, 400, 'classifiers must be a JSON array of valid patterns'); }
   }
   for (const [k, v] of Object.entries(b)) setOrgSetting(req.orgId, k, v);
-  if (b.classifiers) pipelineEngine.loadClassifiers();
+  if (b.classifiers) pipelineEngine.loadClassifiers(req.orgId);
   sec.audit(req.user.id, 'settings_update', Object.keys(b).join(','), req.orgId);
   res.json({ ok: true });
+});
+
+// ---- log pipeline: throughput + classifiers ----
+
+// Ingest throughput from the hourly ingest_stats counters. 24h keeps hour
+// buckets; 7d/30d aggregate into days. Gaps are zero-filled for the charts.
+router.get('/pipeline/stats', (req, res) => {
+  const range = ['24h', '7d', '30d'].includes(req.query.range) ? req.query.range : '24h';
+  const days = { '24h': 1, '7d': 7, '30d': 30 }[range];
+  const step = days === 1 ? 3600000 : 86400000;
+  const t = now();
+  const since = Math.floor((t - days * 86400000) / step) * step + step;
+  const rows = db.prepare(`SELECT bucket, lines, bytes, events FROM ingest_stats
+    WHERE org_id = ? AND bucket >= ? ORDER BY bucket`).all(req.orgId, since);
+  const byBucket = new Map();
+  const totals = { lines: 0, bytes: 0, events: 0 };
+  for (const r of rows) {
+    const b = Math.floor(r.bucket / step) * step;
+    const acc = byBucket.get(b) || { lines: 0, bytes: 0, events: 0 };
+    acc.lines += r.lines; acc.bytes += r.bytes; acc.events += r.events;
+    byBucket.set(b, acc);
+    totals.lines += r.lines; totals.bytes += r.bytes; totals.events += r.events;
+  }
+  const buckets = [];
+  for (let b = since; b <= t; b += step) {
+    buckets.push({ bucket: b, ...(byBucket.get(b) || { lines: 0, bytes: 0, events: 0 }) });
+  }
+  res.json({ range, step, buckets, totals });
+});
+
+router.get('/pipeline/classifiers', (req, res) => {
+  res.json(pipelineEngine.listClassifiers(req.orgId));
+});
+
+const CLASSIFIER_NAME_RE = /^[\w.:-]{1,50}$/;
+router.put('/pipeline/classifiers', sec.requireRole('admin'), (req, res) => {
+  const arr = req.body?.classifiers;
+  if (!Array.isArray(arr) || arr.length > 100) {
+    return httpError(res, 400, 'expected {classifiers:[...]} with at most 100 rules');
+  }
+  const cleaned = [];
+  for (const c of arr) {
+    if (!isStr(c?.pattern, 300)) return httpError(res, 400, 'each rule needs a pattern (max 300 chars)');
+    const flags = c.flags == null || c.flags === '' ? 'i' : String(c.flags);
+    if (!/^[imsu]{0,4}$/.test(flags)) return httpError(res, 400, `invalid regex flags "${flags}" (allowed: imsu)`);
+    try { new RegExp(c.pattern, flags); } catch (e) { return httpError(res, 400, `invalid pattern: ${e.message}`); }
+    if (!isStr(c.name, 50) || !CLASSIFIER_NAME_RE.test(c.name)) {
+      return httpError(res, 400, 'each rule needs a name (letters, digits, . : _ -)');
+    }
+    const severity = clampInt(c.severity, 0, 100, -1);
+    if (severity < 0) return httpError(res, 400, 'each rule needs a severity between 0 and 100');
+    const targetGroup = c.targetGroup == null || c.targetGroup === '' ? null : clampInt(c.targetGroup, 1, 9, 0);
+    if (targetGroup === 0) return httpError(res, 400, 'targetGroup must be a capture group number 1-9');
+    cleaned.push({ pattern: c.pattern, flags, name: c.name, severity, ...(targetGroup ? { targetGroup } : {}) });
+  }
+  setOrgSetting(req.orgId, 'classifiers', JSON.stringify(cleaned));
+  pipelineEngine.loadClassifiers(req.orgId);
+  sec.audit(req.user.id, 'classifiers_update', `${cleaned.length} rules`, req.orgId);
+  res.json({ ok: true, count: cleaned.length });
+});
+
+// Dry-run a sample line through this org's classifier chain (nothing is stored).
+router.post('/pipeline/test', (req, res) => {
+  const line = req.body?.line;
+  if (!isStr(line, 8192)) return httpError(res, 400, 'expected {line} (max 8192 chars)');
+  const sev = clampInt(req.body?.sev, 0, 7, 6);
+  const match = pipelineEngine.classify(line, sev, req.orgId);
+  res.json({
+    match: match ? { name: match.name, severity: match.severity, target: match.target,
+      source: match.source, pattern: match.pattern } : null,
+    caseThreshold: pipelineEngine.CASE_THRESHOLD,
+  });
 });
 
 // ---- SNMP targets (lead+) ----

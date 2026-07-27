@@ -7,8 +7,21 @@ const { now, sha256, clampInt, isStr, httpError } = require('../util');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
 const synthEngine = require('../engine/synthetics');
+const plans = require('../plans');
 
 const router = express.Router();
+
+// Daily log line allowance (plan limit; no-op on the community edition).
+// Returns true if allowed; otherwise sends a 429 and returns false.
+function withinIngestPlan(orgId, res) {
+  const vol = plans.checkIngestVolume(orgId);
+  if (!vol.ok) {
+    httpError(res, 429,
+      `daily log ingest limit reached (${vol.used}/${vol.limit} lines today) — upgrade your plan for more`);
+    return false;
+  }
+  return true;
+}
 
 // ---- logs: the "drop your logs here" endpoint ----
 // Accepts {logs:[{ts?,device,line,sev?,meta?}]} or a bare array, max 500/batch.
@@ -18,6 +31,7 @@ router.post('/ingest/logs', sec.requireApiKey('ingest'), (req, res) => {
   if (!entries) return httpError(res, 400, 'expected {logs:[...]} or [...]');
   if (entries.length === 0) return res.json({ accepted: 0, events: 0 });
   if (entries.length > 500) return httpError(res, 413, 'max 500 log entries per batch');
+  if (!withinIngestPlan(req.orgId, res)) return;
   const result = pipeline.ingestLogs(entries, req.apiKey.name, req.orgId);
   res.json(result);
 });
@@ -120,6 +134,7 @@ router.post('/otlp/v1/logs', sec.requireApiKey('ingest'), (req, res) => {
       }
     }
   }
+  if (!withinIngestPlan(req.orgId, res)) return;
   res.json(pipeline.ingestLogs(entries, `otlp:${req.apiKey.name}`, req.orgId));
 });
 
@@ -269,6 +284,7 @@ router.post('/agents/logs', requireAgentToken, (req, res) => {
   const entries = Array.isArray(req.body?.logs) ? req.body.logs : null;
   if (!entries) return httpError(res, 400, 'expected {logs:[...]}');
   if (entries.length > 500) return httpError(res, 413, 'max 500 log entries per batch');
+  if (!withinIngestPlan(req.agent.org_id, res)) return;
   res.json(pipeline.ingestLogs(entries, `agent:${req.agent.name}`, req.agent.org_id));
 });
 
