@@ -115,7 +115,7 @@ export default function Settings() {
         <div className="row" style={{ gap: 8 }}>
           <input disabled value="" placeholder={opts?.placeholder}
             style={{ width: '100%', opacity: 0.55 }} />
-          <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap' }}>admin only</span>
+          <span className="text-xs text-text3" style={{ whiteSpace: 'nowrap' }}>admin only</span>
         </div>
       )}
     </Row>
@@ -126,7 +126,7 @@ export default function Settings() {
       <Row key={k} label={label}>
         {has(k)
           ? <Toggle on={isOn} onClick={() => setVal(k, isOn ? '0' : '1')} />
-          : <span style={{ fontSize: 10, color: 'var(--text3)' }}>admin only</span>}
+          : <span className="text-xs text-text3">admin only</span>}
       </Row>
     );
   };
@@ -172,7 +172,7 @@ export default function Settings() {
 
       {/* save footer for key/value settings */}
       <div className="row" style={{ justifyContent: 'flex-end', gap: 12 }}>
-        {saved && <span style={{ color: '#3fb950', fontSize: 12, fontWeight: 600 }}>saved ✓</span>}
+        {saved && <span className="text-base font-semibold" style={{ color: '#3fb950'}}>saved ✓</span>}
         <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
@@ -201,11 +201,11 @@ export default function Settings() {
           {keys?.map((k) => (
             <div key={k.id} style={{ display: 'grid', gridTemplateColumns: KEYS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: 'var(--text0)' }}>{k.name}</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>{k.prefix}…</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{k.scopes.join(', ')}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(k.createdAt)}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(k.lastUsedAt)}</span>
+              <span className="text-sm text-text0">{k.name}</span>
+              <span className="mono text-sm text-text2">{k.prefix}…</span>
+              <span className="mono text-xs text-text2">{k.scopes.join(', ')}</span>
+              <span className="mono text-xs text-text2">{relTime(k.createdAt)}</span>
+              <span className="mono text-xs text-text2">{relTime(k.lastUsedAt)}</span>
               <Toggle on={k.active}
                 onClick={() => api.patch(`/api/admin/apikeys/${k.id}`, { active: !k.active }).then(reloadKeys)} />
             </div>
@@ -217,7 +217,7 @@ export default function Settings() {
       {/* 3b. Connected apps (MCP / OAuth grants) — the caller's own */}
       <div className="card">
         <div className="card-title"><span>Connected apps</span></div>
-        <p style={{ fontSize: 11, color: 'var(--text2)', margin: '0 0 10px' }}>
+        <p className="text-sm text-text2" style={{ margin: '0 0 10px' }}>
           AI clients you authorized to act on your behalf in this organization. Revoking
           takes effect immediately.
         </p>
@@ -231,10 +231,10 @@ export default function Settings() {
         {connections?.map((c) => (
           <div key={c.clientId} style={{ display: 'grid', gridTemplateColumns: CONNECTIONS_GRID,
             gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text0)' }}>{c.name}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{c.scopes.join(', ')}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(c.createdAt)}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(c.lastUsedAt)}</span>
+            <span className="text-sm text-text0">{c.name}</span>
+            <span className="mono text-xs text-text2">{c.scopes.join(', ')}</span>
+            <span className="mono text-xs text-text2">{relTime(c.createdAt)}</span>
+            <span className="mono text-xs text-text2">{relTime(c.lastUsedAt)}</span>
             <button className="btn btn-sm"
               onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
               Revoke
@@ -261,19 +261,19 @@ export default function Settings() {
           {agents?.map((a) => (
             <div key={a.id} style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{a.name}
-                {a.version && <span style={{ color: 'var(--text3)' }}> v{a.version}</span>}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{a.group}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
+              <span className="mono text-sm text-text0">{a.name}
+                {a.version && <span className="text-text3"> v{a.version}</span>}</span>
+              <span className="mono text-xs text-text2">{a.group}</span>
+              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.hostname || '—'}</span>
-              <span style={{ fontSize: 10, color: 'var(--text2)' }}>{a.platform || '—'}</span>
+              <span className="text-xs text-text2">{a.platform || '—'}</span>
               <StatusCell online={a.online} />
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(a.lastSeenAt)}</span>
+              <span className="mono text-xs text-text2">{relTime(a.lastSeenAt)}</span>
               <Toggle on={a.autoUpdate} disabled={!leadPlus}
                 onClick={leadPlus ? () => api.patch(`/api/admin/agents/${a.id}`, { autoUpdate: !a.autoUpdate }).then(reloadAgents) : undefined} />
               <span>
                 {leadPlus && (
-                  <button title="Delete agent" style={{ color: '#f85149', fontSize: 14 }}
+                  <button className="text-lg" title="Delete agent" style={{ color: '#f85149'}}
                     onClick={() => {
                       if (confirm(`Delete agent "${a.name}"?`)) api.del(`/api/admin/agents/${a.id}`).then(reloadAgents);
                     }}>×</button>
@@ -302,19 +302,19 @@ export default function Settings() {
           {targets?.map((t) => (
             <div key={t.id} style={{ display: 'grid', gridTemplateColumns: TARGETS_GRID,
               gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: 'var(--text0)' }}>{t.name}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
+              <span className="text-sm text-text0">{t.name}</span>
+              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.host}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{t.port}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{t.intervalS}s</span>
+              <span className="mono text-xs text-text2">{t.port}</span>
+              <span className="mono text-xs text-text2">{t.intervalS}s</span>
               <Toggle on={t.enabled}
                 onClick={() => api.patch(`/api/admin/snmp/targets/${t.id}`, { enabled: !t.enabled }).then(reloadTargets)} />
-              <span className="mono" style={{ fontSize: 10, color: snmpStatusColor(t.lastStatus) }}>
+              <span className="mono text-xs" style={{ color: snmpStatusColor(t.lastStatus) }}>
                 {t.lastStatus || 'unknown'}
-                <span style={{ color: 'var(--text3)' }}> · {relTime(t.lastSeenAt)}</span>
+                <span className="text-text3"> · {relTime(t.lastSeenAt)}</span>
               </span>
               <span>
-                <button title="Delete target" style={{ color: '#f85149', fontSize: 14 }}
+                <button className="text-lg" title="Delete target" style={{ color: '#f85149'}}
                   onClick={() => {
                     if (confirm(`Delete SNMP target "${t.name}"?`)) api.del(`/api/admin/snmp/targets/${t.id}`).then(reloadTargets);
                   }}>×</button>
@@ -332,20 +332,20 @@ export default function Settings() {
           {sys === null ? <FormSkeleton rows={4} /> : (
             <>
               <Row label="Uptime">
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>
+                <span className="mono text-sm text-text1">
                   {sys.uptimeS != null ? fmtDuration(sys.uptimeS * 1000) : '—'}</span>
               </Row>
               <Row label="Database size">
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>
+                <span className="mono text-sm text-text1">
                   {sys.dbBytes != null ? fmtBytes(sys.dbBytes) : '—'}</span>
               </Row>
               <Row label="Records">
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>
+                <span className="mono text-sm text-text1">
                   {sys.counts?.logs ?? 0} logs · {sys.counts?.events ?? 0} events · {sys.counts?.cases ?? 0} cases · {sys.counts?.users ?? 0} users
                 </span>
               </Row>
               <Row label="Node version">
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>{sys.nodeVersion || '—'}</span>
+                <span className="mono text-sm text-text1">{sys.nodeVersion || '—'}</span>
               </Row>
             </>
           )}
@@ -421,7 +421,7 @@ function AiCard() {
   return (
     <div className="card">
       <div className="card-title">AI</div>
-      <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
         Any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, Azure, …). Leave empty to use
         the platform default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
         The API key is stored encrypted and never shown again.
@@ -447,9 +447,9 @@ function AiCard() {
             </div>
           </Row>
           <div className="row row-wrap" style={{ justifyContent: 'space-between', marginTop: 8, gap: 10 }}>
-            <span style={{ fontSize: 10, color: 'var(--text3)' }}>{effective}</span>
+            <span className="text-xs text-text3">{effective}</span>
             <span className="row" style={{ gap: 10 }}>
-              {msg && <span style={{ fontSize: 11, fontWeight: 600,
+              {msg && <span className="text-sm font-semibold" style={{
                 color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
               <button className="btn btn-sm" onClick={test} disabled={!!busy || dirty}
                 title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
@@ -499,7 +499,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
   return (
     <div className="card">
       <div className="card-title">Maintenance Windows</div>
-      <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
         While a window is active, events keep recording but no alerts are sent
         (the notification log shows them as suppressed).
       </div>
@@ -510,10 +510,10 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
           borderBottom: '1px solid var(--bg3)' }}>
           <StatusPill text={w.active ? 'active' : (w.endsAt < Date.now() ? 'past' : 'planned')}
             color={w.active ? '#e3b341' : w.endsAt < Date.now() ? 'var(--text3)' : '#38b6ff'} />
-          <span style={{ fontSize: 11, color: 'var(--text0)', fontWeight: 600 }}>{w.name}</span>
-          <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', flex: 1 }}>
+          <span className="text-sm text-text0 font-semibold">{w.name}</span>
+          <span className="mono text-xs text-text2" style={{ flex: 1 }}>
             {fmt(w.startsAt)} → {fmt(w.endsAt)}</span>
-          {canEdit && <button title="Delete" style={{ color: '#f85149', fontSize: 13 }}
+          {canEdit && <button className="text-md" title="Delete" style={{ color: '#f85149'}}
             onClick={() => remove(w)}>×</button>}
         </div>
       ))}
@@ -526,7 +526,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
           <input required type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)}
             style={{ flex: 1, minWidth: 150 }} />
           <button className="btn btn-sm">+ Add window</button>
-          {err && <span style={{ color: '#f85149', fontSize: 11 }}>{err}</span>}
+          {err && <span className="text-sm" style={{ color: '#f85149'}}>{err}</span>}
         </form>
       )}
     </div>
@@ -568,9 +568,9 @@ function UsageBar({ label, used, limit }: { label: string; used: number | null; 
   return (
     <div>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: 'var(--text2)' }}>{label}</span>
+        <span className="text-xs text-text2">{label}</span>
         {loading ? <Skeleton w={48} h={9} /> : (
-          <span className="mono" style={{ fontSize: 10, color: 'var(--text1)' }}>
+          <span className="mono text-xs text-text1">
             {used} / {unlimited ? 'Unlimited' : limit}
           </span>
         )}
@@ -595,18 +595,18 @@ function PlanUpgradeCard({ plan, interval, current, canBuy, busy, onBuy }: {
     <div className="card" style={{ flex: 1, minWidth: 200, background: 'var(--bg1)',
       borderColor: current ? c : 'var(--bg3)' }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text0)' }}>{plan.name}</span>
+        <span className="text-md font-bold text-text0">{plan.name}</span>
         <StatusPill text={plan.key} color={c} />
       </div>
       <div style={{ margin: '8px 0 10px' }}>
-        <span className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--text0)' }}>€{price}</span>
-        <span style={{ fontSize: 11, color: 'var(--text3)' }}> /{interval === 'month' ? 'mo' : 'yr'}</span>
+        <span className="mono font-bold text-text0" style={{ fontSize: 24}}>€{price}</span>
+        <span className="text-sm text-text3"> /{interval === 'month' ? 'mo' : 'yr'}</span>
       </div>
       {plan.features?.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 12px', display: 'flex',
           flexDirection: 'column', gap: 4 }}>
           {plan.features.slice(0, 5).map((f) => (
-            <li key={f} className="row" style={{ gap: 6, fontSize: 11, color: 'var(--text2)' }}>
+            <li key={f} className="row text-sm text-text2" style={{ gap: 6}}>
               <span style={{ color: '#3fb950' }}>✓</span>{f}
             </li>
           ))}
@@ -664,7 +664,7 @@ function BillingCard() {
   };
 
   const bannerEl = banner && (
-    <div style={{ fontSize: 11, marginBottom: 12, padding: '8px 12px', borderRadius: 6,
+    <div className="text-sm" style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6,
       color: banner === 'success' ? '#3fb950' : '#e3b341',
       background: banner === 'success' ? 'rgba(63,185,80,0.12)' : 'rgba(227,179,65,0.12)',
       border: `1px solid ${banner === 'success' ? 'rgba(63,185,80,0.3)' : 'rgba(227,179,65,0.3)'}` }}>
@@ -696,7 +696,7 @@ function BillingCard() {
       <div className="card">
         <div className="card-title">Plan &amp; Billing</div>
         {bannerEl}
-        <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+        <div className="text-base text-text2">
           Community Edition (CE) — all features unlocked.
         </div>
       </div>
@@ -725,10 +725,10 @@ function BillingCard() {
         <div className="row" style={{ gap: 10 }}>
           <StatusPill text={s.planName || s.plan} color={planColor(s.plan)} />
           {s.subscriptionStatus && (
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{s.subscriptionStatus}</span>
+            <span className="mono text-xs text-text2">{s.subscriptionStatus}</span>
           )}
         </div>
-        <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+        <span className="text-sm text-text2">
           {trial ? `Trial ends ${trial}` : renew ? `Renews ${renew}` : ''}
         </span>
       </div>
@@ -749,12 +749,12 @@ function BillingCard() {
       {s.billingEnabled && upgradePlans.length > 0 && (
         <>
           <div className="row" style={{ justifyContent: 'space-between', margin: '20px 0 12px' }}>
-            <span className="micro" style={{ fontSize: 9 }}>Upgrade</span>
+            <span className="micro text-2xs">Upgrade</span>
             <span className="row" style={{ gap: 0, border: '1px solid var(--bg3)', borderRadius: 5,
               overflow: 'hidden' }}>
               {(['month', 'year'] as const).map((iv) => (
                 <button key={iv} onClick={() => setBillingInterval(iv)}
-                  style={{ padding: '4px 10px', fontSize: 10, fontWeight: 600,
+                  style={{ padding: '4px 10px', fontSize: 'var(--t-xs)', fontWeight: 600,
                     background: interval === iv ? 'var(--bg3)' : 'transparent',
                     color: interval === iv ? 'var(--text0)' : 'var(--text3)' }}>
                   {iv === 'month' ? 'Monthly' : 'Annual'}
@@ -769,7 +769,7 @@ function BillingCard() {
             ))}
           </div>
           {!isAdmin && (
-            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>
+            <div className="text-xs text-text3" style={{ marginTop: 8 }}>
               Only administrators can change the subscription.
             </div>
           )}
@@ -783,9 +783,11 @@ function BillingCard() {
 
 function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0' }}>
-      <span style={{ width: 200, flexShrink: 0, fontSize: 11, color: 'var(--text2)' }}>{label}</span>
-      <div style={{ flex: 1, maxWidth: 420 }}>{children}</div>
+    // geometry lives in .form-row (tokens.css), not inline: on a phone the label has to
+    // move ABOVE the field, and a media query cannot override an inline style.
+    <div className="form-row">
+      <span className="form-row-label text-sm text-text2">{label}</span>
+      <div className="form-row-field">{children}</div>
     </div>
   );
 }
@@ -802,14 +804,14 @@ function FormSkeleton({ rows = 4 }: { rows?: number }) {
   );
 }
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>{children}</div>;
+  return <div className="text-text3 text-base" style={{ padding: 20, textAlign: 'center'}}>{children}</div>;
 }
 function StatusCell({ online }: { online: boolean }) {
   return (
     <span className="row" style={{ gap: 5 }}>
       <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
         background: online ? '#3fb950' : '#8b949e', boxShadow: online ? '0 0 6px #3fb950' : undefined }} />
-      <span style={{ fontSize: 10, color: 'var(--text2)' }}>{online ? 'online' : 'offline'}</span>
+      <span className="text-xs text-text2">{online ? 'online' : 'offline'}</span>
     </span>
   );
 }
@@ -843,17 +845,17 @@ export function CreateKeyModal({ onClose, onCreated, onSecret }:
           <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="ingest-prod" />
         </Field>
         <div style={{ marginBottom: 10 }}>
-          <span className="micro" style={{ fontSize: 9 }}>Scopes</span>
+          <span className="micro text-2xs">Scopes</span>
           <div className="row" style={{ gap: 14, marginTop: 6 }}>
             {['ingest', 'agent', 'probe'].map((s) => (
-              <label key={s} className="row" style={{ gap: 5, fontSize: 11, cursor: 'pointer' }}>
+              <label key={s} className="row text-sm" style={{ gap: 5, cursor: 'pointer' }}>
                 <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)}
                   style={{ width: 'auto' }} />{s}
               </label>
             ))}
           </div>
         </div>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || scopes.length === 0}>{busy ? '…' : 'Create'}</button>
       </form>
@@ -878,7 +880,7 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
       onSecret({
         title: 'Agent registered', note: 'Copy the token now — it is shown only once.', value: r.token,
         extra: (
-          <div className="mono" style={{ fontSize: 10, color: 'var(--text2)', marginTop: 10,
+          <div className="mono text-xs text-text2" style={{ marginTop: 10,
             background: 'var(--bg2)', border: '1px solid var(--bg3)', borderRadius: 6, padding: '8px 10px',
             wordBreak: 'break-all', userSelect: 'all' }}>{install}</div>
         ),
@@ -897,11 +899,11 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
         </Field>
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <Toggle on={autoUpdate} onClick={() => setAutoUpdate(!autoUpdate)} />
-          <span style={{ fontSize: 11, color: 'var(--text1)' }}>Auto-update</span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>
+          <span className="text-sm text-text1">Auto-update</span>
+          <span className="text-xs text-text3">
             — agent updates itself when the server ships a newer version</span>
         </div>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Register'}</button>
       </form>
@@ -1015,7 +1017,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
         <Field label="Interval (seconds)">
           <input value={interval} onChange={(e) => setIntervalS(e.target.value)} inputMode="numeric" />
         </Field>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Add target'}</button>
       </form>
@@ -1028,8 +1030,8 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
 export function OnceSecretModal({ title, note, value, extra, onClose }: SecretInfo & { onClose: () => void }) {
   return (
     <Modal title={title} onClose={onClose}>
-      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>{note}</div>
-      <div className="mono" style={{ fontSize: 13, color: 'var(--text0)', background: 'var(--bg3)',
+      <div className="text-sm text-text2" style={{ marginBottom: 10 }}>{note}</div>
+      <div className="mono text-md text-text0" style={{ background: 'var(--bg3)',
         border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', userSelect: 'all',
         wordBreak: 'break-all' }}>{value}</div>
       {extra}

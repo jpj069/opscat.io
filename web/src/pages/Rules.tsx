@@ -59,18 +59,18 @@ export default function Rules() {
         {!rules ? (
           <TableSkeleton cols={RULE_COLS} rows={4} />
         ) : rules.length === 0 ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             no rules yet</div>
         ) : rules.map((r) => (
           <div key={r.id} className="tbl-row" style={{ gridTemplateColumns: RULE_COLS,
             opacity: r.enabled ? 1 : 0.5 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)', overflow: 'hidden',
+            <span className="text-base font-semibold text-text0" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
             <StatusPill text={r.channel} color={chanColor(r.channel)} />
-            <span className="mono" style={{ fontSize: 11, color: r.triggerName ? 'var(--text1)' : 'var(--text3)',
+            <span className="mono text-sm" style={{ color: r.triggerName ? 'var(--text1)' : 'var(--text3)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.triggerName || 'any'}</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>≥ {r.severityMin}</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>{r.cooldownM}m</span>
+            <span className="mono text-sm text-text2">≥ {r.severityMin}</span>
+            <span className="mono text-sm text-text2">{r.cooldownM}m</span>
             <Toggle on={r.enabled} disabled={!canEdit} onClick={canEdit ? () => toggle(r) : undefined} />
             {canEdit ? (
               <span className="row" style={{ gap: 6 }}>
@@ -92,17 +92,17 @@ export default function Rules() {
         {!notifs ? (
           <TableSkeleton cols={NOTIF_COLS} rows={4} />
         ) : notifs.length === 0 ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 24, textAlign: 'center'}}>
             no notifications yet</div>
         ) : notifs.map((n, i) => (
           <div key={i} className="tbl-row" style={{ gridTemplateColumns: NOTIF_COLS }}>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtTime(n.ts)}</span>
-            <span style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden',
+            <span className="mono text-xs text-text3">{fmtTime(n.ts)}</span>
+            <span className="text-sm text-text1" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.rule}</span>
-            <span className="mono" style={{ fontSize: 11, color: '#388bfd', overflow: 'hidden',
+            <span className="mono text-sm" style={{ color: '#388bfd', overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.event}</span>
             <StatusPill text={n.channel} color={chanColor(n.channel)} />
-            <span className="mono" style={{ fontSize: 10, color: n.ok ? SEV.green : SEV.critical }}
+            <span className="mono text-xs" style={{ color: n.ok ? SEV.green : SEV.critical }}
               title={n.ok ? undefined : n.error}>{n.ok ? 'sent' : 'failed'}</span>
           </div>
         ))}

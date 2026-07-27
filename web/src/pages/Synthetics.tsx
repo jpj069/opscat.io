@@ -7,7 +7,7 @@ import { api } from '../api';
 import { SEV } from '../format';
 import {
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
-  PageHeader, TableSkeleton, CardsSkeleton,
+  PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
   HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR,
 } from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
@@ -67,7 +67,7 @@ export default function Synthetics() {
   const [showAddCheck, setShowAddCheck] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [selLoc, setSelLoc] = useState<number | null>(null);
-  const [route, setRoute] = useState<Hop[]>([]);
+  const [route, setRoute] = useState<Hop[] | null>(null);
   const [tick, setTick] = useState(0);
 
   const canWrite = (ROLE_RANK[app.user?.role ?? ''] ?? 0) >= ROLE_RANK.lead;
@@ -95,7 +95,10 @@ export default function Synthetics() {
 
   // traceroute for the agents tab
   useEffect(() => {
-    if (tab !== 'agents' || selLoc == null) { setRoute([]); return; }
+    // null = still loading, [] = loaded and empty — the route card shows a skeleton
+    // for the first and "no route data yet" for the second.
+    if (tab !== 'agents' || selLoc == null) { setRoute(null); return; }
+    setRoute(null);
     api.get<any>(`/api/synthetics/results/route?locationId=${selLoc}`)
       .then((d) => setRoute(d?.hops ?? d?.meta?.hops ?? []))
       .catch(() => setRoute([]));
@@ -183,11 +186,11 @@ export default function Synthetics() {
           <span className="row" style={{ gap: 2 }}>
             {(['checks', 'agents'] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)}
-                style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600,
+                className="text-base font-semibold" style={{ padding: '5px 14px',
                   color: tab === t ? 'var(--text0)' : 'var(--text2)',
                   borderBottom: `2px solid ${tab === t ? SEV.low : 'transparent'}` }}>
                 {t === 'checks' ? 'Checks' : 'Sensor Agents'}
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 5 }}>
+                <span className="mono text-2xs text-text3" style={{ marginLeft: 5 }}>
                   {t === 'checks' ? (checks?.length ?? '') : (locations?.length ?? '')}
                 </span>
               </button>
@@ -228,8 +231,8 @@ export default function Synthetics() {
                   border: `1px solid ${filter === key ? SEV.low : 'var(--bg3)'}`,
                   boxShadow: filter === key ? '0 0 0 1px rgba(56,139,253,0.35)' : undefined,
                   borderRadius: 8, padding: '10px 14px' }}>
-                <span className="micro" style={{ fontSize: 9 }}>{label}</span>
-                <div className="mono" style={{ fontSize: 18, fontWeight: 700, color, marginTop: 2 }}>
+                <span className="micro text-2xs">{label}</span>
+                <div className="mono font-bold" style={{ fontSize: 18, color, marginTop: 2 }}>
                   {counts[key as keyof typeof counts]}
                 </div>
               </button>
@@ -246,7 +249,7 @@ export default function Synthetics() {
               </div>
               {checks === null && <TableSkeleton cols={CHECK_GRID} rows={6} />}
               {checks && visible.length === 0 && (
-                <div style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>
+                <div className="text-text3 text-sm" style={{ padding: 20}}>
                   {checks.length === 0 ? 'No checks configured yet.' : 'No checks match this filter.'}
                 </div>
               )}
@@ -260,24 +263,24 @@ export default function Synthetics() {
                     onClick={() => setFlyId(c.id)}
                     style={{ gridTemplateColumns: CHECK_GRID, cursor: 'pointer',
                       background: st === 'failing' ? 'rgba(248,81,73,0.04)' : undefined }}>
-                    <span className="mono" style={{ color: 'var(--text0)', overflow: 'hidden',
+                    <span className="mono text-text0" style={{ overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.target}</span>
                     <span><StatusBadge label={c.type} state={badgeState(st)} /></span>
                     <span onClick={(e) => e.stopPropagation()}>
                       {latestFor(c.id).length
                         ? <Honeycomb cells={agentCells(c)} size={9} gap={1.5} />
-                        : <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>—</span>}
+                        : <span className="mono text-xs text-text3">—</span>}
                     </span>
                     <HeatBar buckets={heatBuckets(c)} />
-                    <span className="mono" style={{ fontSize: 11,
+                    <span className="mono text-sm" style={{
                       color: st === 'failing' ? SEV.critical : 'var(--text1)' }}>
                       {h?.uptimePct != null ? h.uptimePct : '—'}
                     </span>
                     <span className="row" style={{ gap: 6 }}>
                       {spark.length >= 2 && <Spark data={spark} w={46} h={16} color={SEV.cyan} />}
-                      <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>
+                      <span className="mono text-sm text-text1">
                         {last?.latencyMs != null
-                          ? <>{Math.round(last.latencyMs)}<span style={{ color: 'var(--text3)', fontSize: 9 }}>ms</span></>
+                          ? <>{Math.round(last.latencyMs)}<span className="text-text3 text-2xs">ms</span></>
                           : '—'}
                       </span>
                     </span>
@@ -357,19 +360,19 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
           position: 'sticky', top: 0, background: 'var(--bg1)', zIndex: 5 }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div className="row" style={{ gap: 8, minWidth: 0 }}>
-              <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text0)',
+              <span className="mono text-md font-bold text-text0" style={{
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{check.target}</span>
               <StatusBadge label={check.type} state={badgeState(status)} />
               <StatusPill text={status === 'degraded' ? `degraded · ${okCount}/${latest.length}` : status}
                 color={STATUS_COLOR[status]} />
             </div>
-            <button onClick={onClose} style={{ color: 'var(--text2)', fontSize: 15 }}>×</button>
+            <button className="text-text2" onClick={onClose} style={{ fontSize: 'var(--t-xl)' }}>×</button>
           </div>
           {canWrite && (
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <span className="row" style={{ gap: 6 }}>
                 <Toggle on={check.enabled} onClick={onToggle} />
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text2)' }}>
+                <span className="mono text-2xs text-text2">
                   {check.enabled ? 'enabled' : 'paused'}</span>
               </span>
               <span style={{ flex: 1 }} />
@@ -389,22 +392,22 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
               ['Timeout', `${check.timeoutMs}ms`, 'var(--text0)'],
             ] as const).map(([label, value, color]) => (
               <span key={label}>
-                <span className="micro" style={{ fontSize: 9, display: 'block' }}>{label}</span>
-                <span className="mono" style={{ fontSize: 16, fontWeight: 700, color }}>{value}</span>
+                <span className="micro text-2xs" style={{ display: 'block' }}>{label}</span>
+                <span className="mono text-xl font-bold" style={{ color }}>{value}</span>
               </span>
             ))}
           </div>
 
           {/* heat bar — full flyout width */}
           <div>
-            <div className="micro" style={{ fontSize: 9, marginBottom: 5 }}>Last {range}</div>
+            <div className="micro text-2xs" style={{ marginBottom: 5 }}>Last {range}</div>
             <HeatBar buckets={heatBuckets} big />
           </div>
 
           {/* by agent */}
           <div>
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
-              <span className="micro" style={{ fontSize: 9 }}>By sensor agent ({latest.length})</span>
+              <span className="micro text-2xs">By sensor agent ({latest.length})</span>
               <span className="row" style={{ gap: 6 }}>
                 <button className={`chip ${gridMode === 'hex' ? 'active' : ''}`}
                   onClick={() => setGridMode('hex')}>Honeycomb</button>
@@ -413,11 +416,11 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
               </span>
             </div>
             {latest.length === 0
-              ? <div className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>no results yet</div>
+              ? <div className="mono text-xs text-text3">no results yet</div>
               : gridMode === 'grid'
                 ? <StatusGrid cells={gridCells} cell={18} gap={3} />
                 : <Honeycomb cells={gridCells} size={22} gap={2} />}
-            <div className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginTop: 8 }}>
+            <div className="mono text-2xs text-text3" style={{ marginTop: 8 }}>
               1 cell = 1 sensor agent · hover = details · click = latency series below
             </div>
           </div>
@@ -425,7 +428,7 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
           {/* issues */}
           {issues.length > 0 && (
             <div>
-              <div className="micro" style={{ fontSize: 9, marginBottom: 4 }}>
+              <div className="micro text-2xs" style={{ marginBottom: 4 }}>
                 Attention needed ({issues.length})</div>
               {issues.map((r) => {
                 const loc = locById.get(r.locationId);
@@ -433,9 +436,9 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
                   <div key={r.locationId} className="row"
                     style={{ gap: 8, padding: '6px 0', borderBottom: '1px solid var(--bg3)' }}>
                     <GlowDot color={SEV.critical} size={6} />
-                    <span className="mono" style={{ fontSize: 11, color: 'var(--text0)', width: 130 }}>
+                    <span className="mono text-sm text-text0" style={{ width: 130 }}>
                       {loc ? `${loc.city} ${loc.cc}` : `location ${r.locationId}`}</span>
-                    <span className="mono" style={{ fontSize: 10, color: SEV.critical }}>
+                    <span className="mono text-xs" style={{ color: SEV.critical }}>
                       {r.meta?.error || 'check failed'}</span>
                   </div>
                 );
@@ -452,7 +455,7 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
           </div>
 
           {/* config */}
-          <div className="mono" style={{ fontSize: 10, color: 'var(--text2)', background: 'var(--bg3)',
+          <div className="mono text-xs text-text2" style={{ background: 'var(--bg3)',
             borderRadius: 6, padding: 10, lineHeight: 1.7 }}>
             type: {check.type} · target: {check.target}<br />
             interval: {check.intervalS}s · timeout: {check.timeoutMs}ms<br />
@@ -469,7 +472,7 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
 
 function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWrite, onDeleted }: {
   locations: SynthLocation[] | null; results: SynthResult[]; checks: SynthCheck[] | null;
-  route: Hop[]; selLoc: number | null; setSelLoc: (id: number) => void;
+  route: Hop[] | null; selLoc: number | null; setSelLoc: (id: number) => void;
   canWrite: boolean; onDeleted: () => void;
 }) {
   const icmpIds = useMemo(
@@ -481,7 +484,7 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
       ?? results.find((r) => r.locationId === locId);
   const checkCount = (locId: number) =>
     new Set(results.filter((r) => r.locationId === locId).map((r) => r.checkId)).size;
-  const maxHop = Math.max(...route.map((h) => h.ms ?? 0), 1);
+  const maxHop = Math.max(...(route ?? []).map((h) => h.ms ?? 0), 1);
 
   const removeLocation = async (l: SynthLocation) => {
     if (!window.confirm(`Remove sensor agent “${l.city}”? Its probe key stops working immediately`
@@ -504,7 +507,7 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {locations === null && <CardsSkeleton count={4} w={150} h={116} />}
         {locations && mine.length === 0 && (
-          <div style={{ color: 'var(--text3)', fontSize: 11 }}>No sensor agents yet.</div>
+          <div className="text-text3 text-sm">No sensor agents yet.</div>
         )}
         {mine.map((loc) => {
           const res = locResult(loc.id);
@@ -516,16 +519,17 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
               border: active ? `1px solid ${SEV.low}` : '1px solid var(--bg3)',
               boxShadow: active ? '0 0 0 1px rgba(56,139,253,0.35)' : undefined }}>
               <div className="row" style={{ justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)' }}>{loc.city}</span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text2)', background: 'var(--bg3)',
+                <span className="text-sm font-semibold text-text0">{loc.city}</span>
+                <span className="mono text-2xs text-text2" style={{ background: 'var(--bg3)',
                   padding: '1px 5px', borderRadius: 4 }}>{loc.cc}</span>
               </div>
-              <div className="mono" style={{ fontSize: 22, fontWeight: 700, margin: '8px 0 2px',
+              {/* 22px is a display size and stays literal; the colour is data-driven */}
+              <div className="mono font-bold" style={{ fontSize: 22, margin: '8px 0 2px',
                 color: ms == null ? 'var(--text3)' : ms > 150 ? SEV.medium : SEV.green }}>
                 {ms == null ? '—'
-                  : <>{Math.round(ms)}<span style={{ fontSize: 11, color: 'var(--text3)' }}> ms</span></>}
+                  : <>{Math.round(ms)}<span className="text-sm text-text3"> ms</span></>}
               </div>
-              <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>
+              <div className="mono text-2xs text-text3">
                 {loc.kind === 'local' ? 'built-in'
                   : loc.kind === 'managed' ? 'opscat managed'
                     : loc.provider ? `${loc.provider} hosted` : 'self hosted'}
@@ -535,7 +539,7 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
                 <span className="row" style={{ gap: 5 }}>
                   <GlowDot color={loc.nodeStatus === 'provisioning' ? SEV.medium
                     : loc.online ? SEV.green : 'var(--text3)'} size={7} />
-                  <span className="micro" style={{ fontSize: 8 }}>
+                  <span className="micro" style={{ fontSize: 'var(--t-2xs)' }}>
                     {loc.nodeStatus === 'provisioning' ? 'provisioning' : loc.online ? 'online' : 'offline'}</span>
                 </span>
                 {canWrite && loc.kind === 'customer' && (
@@ -556,20 +560,22 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
       <div className="card">
         <div className="card-title">
           Route — from {locations?.find((l) => l.id === selLoc)?.city ?? '—'}</div>
-        {route.length === 0
-          ? <div style={{ color: 'var(--text3)', fontSize: 11 }}>no route data yet</div>
+        {route === null
+          ? <BarsSkeleton rows={5} labelW={120} />
+          : route.length === 0
+          ? <div className="text-text3 text-sm">no route data yet</div>
           : route.map((h, i) => {
             const last = i === route.length - 1;
             const w = h.ms != null ? (h.ms / maxHop) * 100 : 0;
             return (
               <div key={i} className="row" style={{ gap: 10, padding: '4px 0' }}>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', width: 18 }}>{h.hop}</span>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)', width: 120,
+                <span className="mono text-xs text-text3" style={{ width: 18 }}>{h.hop}</span>
+                <span className="mono text-sm text-text1" style={{ width: 120,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.ip}</span>
                 <div style={{ flex: 1, height: 6, background: 'var(--bg3)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{ width: `${w}%`, height: '100%', background: last ? SEV.low : SEV.info }} />
                 </div>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', width: 44, textAlign: 'right' }}>
+                <span className="mono text-xs text-text2" style={{ width: 44, textAlign: 'right' }}>
                   {h.ms != null ? `${Math.round(h.ms)}ms` : '*'}</span>
               </div>
             );
@@ -599,25 +605,25 @@ function CloudCredentialsCard() {
   return (
     <div className="card" style={{ padding: 0 }}>
       <div className="card-title" style={{ padding: '12px 16px 0' }}>Cloud credentials
-        <span className="mono" style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 400 }}>
+        <span className="mono text-2xs text-text3 font-normal">
           bring your own cloud — encrypted at rest, secrets never shown again</span>
       </div>
       {(creds ?? []).map((c) => (
         <div key={c.id} className="row" style={{ padding: '9px 16px', borderBottom: '1px solid var(--bg3)', gap: 10 }}>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--text0)', width: 44, textTransform: 'uppercase' }}>{c.provider}</span>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>{c.label}</span>
-          <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{c.hint}</span>
+          <span className="mono text-sm text-text0" style={{ width: 44, textTransform: 'uppercase' }}>{c.provider}</span>
+          <span className="mono text-sm text-text1">{c.label}</span>
+          <span className="mono text-xs text-text3">{c.hint}</span>
           <span style={{ flex: 1 }} />
           <button className="btn btn-sm" style={{ color: SEV.critical }} onClick={() => revoke(c)}>revoke</button>
         </div>
       ))}
       {creds && creds.length === 0 && (
-        <div className="mono" style={{ padding: '10px 16px', fontSize: 10, color: 'var(--text3)' }}>
+        <div className="mono text-xs text-text3" style={{ padding: '10px 16px'}}>
           no cloud keys yet — needed for AWS/GCP hosted sensor agents</div>
       )}
       <div style={{ padding: '10px 16px' }}>
         <button className="btn btn-sm" onClick={() => setAdding(true)}>+ Add credential</button>
-        <span className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 8 }}>AWS · GCP</span>
+        <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>AWS · GCP</span>
       </div>
       {adding && <AddCredentialModal onClose={() => setAdding(false)}
         onAdded={() => { setAdding(false); load(); }} />}
@@ -668,7 +674,7 @@ function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded
               <input required type="password" className="mono" value={awsSecret}
                 onChange={(e) => setAwsSecret(e.target.value)} />
             </Field>
-            <div className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 10 }}>
+            <div className="mono text-2xs text-text3" style={{ marginBottom: 10 }}>
               Use a least-privilege IAM user: ec2 Run/Terminate/DescribeInstances + DescribeImages only.
             </div>
           </>
@@ -679,7 +685,7 @@ function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded
               onChange={(e) => setGcpJson(e.target.value)} />
           </Field>
         )}
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Store encrypted'}</button>
       </form>
@@ -745,7 +751,7 @@ function AddCheckModal({ locations, onClose, onAdded }: {
         </Field>
         {type === 'http' && (
           <>
-            <div className="micro" style={{ fontSize: 9, margin: '4px 0 6px' }}>
+            <div className="micro text-2xs" style={{ margin: '4px 0 6px' }}>
               ASSERTIONS (optional — leave empty for "reachable = ok")</div>
             <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
               <div style={{ flex: 1 }}>
@@ -778,9 +784,9 @@ function AddCheckModal({ locations, onClose, onAdded }: {
           </>
         )}
         <div className="row" style={{ justifyContent: 'space-between', margin: '4px 0 6px' }}>
-          <span className="micro" style={{ fontSize: 9 }}>RUN FROM THESE SENSOR AGENTS</span>
+          <span className="micro text-2xs">RUN FROM THESE SENSOR AGENTS</span>
           <span className="row" style={{ gap: 6 }}>
-            <span className="mono" style={{ fontSize: 9, color: 'var(--text2)' }}>all agents (incl. future)</span>
+            <span className="mono text-2xs text-text2">all agents (incl. future)</span>
             <Toggle on={allAgents} onClick={() => setAllAgents(!allAgents)} />
           </span>
         </div>
@@ -794,8 +800,8 @@ function AddCheckModal({ locations, onClose, onAdded }: {
                 <span style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0,
                   border: `1.5px solid ${selAgents.includes(l.id) ? SEV.low : 'var(--border)'}`,
                   background: selAgents.includes(l.id) ? SEV.low : 'transparent' }} />
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{l.city} {l.cc}</span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>
+                <span className="mono text-sm text-text0">{l.city} {l.cc}</span>
+                <span className="mono text-2xs text-text3">
                   {l.kind === 'local' ? 'built-in' : l.kind === 'managed' ? 'managed'
                     : l.provider ? `${l.provider} hosted` : 'self hosted'}</span>
                 <GlowDot color={l.online ? SEV.green : 'var(--text3)'} size={6} />
@@ -803,7 +809,7 @@ function AddCheckModal({ locations, onClose, onAdded }: {
             ))}
           </div>
         )}
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || !target || (!allAgents && selAgents.length === 0)}>
           {busy ? '…' : 'Create check'}</button>
@@ -883,16 +889,16 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
   if (probeKey) {
     return (
       <Modal title="Sensor agent created" onClose={onClose} hideClose>
-        <div style={{ fontSize: 11, color: 'var(--text1)', marginBottom: 10 }}>
+        <div className="text-sm text-text1" style={{ marginBottom: 10 }}>
           Store this probe key now — it is <b>not retrievable later</b>:
         </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--text0)', background: 'var(--bg3)',
+        <div className="mono text-sm text-text0" style={{ background: 'var(--bg3)',
           borderRadius: 6, padding: 10, wordBreak: 'break-all', marginBottom: 12 }}>{probeKey}</div>
-        <div className="mono" style={{ fontSize: 9, color: 'var(--text2)', background: 'var(--bg3)',
+        <div className="mono text-2xs text-text2" style={{ background: 'var(--bg3)',
           borderRadius: 6, padding: 10, lineHeight: 1.8, marginBottom: 12 }}>
           OPSCAT_URL=&lt;this instance&gt; OPSCAT_PROBE_KEY=&lt;key&gt; \<br />
           &nbsp;&nbsp;node opscat-agent.js --probe
-          <span style={{ display: 'block', color: 'var(--text3)' }}>
+          <span className="text-text3" style={{ display: 'block'}}>
             # outbound HTTPS only, no inbound needed</span>
         </div>
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
@@ -908,10 +914,10 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
         background: 'var(--bg2)', opacity: disabled ? 0.55 : 1, cursor: disabled ? 'default' : 'pointer' }}>
       <span style={{ flex: 1 }}>
         <span className="row" style={{ justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)' }}>{title}</span>
+          <span className="text-base font-semibold text-text0">{title}</span>
           {right}
         </span>
-        <span style={{ display: 'block', fontSize: 10, color: 'var(--text2)', marginTop: 2 }}>{sub}</span>
+        <span className="text-xs text-text2" style={{ display: 'block', marginTop: 2 }}>{sub}</span>
       </span>
     </button>
   );
@@ -923,7 +929,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
           {provCard('managed', 'OpsCat Managed Sensor',
             'Ready in seconds — we run the fleet, you pick a location.',
             managed.length
-              ? <span className="mono" style={{ fontSize: 10, color: 'var(--text0)' }}><b>{managedBooked}</b> in use</span>
+              ? <span className="mono text-xs text-text0"><b>{managedBooked}</b> in use</span>
               : <StatusPill text="not available in OpsCat CE" color={SEV.info} />,
             managed.length === 0)}
           {(['aws', 'gcp'] as const).map((p) => provCard(p, `${p.toUpperCase()} hosted`,
@@ -933,14 +939,14 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
               : <StatusPill text="no key — add under Cloud credentials" color={SEV.critical} />))}
           {provCard('self', 'Self hosted',
             'Your own hardware — any network, private targets included. Unlimited & free.')}
-          {err && <div style={{ color: SEV.critical, fontSize: 11 }}>{err}</div>}
+          {err && <div className="text-sm" style={{ color: SEV.critical}}>{err}</div>}
         </>
       )}
       {step === 2 && (
         <>
           <div className="row" style={{ gap: 8, marginBottom: 12 }}>
             <button className="btn btn-sm" onClick={() => { setStep(1); setErr(''); }}>← back</button>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>
+            <span className="mono text-xs text-text2">
               {prov === 'self' ? 'self hosted' : prov === 'managed' ? 'OpsCat Managed' : `${prov.toUpperCase()} hosted`}
             </span>
           </div>
@@ -957,16 +963,16 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
             </>
           ) : (
             <>
-              <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>Region</div>
+              <div className="micro text-2xs" style={{ marginBottom: 6 }}>Region</div>
               <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
                 {regions.map((r) => (
                   <button key={r} className={`chip ${region === r ? 'active' : ''}`}
                     onClick={() => { setRegion(r); setEntry(null); }}>{r}</button>
                 ))}
               </div>
-              <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>City</div>
+              <div className="micro text-2xs" style={{ marginBottom: 6 }}>City</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-                {!region && <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', gridColumn: '1/-1' }}>
+                {!region && <span className="mono text-xs text-text3" style={{ gridColumn: '1/-1' }}>
                   pick a region above</span>}
                 {region && cityChoices.filter((e) => e.region === region).map((e) => {
                   const mLoc = prov === 'managed' ? managed.find((l) => String(l.id) === e.code) : null;
@@ -978,10 +984,10 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
                         borderRadius: 6, padding: '8px 11px', cursor: taken ? 'default' : 'pointer',
                         background: 'var(--bg2)', opacity: taken ? 0.55 : 1 }}
                       className="row">
-                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)' }}>{e.city}</span>
-                      <span className="mono" style={{ fontSize: 9, color: 'var(--text2)', background: 'var(--bg3)',
+                      <span className="text-sm font-semibold text-text0">{e.city}</span>
+                      <span className="mono text-2xs text-text2" style={{ background: 'var(--bg3)',
                         padding: '1px 5px', borderRadius: 4 }}>{e.cc}</span>
-                      <span className="mono" style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 'auto' }}>
+                      <span className="mono text-2xs text-text3" style={{ marginLeft: 'auto' }}>
                         {taken ? 'booked' : mLoc?.isPremium ? 'premium' : prov === 'managed' ? '' : e.code}
                       </span>
                     </div>
@@ -1001,7 +1007,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
                       <option value="browser">browser-capable — + browser checks later (more RAM)</option>
                     </select>
                   </Field>
-                  <div className="mono" style={{ fontSize: 9, color: SEV.medium, marginBottom: 10 }}>
+                  <div className="mono text-2xs" style={{ color: SEV.medium, marginBottom: 10 }}>
                     Runs in your cloud account, on your bill. OpsCat tags the instance opscat-sensor
                     and auto-reconciles orphans hourly.
                   </div>
@@ -1009,7 +1015,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
               )}
             </>
           )}
-          {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+          {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
             onClick={create}
             disabled={busy || (prov === 'self' ? (!city || cc.length !== 2) : !entry)}>

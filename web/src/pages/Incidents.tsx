@@ -53,13 +53,13 @@ export default function Incidents() {
         display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px',
           borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text0)' }}>Incidents</span>
+          <span className="text-lg font-bold text-text0">Incidents</span>
           <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Incident</button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {incidents === null && <ListSkeleton rows={5} lines={3} />}
           {incidents && incidents.length === 0 && (
-            <div style={{ padding: 24, color: 'var(--text3)', fontSize: 11 }}>
+            <div className="text-text3 text-sm" style={{ padding: 24}}>
               No incidents yet — declare one with “+ New Incident”.
             </div>
           )}
@@ -72,12 +72,12 @@ export default function Incidents() {
                   borderLeft: active ? `2px solid ${c}` : '2px solid transparent',
                   background: active ? alpha(c, 0.06) : undefined }}>
                 <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span className="mono" style={{ fontSize: 11, color: SEV.low }}>{inc.label}</span>
+                  <span className="mono text-sm" style={{ color: SEV.low }}>{inc.label}</span>
                   <StatusPill text={inc.status} color={STATUS_COLOR[inc.status]} />
                 </div>
                 <div style={{ marginBottom: 6 }}><SevBadge score={inc.severity} /></div>
-                <div style={{ fontSize: 12, color: 'var(--text0)', marginBottom: 5, ...CLAMP2 }}>{inc.title}</div>
-                <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>
+                <div className="text-base text-text0" style={{ marginBottom: 5, ...CLAMP2 }}>{inc.title}</div>
+                <div className="mono text-2xs text-text3">
                   started {fmtTime(inc.startedAt)} · {fmtDuration(inc.durationMs)}
                 </div>
               </div>
@@ -91,7 +91,7 @@ export default function Incidents() {
         {incidents === null
           ? <TextSkeleton lines={6} />
           : !selected
-          ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>Select an incident to view its timeline and RCA.</div>
+          ? <div className="text-text3 text-base">Select an incident to view its timeline and RCA.</div>
           : <IncidentDetail key={selected.id} incident={selected} reload={load} />}
       </div>
 
@@ -139,7 +139,7 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
     <>
       {/* header */}
       <div className="row" style={{ gap: 8, marginBottom: 8 }}>
-        <span className="mono" style={{ fontSize: 12, color: SEV.low }}>{incident.label}</span>
+        <span className="mono text-base" style={{ color: SEV.low }}>{incident.label}</span>
         <SevBadge score={incident.severity} />
         <StatusPill text={incident.status} color={STATUS_COLOR[incident.status]} />
         <div style={{ flex: 1 }} />
@@ -149,10 +149,10 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
           {incident.published ? '✓ On public status page' : 'Not published'}
         </button>
       </div>
-      <h1 style={{ fontSize: 17, fontWeight: 700, color: 'var(--text0)', margin: '0 0 18px' }}>{incident.title}</h1>
+      <h1 className="font-bold text-text0" style={{ fontSize: 17, margin: '0 0 18px' }}>{incident.title}</h1>
 
       {/* set status */}
-      <div className="micro" style={{ fontSize: 9, marginBottom: 8 }}>Set Status</div>
+      <div className="micro text-2xs" style={{ marginBottom: 8 }}>Set Status</div>
       <div className="row" style={{ gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {STATUSES.map((s) => {
           const col = STATUS_COLOR[s];
@@ -168,14 +168,14 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
       {/* timeline */}
       <div className="card" style={{ marginBottom: 18 }}>
         <div className="card-title">Timeline</div>
-        {updates.length === 0 && <div style={{ fontSize: 11, color: 'var(--text3)' }}>No updates yet.</div>}
+        {updates.length === 0 && <div className="text-sm text-text3">No updates yet.</div>}
         {updates.map((u, i) => (
           <div key={i} className="row" style={{ gap: 10, alignItems: 'flex-start', padding: '7px 0',
             borderBottom: i < updates.length - 1 ? '1px solid var(--bg3)' : undefined }}>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', width: 140, flexShrink: 0 }}>
+            <span className="mono text-xs text-text3" style={{ width: 140, flexShrink: 0 }}>
               {fmtDateTime(u.ts)}</span>
             <StatusPill text={u.status} color={statusColor(u.status)} />
-            <span style={{ fontSize: 11, color: 'var(--text1)' }}>{u.message}</span>
+            <span className="text-sm text-text1">{u.message}</span>
           </div>
         ))}
       </div>
@@ -184,11 +184,11 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
       <div className="card">
         <div className="card-title" style={{ justifyContent: 'space-between' }}>
           <span>Root Cause Analysis</span>
-          {saved && <span className="mono" style={{ fontSize: 10, color: SEV.green }}>saved ✓</span>}
+          {saved && <span className="mono text-xs" style={{ color: SEV.green }}>saved ✓</span>}
         </div>
         {RCA_FIELDS.map((f) => (
           <label key={f.key} style={{ display: 'block', marginBottom: 12 }}>
-            <span className="micro" style={{ fontSize: 9, display: 'block', marginBottom: 4 }}>{f.label}</span>
+            <span className="micro text-2xs" style={{ display: 'block', marginBottom: 4 }}>{f.label}</span>
             <textarea className="rca" value={draft[f.key]}
               onChange={(e) => { setDraft((d) => ({ ...d, [f.key]: e.target.value })); setDirty(true); setSaved(false); }} />
           </label>
@@ -233,7 +233,7 @@ function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreat
           <textarea className="rca" value={message} onChange={(e) => setMessage(e.target.value)}
             placeholder="We are investigating reports of…" />
         </Field>
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || !title}>{busy ? '…' : 'Create incident'}</button>
       </form>

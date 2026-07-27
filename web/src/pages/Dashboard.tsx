@@ -55,7 +55,7 @@ export default function Dashboard() {
         {app.eventsLoading ? (
           <Skeleton h={64} radius={6} />
         ) : bands.length === 0 ? (
-          <div style={{ color: 'var(--text3)', fontSize: 11 }}>no active events — all quiet.</div>
+          <div className="text-text3 text-sm">no active events — all quiet.</div>
         ) : (
           <>
             <div style={{ display: 'flex', height: 64, gap: 4 }}>
@@ -65,8 +65,8 @@ export default function Dashboard() {
                   alignItems: 'center', justifyContent: 'center', borderRadius: 6,
                   background: alpha(b.color, 0.18), border: `1px solid ${alpha(b.color, 0.4)}`,
                 }}>
-                  <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: b.color }}>{b.count}</span>
-                  <span style={{ fontSize: 9, color: 'var(--text2)', textTransform: 'uppercase',
+                  <span className="mono text-xl font-bold" style={{ color: b.color }}>{b.count}</span>
+                  <span className="text-2xs text-text2" style={{ textTransform: 'uppercase',
                     letterSpacing: '0.06em' }}>{b.k}</span>
                 </div>
               ))}
@@ -104,20 +104,20 @@ export default function Dashboard() {
           {!dash ? (
             <BarsSkeleton rows={4} labelW={110} />
           ) : dash.casesByAnalyst.length === 0 ? (
-            <div style={{ color: 'var(--text3)', fontSize: 11 }}>no cases yet</div>
+            <div className="text-text3 text-sm">no cases yet</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {dash.casesByAnalyst.map((a) => (
                 <div key={a.name} className="row" style={{ gap: 8 }}>
                   <Avatar i={a.i} c={a.color} size={20} />
-                  <span style={{ width: 110, fontSize: 11, color: 'var(--text1)', overflow: 'hidden',
+                  <span className="text-sm text-text1" style={{ width: 110, overflow: 'hidden',
                     textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
                   <div style={{ flex: 1, height: 8, background: 'var(--bg3)', borderRadius: 4,
                     overflow: 'hidden' }}>
                     <div style={{ width: `${(a.count / maxCases) * 100}%`, height: '100%',
                       background: a.color }} />
                   </div>
-                  <span className="mono" style={{ width: 32, fontSize: 11, color: 'var(--text2)',
+                  <span className="mono text-sm text-text2" style={{ width: 32,
                     textAlign: 'right' }}>{a.count}</span>
                 </div>
               ))}

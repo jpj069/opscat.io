@@ -61,7 +61,7 @@ export default function Vendors() {
       </div>
 
       {rows && rows.length > 0 && (
-        <div className="row" style={{ gap: 6, flexWrap: 'wrap', fontSize: 11, color: 'var(--text2)' }}>
+        <div className="row text-sm text-text2" style={{ gap: 6, flexWrap: 'wrap'}}>
           <span className="mono">{rows.length} monitored</span>
           <span>·</span>
           <span className="mono" style={{ color: disrupted ? SEV.high : SEV.green }}>
@@ -77,7 +77,7 @@ export default function Vendors() {
         {!rows ? (
           <TableSkeleton cols={COLS} rows={6} />
         ) : rows.length === 0 ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             no vendors monitored yet — hit “+ Add vendor” to watch the status pages of the services you depend on</div>
         ) : rows.map((v) => {
           const ui = STATUS_UI[v.status] || STATUS_UI.unknown;
@@ -85,26 +85,26 @@ export default function Vendors() {
             <div key={v.id} className="tbl-row" style={{ gridTemplateColumns: COLS, cursor: 'pointer' }}
               onClick={() => setDetailId(v.id)}>
               <span style={{ minWidth: 0 }}>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)',
+                <span className="mono text-base font-semibold text-text0" style={{
                   display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {v.name}{!v.enabled && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> (paused)</span>}
+                  {v.name}{!v.enabled && <span className="text-text3 font-normal"> (paused)</span>}
                 </span>
-                {v.lastError && <span className="mono" style={{ fontSize: 10, color: SEV.critical,
+                {v.lastError && <span className="mono text-xs" style={{ color: SEV.critical,
                   display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                   title={v.lastError}>feed error: {v.lastError}</span>}
               </span>
               <span><StatusPill text={ui.label} color={ui.color} /></span>
-              <span className="mono" style={{ fontSize: 11,
+              <span className="mono text-sm" style={{
                 color: v.activeIncidents ? SEV.high : 'var(--text3)' }}>
                 {v.activeIncidents ? `${v.activeIncidents} active` : '—'}</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>{v.feedType}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>
+              <span className="mono text-sm text-text2">{v.feedType}</span>
+              <span className="mono text-xs text-text3">
                 {v.lastCheckedAt ? relTime(v.lastCheckedAt) : 'never'}</span>
               <span className="row" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
                 <button title="Check now" onClick={() => pollNow(v)} disabled={busyId === v.id}
                   style={{ color: busyId === v.id ? 'var(--text3)' : 'var(--text2)' }}>
                   <RefreshCwIcon size={13} /></button>
-                {canEdit && <button title="Stop monitoring" style={{ color: SEV.critical, fontSize: 13 }}
+                {canEdit && <button className="text-md" title="Stop monitoring" style={{ color: SEV.critical}}
                   onClick={() => remove(v)}>×</button>}
               </span>
             </div>
@@ -113,7 +113,7 @@ export default function Vendors() {
         </TableScroll>
       </div>
 
-      <div style={{ fontSize: 10, color: 'var(--text3)' }}>
+      <div className="text-xs text-text3">
         Vendor incidents raise <span className="mono">vendor_incident</span> events — create an alert rule with
         that trigger to get notified. Recoveries raise <span className="mono">vendor_recovered</span>.
       </div>
@@ -185,7 +185,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
       <div className="row" style={{ gap: 0, marginBottom: 12, borderBottom: '1px solid var(--bg3)' }}>
         {([['catalog', 'Catalog'], ['custom', 'Custom feed']] as const).map(([key, label]) => (
           <button key={key} type="button" onClick={() => { setCustom(key === 'custom'); setErr(''); }}
-            style={{ padding: '6px 12px', fontSize: 11, fontWeight: 600,
+            style={{ padding: '6px 12px', fontSize: 'var(--t-sm)', fontWeight: 600,
               color: custom === (key === 'custom') ? 'var(--text0)' : 'var(--text2)',
               borderBottom: custom === (key === 'custom') ? '2px solid #388bfd' : '2px solid transparent' }}>
             {label}
@@ -196,32 +196,31 @@ function AddVendorModal({ existing, onClose, onAdded }:
         <>
           <div className="row" style={{ gap: 8, marginBottom: 10, background: 'var(--bg2)',
             border: '1px solid var(--bg3)', borderRadius: 6, padding: '6px 10px' }}>
-            <SearchIcon size={13} style={{ color: 'var(--text3)', flexShrink: 0 }} />
+            <SearchIcon className="text-text3" size={13} style={{ flexShrink: 0 }} />
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
               placeholder={`Search ${catalog.length || ''} vendors — GitHub, AWS, Cloudflare, Stripe…`}
               style={{ border: 'none', background: 'transparent', padding: 0, flex: 1 }} />
           </div>
           <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {hits.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)',
-              fontSize: 11 }}>no match — add it via the “Custom feed” tab</div>}
+            {hits.length === 0 && <div className="text-text3 text-sm" style={{ padding: 20, textAlign: 'center'}}>no match — add it via the “Custom feed” tab</div>}
             {hits.map((c) => (
               <div key={c.slug} className="row" style={{ gap: 10, padding: '7px 10px',
                 background: 'var(--bg2)', borderRadius: 6 }}>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)', display: 'block' }}>
+                  <span className="text-base font-semibold text-text0" style={{ display: 'block' }}>
                     {c.name}</span>
-                  <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>
+                  <span className="mono text-2xs text-text3">
                     {c.feedType} · {c.domains[0]}</span>
                 </span>
                 {added.has(c.slug)
-                  ? <span className="mono" style={{ fontSize: 10, color: SEV.green }}>monitored</span>
+                  ? <span className="mono text-xs" style={{ color: SEV.green }}>monitored</span>
                   : <button className="btn btn-sm" disabled={busySlug !== null}
                       onClick={() => addFromCatalog(c)}>
                       {busySlug === c.slug ? '…' : '+ Add'}</button>}
               </div>
             ))}
           </div>
-          {err && <div style={{ color: SEV.critical, fontSize: 11, marginTop: 8 }}>{err}</div>}
+          {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
         </>
       ) : (
         <form onSubmit={addCustom}>
@@ -233,7 +232,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
                 disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</button>
             </div>
           </Field>
-          {preview && <div className="mono" style={{ fontSize: 10, color: SEV.green, marginBottom: 10 }}>
+          {preview && <div className="mono text-xs" style={{ color: SEV.green, marginBottom: 10 }}>
             ✓ {preview}</div>}
           <Field label="Name">
             <input required value={name} onChange={(e) => setName(e.target.value)}
@@ -252,11 +251,11 @@ function AddVendorModal({ existing, onClose, onAdded }:
             <input value={pageUrl} onChange={(e) => setPageUrl(e.target.value)}
               placeholder="https://status.example.com" />
           </Field>
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8 }}>
+          <div className="text-xs text-text3" style={{ marginBottom: 8 }}>
             Detection covers Statuspage, Instatus, incident.io, status.io, Heroku, Google dashboards
             and RSS/Atom. If it fails, pick the feed type manually.
           </div>
-          {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+          {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
             disabled={busy || !name.trim() || !feedUrl.trim()}>{busy ? '…' : 'Start monitoring'}</button>
         </form>
@@ -292,16 +291,16 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
     <Modal title={detail.name} onClose={onClose} width={520}>
       <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <StatusPill text={ui.label} color={ui.color} />
-        <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>
+        <span className="mono text-xs text-text3">
           checked {detail.lastCheckedAt ? relTime(detail.lastCheckedAt) : 'never'} · every {detail.intervalS}s</span>
         {detail.pageUrl && (
-          <a href={detail.pageUrl} target="_blank" rel="noreferrer" className="row"
-            style={{ gap: 4, fontSize: 10, color: SEV.low }}>
+          <a href={detail.pageUrl} target="_blank" rel="noreferrer" className="row text-xs"
+            style={{ gap: 4, color: SEV.low }}>
             status page <ExternalLinkIcon size={11} /></a>
         )}
       </div>
       {detail.lastError && (
-        <div className="mono" style={{ fontSize: 11, color: SEV.critical, marginBottom: 10 }}>
+        <div className="mono text-sm" style={{ color: SEV.critical, marginBottom: 10 }}>
           feed error: {detail.lastError}</div>
       )}
 
@@ -322,7 +321,7 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
                 onBlur={(e) => { const v = Number(e.target.value); if (v !== detail.intervalS) patch({ intervalS: v }); }} />
             </Field>
           </div>
-          <label className="row" style={{ gap: 6, fontSize: 11, color: 'var(--text2)', paddingBottom: 12 }}>
+          <label className="row text-sm text-text2" style={{ gap: 6, paddingBottom: 12 }}>
             <input type="checkbox" checked={detail.enabled}
               onChange={(e) => patch({ enabled: e.target.checked })} /> enabled
           </label>
@@ -331,25 +330,25 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
 
       {detail.components.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>VENDOR COMPONENTS</div>
+          <div className="micro text-2xs" style={{ marginBottom: 6 }}>VENDOR COMPONENTS</div>
           {broken.slice(0, 20).map((c) => (
             <div key={c.name} className="row" style={{ padding: '3px 0', gap: 8 }}>
               <span className="sev-dot" style={{ background: (STATUS_UI[c.status] || STATUS_UI.unknown).color }} />
-              <span style={{ fontSize: 11, color: 'var(--text1)', flex: 1 }}>{c.name}</span>
-              <span className="mono" style={{ fontSize: 10,
+              <span className="text-sm text-text1" style={{ flex: 1 }}>{c.name}</span>
+              <span className="mono text-xs" style={{
                 color: (STATUS_UI[c.status] || STATUS_UI.unknown).color }}>{c.status}</span>
             </div>
           ))}
-          <div style={{ fontSize: 10, color: 'var(--text3)', paddingTop: 4 }}>
+          <div className="text-xs text-text3" style={{ paddingTop: 4 }}>
             {broken.length === 0 ? `all ${detail.components.length} components operational`
               : `${okCount} more components operational`}
           </div>
         </div>
       )}
 
-      <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>INCIDENT HISTORY</div>
+      <div className="micro text-2xs" style={{ marginBottom: 6 }}>INCIDENT HISTORY</div>
       {detail.incidents.length === 0 && (
-        <div style={{ fontSize: 11, color: 'var(--text3)' }}>no incidents recorded since monitoring started</div>
+        <div className="text-sm text-text3">no incidents recorded since monitoring started</div>
       )}
       <div style={{ maxHeight: 240, overflowY: 'auto' }}>
         {detail.incidents.map((i) => (
@@ -357,12 +356,12 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
             <div className="row" style={{ gap: 8 }}>
               <span className="sev-dot" style={{ background: i.resolvedAt ? 'var(--text3)'
                 : IMPACT_COLOR[i.impact || 'unknown'] || SEV.info, flexShrink: 0 }} />
-              <span style={{ fontSize: 11, color: i.resolvedAt ? 'var(--text2)' : 'var(--text0)', flex: 1 }}>
+              <span className="text-sm" style={{ color: i.resolvedAt ? 'var(--text2)' : 'var(--text0)', flex: 1 }}>
                 {i.url ? <a href={i.url} target="_blank" rel="noreferrer"
                   style={{ color: 'inherit' }}>{i.title}</a> : i.title}
               </span>
             </div>
-            <div className="mono" style={{ fontSize: 9, color: 'var(--text3)', paddingLeft: 16 }}>
+            <div className="mono text-2xs text-text3" style={{ paddingLeft: 16 }}>
               {i.impact || 'unknown'} · {i.startedAt ? fmtDateTime(i.startedAt) : '—'}
               {i.resolvedAt ? ` → resolved ${relTime(i.resolvedAt)}` : ' · ongoing'}
             </div>

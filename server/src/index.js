@@ -79,7 +79,9 @@ if (fs.existsSync(agentDir)) {
 const appIndex = path.join(pub, 'index.html');
 if (fs.existsSync(pub)) {
   app.use('/app', express.static(pub, { maxAge: '1h', index: 'index.html' }));
-  app.get(['/app', '/app/*'], (req, res) => res.sendFile(appIndex));
+  // Express 5 / path-to-regexp v8: wildcards must be NAMED — a bare '*' throws at
+  // registration. '*splat' is the SPA catch-all that serves index.html for deep links.
+  app.get(['/app', '/app/*splat'], (req, res) => res.sendFile(appIndex));
 }
 if (wwwDir && fs.existsSync(wwwDir)) {
   app.use(express.static(wwwDir, { maxAge: '1h', index: 'index.html' }));

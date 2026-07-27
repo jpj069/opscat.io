@@ -75,7 +75,7 @@ export default function StatusPageAdmin() {
         {isAdmin && (
           <span className="row" style={{ gap: 8 }}>
             <Toggle on={published} onClick={togglePublish} />
-            <span className="micro" style={{ fontSize: 9 }}>{published ? 'Published' : 'Unpublished'}</span>
+            <span className="micro text-2xs">{published ? 'Published' : 'Unpublished'}</span>
           </span>
         )}
         <a className="btn" href="/status" target="_blank" rel="noreferrer">View public page ↗</a>
@@ -85,7 +85,7 @@ export default function StatusPageAdmin() {
       <div className="card" style={{ borderColor: alpha(overallColor, 0.4), background: alpha(overallColor, 0.06) }}>
         <div className="row" style={{ gap: 10 }}>
           <GlowDot color={overallColor} size={10} />
-          <span style={{ fontSize: 14, fontWeight: 700, color: overallColor }}>{OVERALL[worst]}</span>
+          <span className="text-lg font-bold" style={{ color: overallColor }}>{OVERALL[worst]}</span>
         </div>
       </div>
 
@@ -106,23 +106,23 @@ export default function StatusPageAdmin() {
         </div>
         {components === null && <TableSkeleton cols={GRID} rows={5} />}
         {components && components.length === 0 && (
-          <div style={{ padding: 20, color: 'var(--text3)', fontSize: 11 }}>No components yet.</div>
+          <div className="text-text3 text-sm" style={{ padding: 20}}>No components yet.</div>
         )}
         {components?.map((c) => {
           const pct = c.uptimePct.replace(/%/g, '');
           return (
             <div key={c.id} className="tbl-row" style={{ gridTemplateColumns: GRID }}>
               <GlowDot color={COMP_COLOR[c.status]} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)' }}>{c.name}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{c.group}</span>
+              <span className="text-base font-semibold text-text0">{c.name}</span>
+              <span className="mono text-xs text-text2">{c.group}</span>
               <select value={c.status} disabled={isAnalyst}
                 onChange={(e) => setStatus(c.id, e.target.value as CompStatus)}
-                style={{ fontSize: 11, padding: '3px 6px' }}>
+                style={{ padding: '3px 6px' }}>
                 {COMP_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
               <UptimeStrip days={c.days} />
               <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text1)' }}>{pct}%</span>
+                <span className="mono text-sm text-text1">{pct}%</span>
                 {canEdit && (
                   <button className="btn btn-sm" title="Delete" onClick={() => remove(c)}
                     style={{ color: '#f85149' }}>×</button>
@@ -178,33 +178,33 @@ function UserReports({ isAdmin }: { isAdmin: boolean }) {
           <span className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
             <span className="row" style={{ gap: 6 }}>
               <Toggle on={enabled} onClick={() => { setEnabled(!enabled); save({ status_reports_enabled: !enabled ? '1' : '0' }); }} />
-              <span className="micro" style={{ fontSize: 9 }}>Accept reports</span>
+              <span className="micro text-2xs">Accept reports</span>
             </span>
             <span className="row" style={{ gap: 6 }}>
               <Toggle on={publicCount} onClick={() => { setPublicCount(!publicCount); save({ status_reports_public: !publicCount ? '1' : '0' }); }} />
-              <span className="micro" style={{ fontSize: 9 }}>Show count publicly</span>
+              <span className="micro text-2xs">Show count publicly</span>
             </span>
             <span className="row" style={{ gap: 6 }}>
-              <span className="micro" style={{ fontSize: 9 }}>Alert at</span>
-              <input type="number" min={1} max={1000} value={threshold} style={{ width: 60, fontSize: 11, padding: '3px 6px' }}
+              <span className="micro text-2xs">Alert at</span>
+              <input className="text-sm" type="number" min={1} max={1000} value={threshold} style={{ width: 60, padding: '3px 6px' }}
                 onChange={(e) => setThreshold(e.target.value)}
                 onBlur={() => save({ status_reports_threshold: String(Math.max(1, parseInt(threshold, 10) || 5)) })} />
-              <span className="micro" style={{ fontSize: 9 }}>/ 15 min</span>
+              <span className="micro text-2xs">/ 15 min</span>
             </span>
           </span>
         )}
       </div>
       <div style={{ padding: '0 16px 12px' }}>
         {!data || data.reports.length === 0 ? (
-          <div style={{ fontSize: 11, color: 'var(--text3)', paddingBottom: 4 }}>
+          <div className="text-sm text-text3" style={{ paddingBottom: 4 }}>
             no reports in the last 24 hours — visitors can report problems on the public status page;
             a spike raises a <span className="mono">user_reports_spike</span> event</div>
         ) : data.reports.slice(0, 30).map((r, i) => (
           <div key={i} className="row" style={{ gap: 8, padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>{relTime(r.ts)}</span>
-            {r.component && <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', flexShrink: 0 }}>[{r.component}]</span>}
-            <span style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap' }}>{r.message || <span style={{ color: 'var(--text3)' }}>no message</span>}</span>
+            <span className="mono text-xs text-text3" style={{ flexShrink: 0 }}>{relTime(r.ts)}</span>
+            {r.component && <span className="mono text-xs text-text2" style={{ flexShrink: 0 }}>[{r.component}]</span>}
+            <span className="text-sm text-text1" style={{ overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap' }}>{r.message || <span className="text-text3">no message</span>}</span>
           </div>
         ))}
       </div>
@@ -255,7 +255,7 @@ function AddComponentModal({ onClose, onAdded }: { onClose: () => void; onAdded:
         <Field label="Group">
           <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Core Services" />
         </Field>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || !name}>{busy ? '…' : 'Add component'}</button>
       </form>

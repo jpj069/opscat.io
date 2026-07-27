@@ -81,22 +81,22 @@ export default function Assets() {
         {!shown ? (
           <TableSkeleton cols={COLS} rows={6} />
         ) : shown.length === 0 ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             nothing monitored yet — hit “+ Add” to bring in your first server, device, app or check</div>
         ) : shown.map((r, i) => (
           <div key={`${r.kind}-${r.id ?? r.name}-${i}`} className="tbl-row" style={{ gridTemplateColumns: COLS }}>
-            <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text0)',
+            <span className="mono text-base font-semibold text-text0" style={{
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
             <StatusPill text={KIND_UI[r.kind].label} color={KIND_UI[r.kind].color} />
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text2)', overflow: 'hidden',
+            <span className="mono text-sm text-text2" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.detail || '—'}</span>
-            <span className="mono" style={{ fontSize: 11, color: statusColor(r.status), overflow: 'hidden',
+            <span className="mono text-sm" style={{ color: statusColor(r.status), overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.status}>{r.status}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>
+            <span className="mono text-xs text-text3">
               {r.lastSeen ? relTime(r.lastSeen) : 'never'}</span>
             <span>
               {canEdit && r.kind === 'heartbeat' && (
-                <button title="Delete heartbeat" style={{ color: SEV.critical, fontSize: 13 }}
+                <button className="text-md" title="Delete heartbeat" style={{ color: SEV.critical}}
                   onClick={() => removeHeartbeat(r)}>×</button>
               )}
             </span>
@@ -170,10 +170,10 @@ function CreateHeartbeatModal({ onClose, onCreated, onSecret }:
             </Field>
           </div>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8 }}>
+        <div className="text-xs text-text3" style={{ marginBottom: 8 }}>
           No ping for longer than interval + grace raises a <span className="mono">heartbeat_missed</span> event.
         </div>
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy || !name.trim()}>{busy ? '…' : 'Create heartbeat'}</button>
       </form>
@@ -186,10 +186,10 @@ function AddChoice({ icon, title, note, onClick }:
   return (
     <button onClick={onClick} className="card" style={{ display: 'flex', gap: 12, alignItems: 'center',
       textAlign: 'left', cursor: 'pointer', padding: '12px 14px', background: 'var(--bg2)' }}>
-      <span style={{ fontSize: 18, color: 'var(--text2)' }}>{icon}</span>
+      <span className="text-text2" style={{ fontSize: 18}}>{icon}</span>
       <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text0)' }}>{title}</span>
-        <span style={{ fontSize: 10, color: 'var(--text3)' }}>{note}</span>
+        <span className="text-base font-bold text-text0">{title}</span>
+        <span className="text-xs text-text3">{note}</span>
       </span>
     </button>
   );

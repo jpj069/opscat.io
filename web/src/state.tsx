@@ -39,8 +39,8 @@ export const useApp = () => useContext(Ctx);
 // page silently drops the user back to Monitor (nav clicks still work, because
 // setNav pushes the URL itself — which is why this is easy to miss).
 const PAGES = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'statuspage',
-  'synthetics', 'vendors', 'logs', 'rules', 'analytics', 'users', 'pipeline', 'settings',
-  'platform'];
+  'synthetics', 'vendors', 'logs', 'rules', 'analytics', 'users', 'pipeline', 'automation',
+  'settings', 'platform', 'components'];
 
 function navFromPath(): string {
   const m = /^\/app\/?([a-z]*)/.exec(location.pathname);

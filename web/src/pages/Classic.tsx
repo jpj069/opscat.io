@@ -72,6 +72,10 @@ export default function Classic() {
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
   };
 
+  // The sizes below deliberately do NOT ride the --t-* scale: this is a fixed-cell
+  // terminal skin, and its character grid (window chrome, gutters, the pre blocks)
+  // only lines up at one size. A phone gets the console window (.page-console), not a
+  // reflowed document — see tokens.css.
   const iconBtn: React.CSSProperties = {
     width: 14, height: 14, borderRadius: '50%', border: '1px solid currentColor',
     background: 'transparent', color: 'currentColor', fontSize: 9, lineHeight: '12px',

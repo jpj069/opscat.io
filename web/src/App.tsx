@@ -232,14 +232,14 @@ function Login() {
         <div className="row" style={{ gap: 10, marginBottom: 18 }}>
           <BrandMark size={30} />
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text0)' }}>OpsCat</div>
-            <div style={{ fontSize: 10, color: 'var(--text2)' }}>Infrastructure Ops Platform</div>
+            <div className="font-bold text-text0" style={{ fontSize: 'var(--t-xl)'}}>OpsCat</div>
+            <div className="text-xs text-text2">Infrastructure Ops Platform</div>
           </div>
         </div>
         <div className="row" style={{ gap: 0, marginBottom: 14, borderBottom: '1px solid var(--bg3)' }}>
           {tabs.map((m) => (
             <button key={m} type="button" onClick={() => { setMode(m); setErr(''); setMsg(''); }}
-              style={{ padding: '6px 12px', fontSize: 11, fontWeight: 600,
+              style={{ padding: '6px 12px', fontSize: 'var(--t-sm)', fontWeight: 600,
                 color: mode === m ? 'var(--text0)' : 'var(--text2)',
                 borderBottom: mode === m ? '2px solid #388bfd' : '2px solid transparent' }}>
               {tabLabel(m)}
@@ -266,14 +266,14 @@ function Login() {
             <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Acme Inc." />
           </Field>
         )}
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
-        {msg && <div style={{ color: SEV.green, fontSize: 11, marginBottom: 8 }}>{msg}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
+        {msg && <div className="text-sm" style={{ color: SEV.green, marginBottom: 8 }}>{msg}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
           {busy ? '…' : mode === 'password' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send sign-in link'}
         </button>
         {(auth.google || auth.microsoft || auth.github) && (
           <>
-            <div className="row" style={{ gap: 8, margin: '14px 0 12px', color: 'var(--text3)', fontSize: 10 }}>
+            <div className="row text-text3 text-xs" style={{ gap: 8, margin: '14px 0 12px'}}>
               <span style={{ flex: 1, height: 1, background: 'var(--bg3)' }} />
               <span>or</span>
               <span style={{ flex: 1, height: 1, background: 'var(--bg3)' }} />
@@ -358,14 +358,14 @@ function Shell() {
           padding: '2px 4px 12px', flexDirection: collapsed ? 'column' : 'row', gap: 8 }}>
           <div className="row" style={{ gap: 8 }}>
             <BrandMark size={26} />
-            {!collapsed && <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text0)' }}>OpsCat</span>}
+            {!collapsed && <span className="text-base font-bold text-text0">OpsCat</span>}
           </div>
           <button onClick={() => setCollapsed(!collapsed)} className="tb-hide-m"
-            style={{ color: 'var(--text3)', fontSize: 11 }}>
+            style={{ color: 'var(--text3)', fontSize: 'var(--t-sm)' }}>
             {collapsed ? '»' : '«'}
           </button>
         </div>
-        {!collapsed && <div className="micro" style={{ fontSize: 9, letterSpacing: '0.12em', padding: '4px 10px' }}>
+        {!collapsed && <div className="micro text-2xs" style={{ letterSpacing: '0.12em', padding: '4px 10px' }}>
           OPERATIONS</div>}
         {NAV.map((n) => (
           <button key={n.id} className={`nav-item ${n.sub && !collapsed ? 'sub' : ''} ${app.nav === n.id ? 'active' : ''}`}
@@ -375,17 +375,17 @@ function Shell() {
               <n.icon size={14} /></span>
             {!collapsed && <span style={{ flex: 1 }}>{n.label}</span>}
             {!collapsed && n.id === 'monitor' && app.events.length > 0 && (
-              <span className="mono" style={{ fontSize: 9, fontWeight: 600, padding: '1px 6px',
+              <span className="mono text-2xs font-semibold" style={{ padding: '1px 6px',
                 borderRadius: 8, background: sevCounts.critical ? alpha(SEV.critical, 0.15) : 'var(--bg3)',
                 color: sevCounts.critical ? SEV.critical : 'var(--text2)' }}>{app.events.length}</span>
             )}
             {!collapsed && n.id === 'cases' && activeCases > 0 && (
-              <span className="mono" style={{ fontSize: 9, fontWeight: 600, padding: '1px 6px',
-                borderRadius: 8, background: 'var(--bg3)', color: 'var(--text2)' }}>{activeCases}</span>
+              <span className="mono text-2xs font-semibold text-text2" style={{ padding: '1px 6px',
+                borderRadius: 8, background: 'var(--bg3)'}}>{activeCases}</span>
             )}
           </button>
         ))}
-        {!collapsed && <div className="micro" style={{ fontSize: 9, letterSpacing: '0.12em',
+        {!collapsed && <div className="micro text-2xs" style={{ letterSpacing: '0.12em',
           padding: '12px 10px 4px' }}>ADMIN</div>}
         {ADMIN_NAV.map((n) => (
           <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
@@ -397,7 +397,7 @@ function Shell() {
           </button>
         ))}
         {app.user?.isSuperAdmin && edition === 'cloud' && <>
-          {!collapsed && <div className="micro" style={{ fontSize: 9, letterSpacing: '0.12em',
+          {!collapsed && <div className="micro text-2xs" style={{ letterSpacing: '0.12em',
             padding: '12px 10px 4px' }}>PLATFORM</div>}
           {PLATFORM_NAV.map((n) => (
             <button key={n.id} className={`nav-item ${app.nav === n.id ? 'active' : ''}`}
@@ -422,21 +422,21 @@ function Shell() {
             </span>
             {!collapsed && (
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)', whiteSpace: 'nowrap',
+                <div className="text-sm font-semibold text-text0" style={{ whiteSpace: 'nowrap',
                   overflow: 'hidden', textOverflow: 'ellipsis' }}>{app.user!.name}</div>
-                <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
+                <div className="mono text-2xs text-text3">{app.user!.role}</div>
               </div>
             )}
-            {!collapsed && <span style={{ color: 'var(--text3)' }}><ChevronUpIcon size={12} /></span>}
+            {!collapsed && <span className="text-text3"><ChevronUpIcon size={12} /></span>}
           </button>
           {showProfile && (
             <div style={{ position: 'absolute', left: 6, bottom: 50, width: 200, zIndex: 96,
               background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 8,
               boxShadow: '0 8px 24px rgba(0,0,0,0.4)', padding: 6 }}>
               <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--bg3)', marginBottom: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)', overflow: 'hidden',
+                <div className="text-sm font-semibold text-text0" style={{ overflow: 'hidden',
                   textOverflow: 'ellipsis' }}>{app.user!.email}</div>
-                <div className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{app.user!.role}</div>
+                <div className="mono text-2xs text-text3">{app.user!.role}</div>
               </div>
               <button className="nav-item" onClick={() => { setShowProfile(false); setShowPwModal(true); }}>
                 Change password</button>
@@ -456,7 +456,7 @@ function Shell() {
           <span className="row tb-hide-m" style={{ gap: 6 }}>
             <span className={app.connected ? 'pulse' : ''} style={{ width: 7, height: 7, borderRadius: '50%',
               background: app.connected ? SEV.green : SEV.critical }} />
-            <span className="mono" style={{ fontSize: 9, fontWeight: 600,
+            <span className="mono text-2xs font-semibold" style={{
               color: app.connected ? SEV.green : SEV.critical }}>
               {app.connected ? 'IN SYNC' : 'OFFLINE'}
             </span>
@@ -473,19 +473,19 @@ function Shell() {
               </span>
               {nearLimit && (
                 <button className="mono" onClick={() => app.setNav('settings')} title="Approaching a plan limit"
-                  style={{ fontSize: 9, fontWeight: 700, color: SEV.medium }}>Upgrade →</button>
+                  style={{ fontSize: 'var(--t-2xs)', fontWeight: 700, color: SEV.medium }}>Upgrade →</button>
               )}
             </span>
           )}
           <button onClick={() => setShowPalette(true)} className="row tb-hide-m" style={{ width: 220,
             justifyContent: 'space-between', background: 'var(--bg2)', border: '1px solid var(--bg3)',
-            borderRadius: 6, padding: '5px 10px', color: 'var(--text3)', fontSize: 11 }}>
+            borderRadius: 6, padding: '5px 10px', color: 'var(--text3)', fontSize: 'var(--t-sm)' }}>
             <span>Search events, cases…</span><kbd>⌘K</kbd>
           </button>
           <div style={{ flex: 1 }} />
           <button className="shell-burger" onClick={() => setShowPalette(true)} title="Search">
             <SearchIcon size={15} /></button>
-          <span className="row mono tb-hide-m" style={{ gap: 10, fontSize: 10, fontWeight: 600 }}>
+          <span className="row mono tb-hide-m text-xs font-semibold" style={{ gap: 10}}>
             {([['critical', sevCounts.critical], ['high', sevCounts.high], ['medium', sevCounts.medium],
               ['low', sevCounts.low]] as const).map(([band, count]) => (
               <span key={band} className="row" style={{ gap: 4, color: count ? SEV[band] : 'var(--text3)' }}>
@@ -543,7 +543,7 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
   return (
     <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}
       hideClose={forced}>
-      {forced && <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>
+      {forced && <div className="text-sm text-text2" style={{ marginBottom: 10 }}>
         Your password was issued by an administrator — please set your own before continuing.</div>}
       <form onSubmit={submit}>
         {!forced && <Field label="Current password">
@@ -555,7 +555,7 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
         <Field label="Repeat new password">
           <input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
         </Field>
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Save</button>
         {forced && <button type="button" className="btn" onClick={app.logout}
           style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>Sign out</button>}
@@ -588,30 +588,30 @@ function Palette({ onClose }: { onClose: () => void }) {
         <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search pages, events, cases…"
           style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--bg3)',
-            borderRadius: 0, background: 'transparent', padding: '12px 16px', fontSize: 13 }} />
+            borderRadius: 0, background: 'transparent', padding: '12px 16px', fontSize: 'var(--t-md)' }} />
         <div style={{ maxHeight: 380, overflowY: 'auto', padding: 6 }}>
-          {!q && <div className="micro" style={{ padding: '6px 10px', fontSize: 9 }}>PAGES</div>}
+          {!q && <div className="micro text-2xs" style={{ padding: '6px 10px'}}>PAGES</div>}
           {navHits.map((n) => (
             <button key={n.id} className="nav-item" onClick={() => { app.setNav(n.id); onClose(); }}>
               <span style={{ width: 16, display: 'flex', justifyContent: 'center' }}>
                 <n.icon size={14} /></span>{n.label}
             </button>
           ))}
-          {eventHits.length > 0 && <div className="micro" style={{ padding: '6px 10px', fontSize: 9 }}>EVENTS</div>}
+          {eventHits.length > 0 && <div className="micro text-2xs" style={{ padding: '6px 10px'}}>EVENTS</div>}
           {eventHits.map((e) => (
             <button key={e.id} className="nav-item"
               onClick={() => { app.setNav('monitor'); app.setSelectedEvent(e.id); onClose(); }}>
               <span className="sev-dot" style={{ background: sevColor(e.severity), width: 6, height: 6 }} />
-              <span className="mono" style={{ fontSize: 11 }}>{e.name}</span>
-              <span style={{ color: 'var(--text3)', fontSize: 10 }}>{e.device}</span>
+              <span className="mono text-sm">{e.name}</span>
+              <span className="text-text3 text-xs">{e.device}</span>
             </button>
           ))}
-          {caseHits.length > 0 && <div className="micro" style={{ padding: '6px 10px', fontSize: 9 }}>CASES</div>}
+          {caseHits.length > 0 && <div className="micro text-2xs" style={{ padding: '6px 10px'}}>CASES</div>}
           {caseHits.map((c) => (
             <button key={c.id} className="nav-item" onClick={() => { app.setNav('cases'); onClose(); }}>
-              <span className="mono" style={{ fontSize: 11, color: SEV.low }}>{c.label}</span>
-              <span style={{ fontSize: 11 }}>{c.name}</span>
-              <span style={{ color: 'var(--text3)', fontSize: 10 }}>{c.device}</span>
+              <span className="mono text-sm" style={{ color: SEV.low }}>{c.label}</span>
+              <span className="text-sm">{c.name}</span>
+              <span className="text-text3 text-xs">{c.device}</span>
             </button>
           ))}
         </div>
@@ -644,12 +644,12 @@ function EventSlideOver({ id }: { id: number }) {
         <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--bg3)' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <SevBadge score={detail.severity} />
-            <button onClick={() => app.setSelectedEvent(null)} style={{ color: 'var(--text2)', fontSize: 16 }}>×</button>
+            <button onClick={() => app.setSelectedEvent(null)} style={{ color: 'var(--text2)', fontSize: 'var(--t-xl)' }}>×</button>
           </div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 600, color: 'var(--text0)', margin: '10px 0 4px' }}>
+          <div className="mono font-semibold text-text0" style={{ fontSize: 18, margin: '10px 0 4px' }}>
             {detail.name}
           </div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>
+          <div className="mono text-sm text-text2">
             {detail.device}{detail.ip ? ` · ${detail.ip}` : ''}
           </div>
         </div>
@@ -657,25 +657,25 @@ function EventSlideOver({ id }: { id: number }) {
           {[['SCORE', String(detail.severity)], ['HITS', String(detail.hits)],
             ['AGE', age(Date.now() - detail.firstSeen)]].map(([l, v]) => (
             <div key={l} className="card" style={{ flex: 1, padding: '10px 12px', textAlign: 'center' }}>
-              <div className="micro" style={{ fontSize: 8 }}>{l}</div>
-              <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: c }}>{v}</div>
+              <div className="micro" style={{ fontSize: 'var(--t-2xs)' }}>{l}</div>
+              <div className="mono font-bold" style={{ fontSize: 22, color: c }}>{v}</div>
             </div>
           ))}
         </div>
         <div style={{ padding: '0 20px 14px' }}>
-          <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>HIT TREND</div>
+          <div className="micro text-2xs" style={{ marginBottom: 6 }}>HIT TREND</div>
           <Spark data={detail.spark || []} w={470} h={36} color={c} />
         </div>
         <div style={{ padding: '0 20px 14px' }}>
-          <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>DETAILS</div>
+          <div className="micro text-2xs" style={{ marginBottom: 6 }}>DETAILS</div>
           {([['Description', detail.description || '—'], ['Target', detail.target || '—'],
             ['Status', detail.status], ['First seen', fmtTime(detail.firstSeen)],
             ['Last seen', fmtTime(detail.lastSeen)],
             ['Case', detail.case ? `${detail.case.label} (${detail.case.status})` : '—'],
             ['Assigned', detail.assigned ? detail.assigned.n : 'unassigned']] as const).map(([k, v]) => (
             <div key={k} className="row" style={{ padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
-              <span style={{ width: 90, fontSize: 10, color: 'var(--text3)' }}>{k}</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text1)', wordBreak: 'break-all' }}>{v}</span>
+              <span className="text-xs text-text3" style={{ width: 90}}>{k}</span>
+              <span className="mono text-sm text-text1" style={{ wordBreak: 'break-all' }}>{v}</span>
             </div>
           ))}
         </div>
@@ -698,14 +698,14 @@ function EventSlideOver({ id }: { id: number }) {
           </div>
         )}
         <div style={{ padding: '0 20px 20px' }}>
-          <div className="micro" style={{ fontSize: 9, marginBottom: 6 }}>RECENT SYSLOGS · {detail.device}</div>
-          {detail.recentLogs.length === 0 && <div style={{ fontSize: 11, color: 'var(--text3)' }}>no recent logs</div>}
+          <div className="micro text-2xs" style={{ marginBottom: 6 }}>RECENT SYSLOGS · {detail.device}</div>
+          {detail.recentLogs.length === 0 && <div className="text-sm text-text3">no recent logs</div>}
           {detail.recentLogs.map((l, i) => (
             <div key={i} style={{ padding: 'var(--log-py) 0', borderBottom: '1px solid var(--bg3)',
               display: 'flex', gap: 8 }}>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>
+              <span className="mono text-xs text-text3" style={{ flexShrink: 0 }}>
                 {fmtTime(l.ts)}</span>
-              <span className="mono" style={{ fontSize: 10, color: logSevColor(l.sev), wordBreak: 'break-all' }}>
+              <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
                 {l.line}</span>
             </div>
           ))}

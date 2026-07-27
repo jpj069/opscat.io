@@ -57,7 +57,7 @@ export default function Automation() {
 
       <div className="card">
         <div className="card-title">Rules</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+        <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           When an event matches the trigger, the actions run — at most once per event
           and cooldown window. Every run is recorded in the audit trail below.
         </div>
@@ -68,7 +68,7 @@ export default function Automation() {
           </div>
           {rows === null && <TableSkeleton cols={GRID} rows={3} flush />}
           {rows?.length === 0 && (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
+            <div className="text-text3 text-base" style={{ padding: 20, textAlign: 'center'}}>
               No automations yet{canEdit ? ' — create the first one, e.g. a lifecycle rule that closes an event when its recovery event arrives.' : '.'}
             </div>
           )}
@@ -76,23 +76,23 @@ export default function Automation() {
             <div key={r.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
               padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
               <button onClick={canEdit ? () => setEditing(r) : undefined} title={canEdit ? 'Edit' : undefined}
-                style={{ fontSize: 11, color: 'var(--text0)', fontWeight: 600, textAlign: 'left',
+                className="text-sm text-text0 font-semibold" style={{ textAlign: 'left',
                   cursor: canEdit ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap' }}>{r.name}</button>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
+              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.trigger ? `${r.trigger.event}${r.trigger.severityMin ? ` · sev ≥ ${r.trigger.severityMin}` : ''}` : 'invalid'}
               </span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
+              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.actions.map((a) => actionSummary(a, team)).join(' · ')}
               </span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{r.cooldownM}m</span>
+              <span className="mono text-xs text-text2">{r.cooldownM}m</span>
               <Toggle on={r.enabled} disabled={!canEdit}
                 onClick={canEdit ? () => api.patch(`/api/admin/automations/${r.id}`, { enabled: !r.enabled }).then(load) : undefined} />
               <span>
                 {canEdit && (
-                  <button title="Delete automation" style={{ color: SEV.critical, fontSize: 14 }}
+                  <button className="text-lg" title="Delete automation" style={{ color: SEV.critical}}
                     onClick={() => {
                       if (confirm(`Delete automation "${r.name}"?`)) {
                         api.del(`/api/admin/automations/${r.id}`).then(load);
@@ -109,15 +109,15 @@ export default function Automation() {
         <div className="card-title">Recent runs</div>
         {runs === null && <ListSkeleton rows={3} lines={1} />}
         {runs?.length === 0 && (
-          <div style={{ padding: 12, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
+          <div className="text-text3 text-base" style={{ padding: 12, textAlign: 'center'}}>
             No runs yet.
           </div>
         )}
         {runs?.map((r, i) => (
           <div key={i} className="row" style={{ gap: 10, padding: '5px 0', borderBottom: '1px solid var(--bg3)' }}>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>
+            <span className="mono text-xs text-text3" style={{ flexShrink: 0 }}>
               {new Date(r.ts).toLocaleString()}</span>
-            <span className="mono" style={{ fontSize: 10, wordBreak: 'break-word',
+            <span className="mono text-xs" style={{ wordBreak: 'break-word',
               color: r.detail.includes('FAILED') ? SEV.critical : 'var(--text1)' }}>{r.detail}</span>
           </div>
         ))}
@@ -198,7 +198,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
           </div>
         </div>
 
-        <div className="micro" style={{ fontSize: 9, margin: '4px 0 6px' }}>ACTIONS</div>
+        <div className="micro text-2xs" style={{ margin: '4px 0 6px' }}>ACTIONS</div>
         {actions.map((a, i) => (
           <div key={i} style={{ border: '1px solid var(--bg3)', borderRadius: 6,
             padding: '8px 10px', marginBottom: 8 }}>
@@ -218,7 +218,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
                     onChange={(e) => setAction(i, { raiseEvent: e.target.value })}
                     placeholder="bgp.peer_down" />
                 </Field>
-                <label className="row" style={{ gap: 6, fontSize: 11, cursor: 'pointer' }}>
+                <label className="row text-sm" style={{ gap: 6, cursor: 'pointer' }}>
                   <input type="checkbox" checked={a.matchTarget !== false} style={{ width: 'auto' }}
                     onChange={(e) => setAction(i, { matchTarget: e.target.checked })} />
                   Only when the target matches (same peer/port/entity)
@@ -251,7 +251,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
             onClick={() => setActions((cur) => [...cur, { type: 'webhook' }])}>+ Add action</button>
         )}
 
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : existing ? 'Save changes' : 'Create automation'}</button>
       </form>

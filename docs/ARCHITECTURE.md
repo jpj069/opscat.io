@@ -12,7 +12,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
                         └───────────────┬────────────────────────────┘
                                         │ internal docker network (app:3000)
                         ┌───────────────▼────────────────────────────┐
-                        │ opscat-server (Node 22, Express 4)         │
+                        │ opscat-server (Node 22, Express 5)         │
                         │  • REST API  /api/*   (session auth, RBAC) │
                         │  • Ingest    /v1/*    (API-key auth)       │
                         │  • Public    /status  (status page)        │
@@ -36,7 +36,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 
 | Decision | Rationale |
 |---|---|
-| Express 4 + Node 22 | Existing stack (CLAUDE.md), tiny footprint on the 2-vCPU VPS. |
+| Express 5 + Node 22 | Tiny footprint on the 2-vCPU VPS, and async handlers forward rejections to the error middleware on their own. Upgraded from 4 in one line: path-to-regexp v8 needs NAMED wildcards, so the SPA catch-all is `/app/*splat`, not `/app/*` — a bare `*` throws at registration. Nothing else in the codebase used the removed APIs (`req.param()`, `app.del()`, `res.sendfile()`, `res.json(obj, status)`) or mutated `req.query`, which is a getter now. |
 | SQLite (better-sqlite3, WAL) | Zero-ops, extremely fast for this write pattern (batched transactional inserts). One file → trivial backup. The storage layer is isolated in `server/src/db.js` + plain SQL, so a later Postgres/ClickHouse move is mechanical. |
 | In-process schedulers | No queue infra needed at this load. Engine modules are already isolated so they can be split into separate probe/worker processes when scaling out. |
 | API-key ingest, session UI auth | Open "drop your logs here" endpoints stay decoupled from human auth. Keys are hashed (SHA-256) — plaintext is shown once at creation. |
@@ -211,6 +211,46 @@ page sideways. The invariants:
 - Known exception: the Classic terminal view keeps its fixed character grid and is ~2px
   wider than a 390px viewport. Making it genuinely phone-friendly means a pan
   container (min-width + one horizontal scroller) — a product decision, not done.
+
+## Frontend typography (the --t-* scale)
+
+Font sizes used to live as raw numbers in ~360 inline `style={{ fontSize: 11 }}` props.
+That is unreachable by a media query, which is why the app read "text tiny, fields huge"
+on a phone: 62 of 83 visible text elements on Settings were <=12px (29 of them <=10px)
+right next to a 16px input — 16px being the floor below which iOS Safari zooms the page
+on focus and never zooms back. The fields could not come down, so the text had to go up.
+
+The scale is seven custom properties in `tokens.css`, mapped into Tailwind via
+`@theme inline` so `text-sm` and `var(--t-sm)` are the same value:
+
+| token | desktop | <=720px | Tailwind |
+|---|---|---|---|
+| `--t-2xs` | 9px | 11px | `text-2xs` |
+| `--t-xs` | 10px | 12px | `text-xs` |
+| `--t-sm` | 11px | 13px | `text-sm` |
+| `--t-base` | 12px | 14px | `text-base` |
+| `--t-md` | 13px | 15px | `text-md` |
+| `--t-lg` | 14px | 16px | `text-lg` |
+| `--t-xl` | 16px | 18px | `text-xl` |
+
+Desktop keeps the dense NOC values unchanged; only the phone column moves. Rules:
+
+- **Text at or below 16px reads from the scale** — a `text-*` class or `var(--t-*)`,
+  never a literal. A literal cannot follow the phone column. Display sizes above 16px
+  (page headings, the big metric numbers) may stay literal: they are already legible at
+  arm's length, and a scale entry per heading buys nothing.
+- **Never a `fontSize` in an inline style on an `input`/`select`/`textarea`.** Inline
+  styles beat every stylesheet, so such a control keeps its desktop size on a phone and
+  triggers the iOS zoom. Density belongs in the padding.
+- The 16px phone floor for form controls is therefore **unlayered** at the very bottom
+  of `tokens.css` — inside `@layer components` a stray `text-sm` utility on an input
+  would outrank it, because Tailwind's utilities sit in a later layer.
+- Two parsing traps this file already hit: custom properties need a **selector**
+  (`--t-sm: 13px` bare inside `@media` is invalid, and error recovery swallows the
+  following rule too), and Tailwind's `text-*` utilities set font-size **and**
+  line-height — hence the `--text-*--line-height: 1.5` companions in `@theme`.
+- Exception: `Classic.tsx` is a fixed-cell terminal skin whose character grid only lines
+  up at one size; it deliberately does not ride the scale.
 
 ## Frontend scroll architecture (why phones scroll the document)
 

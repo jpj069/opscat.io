@@ -18,7 +18,7 @@ export default function Pipeline() {
       <div className="row" style={{ gap: 0, marginBottom: 14, borderBottom: '1px solid var(--bg3)' }}>
         {([['throughput', 'Throughput'], ['classifiers', 'Classifiers']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ padding: '6px 14px', fontSize: 11, fontWeight: 600,
+            style={{ padding: '6px 14px', fontSize: 'var(--t-sm)', fontWeight: 600,
               color: tab === id ? 'var(--text0)' : 'var(--text2)',
               borderBottom: tab === id ? '2px solid #388bfd' : '2px solid transparent' }}>
             {label}
@@ -60,7 +60,7 @@ function Throughput() {
   const peak = useMemo(() => stats ? Math.max(0, ...stats.buckets.map((b) => b.lines)) : 0, [stats]);
   const fmtCount = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
-  if (err) return <div className="card" style={{ color: SEV.critical, fontSize: 12 }}>{err}</div>;
+  if (err) return <div className="card text-base" style={{ color: SEV.critical}}>{err}</div>;
 
   // No loading branch: KpiCard and LineChart render their own placeholder when
   // handed null, so the page keeps its real structure from the first paint.
@@ -71,7 +71,7 @@ function Throughput() {
         <span className="row" style={{ gap: 0, border: '1px solid var(--bg3)', borderRadius: 5, overflow: 'hidden' }}>
           {(['24h', '7d', '30d'] as const).map((r) => (
             <button key={r} onClick={() => setRange(r)}
-              style={{ padding: '4px 12px', fontSize: 10, fontWeight: 600,
+              style={{ padding: '4px 12px', fontSize: 'var(--t-xs)', fontWeight: 600,
                 background: range === r ? 'var(--bg3)' : 'transparent',
                 color: range === r ? 'var(--text0)' : 'var(--text3)' }}>{r}</button>
           ))}
@@ -153,38 +153,38 @@ function Classifiers() {
           <span>Custom rules · this organization</span>
           {isAdmin && <button className="btn btn-sm" onClick={add}>+ Add rule</button>}
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+        <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           Evaluated before the built-ins, first match wins. Target group extracts a regex
           capture group (1-9) into the event target — it becomes part of the dedupe key.
         </div>
-        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <TableScroll minWidth={680}>
           <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
             <span>Pattern (regex)</span><span>Flags</span><span>Event name</span>
             <span>Severity</span><span>Target</span><span></span>
           </div>
           {custom.length === 0 && (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
+            <div className="text-text3 text-base" style={{ padding: 16, textAlign: 'center'}}>
               No custom rules yet — only the built-ins below apply.
             </div>
           )}
           {custom.map((c, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
               padding: '5px 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <input className="mono" disabled={!isAdmin} value={c.pattern} placeholder="disk (full|usage)"
-                style={{ fontSize: 11 }} onChange={(e) => edit(i, { pattern: e.target.value })} />
-              <input className="mono" disabled={!isAdmin} value={c.flags ?? 'i'} placeholder="i"
-                style={{ fontSize: 11 }} onChange={(e) => edit(i, { flags: e.target.value })} />
-              <input className="mono" disabled={!isAdmin} value={c.name} placeholder="disk_full"
-                style={{ fontSize: 11 }} onChange={(e) => edit(i, { name: e.target.value })} />
-              <input className="mono" disabled={!isAdmin} value={String(c.severity)} inputMode="numeric"
-                style={{ fontSize: 11, color: sevColor(c.severity) }}
+              <input className="mono text-sm" disabled={!isAdmin} value={c.pattern} placeholder="disk (full|usage)"
+                 onChange={(e) => edit(i, { pattern: e.target.value })} />
+              <input className="mono text-sm" disabled={!isAdmin} value={c.flags ?? 'i'} placeholder="i"
+                 onChange={(e) => edit(i, { flags: e.target.value })} />
+              <input className="mono text-sm" disabled={!isAdmin} value={c.name} placeholder="disk_full"
+                 onChange={(e) => edit(i, { name: e.target.value })} />
+              <input className="mono text-sm" disabled={!isAdmin} value={String(c.severity)} inputMode="numeric"
+                style={{ color: sevColor(c.severity) }}
                 onChange={(e) => edit(i, { severity: parseInt(e.target.value, 10) || 0 })} />
-              <input className="mono" disabled={!isAdmin} value={c.targetGroup ?? ''} placeholder="—"
-                inputMode="numeric" style={{ fontSize: 11 }}
+              <input className="mono text-sm" disabled={!isAdmin} value={c.targetGroup ?? ''} placeholder="—"
+                inputMode="numeric" 
                 onChange={(e) => edit(i, { targetGroup: e.target.value ? parseInt(e.target.value, 10) : null })} />
               <span>
-                {isAdmin && <button title="Delete rule" style={{ color: SEV.critical, fontSize: 14 }}
+                {isAdmin && <button className="text-lg" title="Delete rule" style={{ color: SEV.critical}}
                   onClick={() => remove(i)}>×</button>}
               </span>
             </div>
@@ -192,14 +192,14 @@ function Classifiers() {
         </TableScroll>
         {isAdmin && (
           <div className="row" style={{ justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
-            {saved && <span style={{ color: SEV.green, fontSize: 12, fontWeight: 600 }}>saved ✓</span>}
+            {saved && <span className="text-base font-semibold" style={{ color: SEV.green}}>saved ✓</span>}
             <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
               {saving ? 'Saving…' : 'Save Rules'}
             </button>
           </div>
         )}
         {!isAdmin && (
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>
+          <div className="text-xs text-text3" style={{ marginTop: 8 }}>
             Only administrators can change classifier rules.
           </div>
         )}
@@ -207,7 +207,7 @@ function Classifiers() {
 
       <div className="card">
         <div className="card-title">Built-in rules</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+        <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           Shipped with OpsCat, evaluated after your custom rules. Lines matching no rule fall
           back to their syslog severity (crit and above still become events).
         </div>
@@ -221,12 +221,12 @@ function Classifiers() {
             {builtin.map((c) => (
               <div key={c.name + c.pattern} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
                 padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text2)', overflow: 'hidden',
+                <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.pattern}>{c.pattern}</span>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{c.flags}</span>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text0)' }}>{c.name}</span>
-                <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: sevColor(c.severity) }}>{c.severity}</span>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>
+                <span className="mono text-xs text-text3">{c.flags}</span>
+                <span className="mono text-sm text-text0">{c.name}</span>
+                <span className="mono text-sm font-semibold" style={{ color: sevColor(c.severity) }}>{c.severity}</span>
+                <span className="mono text-xs text-text2">
                   {c.targetGroup ? `group ${c.targetGroup}` : '—'}</span>
                 <span />
               </div>
@@ -263,7 +263,7 @@ function Tester() {
       <form onSubmit={run} className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
           placeholder="paste a sample log line, e.g.  kernel: Out of memory: Killed process 1234 (node)"
-          style={{ flex: 3, minWidth: 240, fontSize: 11 }} />
+          style={{ flex: 3, minWidth: 240, fontSize: 'var(--t-sm)' }} />
         <select value={sev} onChange={(e) => setSev(e.target.value)} style={{ width: 150 }}>
           {['0 emerg', '1 alert', '2 crit', '3 err', '4 warning', '5 notice', '6 info', '7 debug'].map((s) => (
             <option key={s} value={s.split(' ')[0]}>syslog {s}</option>
@@ -271,24 +271,24 @@ function Tester() {
         </select>
         <button className="btn btn-primary btn-sm" disabled={busy}>{busy ? '…' : 'Test line'}</button>
       </form>
-      {err && <div style={{ color: SEV.critical, fontSize: 11, marginTop: 8 }}>{err}</div>}
+      {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
       {result && (
         <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 6,
           background: m ? alpha(sevColor(m.severity), 0.08) : 'var(--bg2)',
           border: `1px solid ${m ? alpha(sevColor(m.severity), 0.3) : 'var(--bg3)'}` }}>
           {m ? (
-            <div className="mono" style={{ fontSize: 11, color: 'var(--text1)', display: 'flex',
+            <div className="mono text-sm text-text1" style={{ display: 'flex',
               flexWrap: 'wrap', gap: 14 }}>
-              <span>event <b style={{ color: 'var(--text0)' }}>{m.name}</b></span>
+              <span>event <b className="text-text0">{m.name}</b></span>
               <span>severity <b style={{ color: sevColor(m.severity) }}>{m.severity}</b></span>
-              <span>target <b style={{ color: 'var(--text0)' }}>{m.target ?? '—'}</b></span>
-              <span>matched by <b style={{ color: 'var(--text0)' }}>{m.source}</b>
-                {m.pattern ? <span style={{ color: 'var(--text3)' }}> ({m.pattern})</span> : null}</span>
+              <span>target <b className="text-text0">{m.target ?? '—'}</b></span>
+              <span>matched by <b className="text-text0">{m.source}</b>
+                {m.pattern ? <span className="text-text3"> ({m.pattern})</span> : null}</span>
               <span style={{ color: m.severity >= result.caseThreshold ? SEV.high : 'var(--text3)' }}>
                 {m.severity >= result.caseThreshold ? 'would open a case' : 'no case'}</span>
             </div>
           ) : (
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text2)' }}>
+            <span className="mono text-sm text-text2">
               no match — the line is stored as a log only, no event is created
             </span>
           )}

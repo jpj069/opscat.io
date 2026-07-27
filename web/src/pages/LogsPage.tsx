@@ -63,7 +63,7 @@ export default function LogsPage() {
           style={{ flex: '1 1 150px', maxWidth: 400 }} />
         <button className="btn btn-sm" onClick={() => setFilter('')}>Clear</button>
         <div style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{rows.length} lines</span>
+        <span className="mono text-xs text-text3">{rows.length} lines</span>
       </div>
 
       <div className="card" style={{ flex: 1, minHeight: 0, padding: 0, display: 'flex',
@@ -80,16 +80,16 @@ export default function LogsPage() {
           {!fetched ? (
             <TableSkeleton cols={COLS} rows={14} dense />
           ) : rows.length === 0 ? (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+            <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
               {filter.trim() ? 'no matching log lines' : 'no logs in window'}
             </div>
           ) : rows.map((l, i) => (
             <div key={`${l.ts}-${i}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 8,
               padding: 'var(--log-py) 16px', borderBottom: '1px solid var(--bg3)' }}>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtDateTime(l.ts)}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text1)', overflow: 'hidden',
+              <span className="mono text-xs text-text3">{fmtDateTime(l.ts)}</span>
+              <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>
-              <span className="mono" style={{ fontSize: 10, color: logSevColor(l.sev), wordBreak: 'break-all' }}>
+              <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
                 {l.line}</span>
             </div>
           ))}

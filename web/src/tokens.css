@@ -1,4 +1,77 @@
 /* OpsCat design tokens — from the design handoff. Dual theme via body[data-theme]. */
+@import "tailwindcss";
+
+/* Tailwind reads the scale from here. `inline` keeps the utilities pointing at the
+   var() rather than baking its value in — that is what lets body[data-theme] swap the
+   whole palette at runtime. So `bg-bg2` IS `background: var(--bg2)`, and the theme
+   switch keeps working exactly as before. */
+@theme inline {
+  --color-bg0: var(--bg0);
+  --color-bg1: var(--bg1);
+  --color-bg2: var(--bg2);
+  --color-bg3: var(--bg3);
+  --color-border: var(--border);
+  --color-text0: var(--text0);
+  --color-text1: var(--text1);
+  --color-text2: var(--text2);
+  --color-text3: var(--text3);
+  --color-low: var(--low);
+
+  /* The type scale OpsCat never had: sizes lived as raw numbers in 364 inline styles,
+     which a media query cannot reach. Named here, they become overridable in one
+     place — see the mobile block at the bottom of this file. */
+  /* Tailwind's text-* utilities set font-size AND line-height. Without these
+     companions it falls back to its own ratio and every migrated element loses the
+     1.5 it inherited from body — measured as 15px → 13.33px before this was added. */
+  --text-2xs: var(--t-2xs);       --text-2xs--line-height: 1.5;
+  --text-xs: var(--t-xs);         --text-xs--line-height: 1.5;
+  --text-sm: var(--t-sm);         --text-sm--line-height: 1.5;
+  --text-base: var(--t-base);     --text-base--line-height: 1.5;
+  --text-md: var(--t-md);         --text-md--line-height: 1.5;
+  --text-lg: var(--t-lg);         --text-lg--line-height: 1.5;
+  --text-xl: var(--t-xl);         --text-xl--line-height: 1.5;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+:root {
+  /* desktop scale — unchanged from what the inline numbers used */
+  --t-2xs: 9px;
+  --t-xs: 10px;
+  --t-sm: 11px;
+  --t-base: 12px;
+  --t-md: 13px;
+  --t-lg: 14px;
+  --t-xl: 16px;
+}
+
+/* THE point of the whole token exercise: a phone at arm's length is not a 27" screen
+   at 60cm. 62 of 83 visible text elements on Settings were <=12px, 29 of them <=10px —
+   next to a 16px input, which is where "text small, fields huge" came from. The fields
+   could not come down (iOS zooms below 16px), so the scale goes up. Desktop keeps the
+   dense NOC values; only these seven numbers move. Apple's HIG puts 11pt (~15px) as the
+   floor for body text, Material 12sp for captions — we were well under both.
+
+   Two traps this block already fell into, do not reintroduce them:
+   1. Custom properties need a SELECTOR. Writing `--t-sm: 13px` straight inside a
+      @media block is invalid CSS — it is dropped AND the parser's error recovery
+      swallows the rule that follows it.
+   2. It stays OUTSIDE `@layer components` on purpose: the desktop `:root` above is
+      unlayered, and unlayered CSS beats every layer, so a layered override would
+      silently lose. */
+@media (max-width: 720px) {
+  :root {
+    --t-2xs: 11px;
+    --t-xs: 12px;
+    --t-sm: 13px;
+    --t-base: 14px;
+    --t-md: 15px;
+    --t-lg: 16px;
+    --t-xl: 18px;
+  }
+}
+
 :root { color-scheme: dark; }
 
 body[data-theme="dark"] {
@@ -16,15 +89,29 @@ body[data-theme="light"] {
 body[data-density="comfortable"] { --row-py: 11px; --log-py: 6px; }
 body[data-density="compact"] { --row-py: 5px; --log-py: 3px; }
 
+/* Everything below sits in the `components` layer on purpose. Tailwind v4 emits its
+   utilities into the `utilities` layer, and UNLAYERED CSS BEATS EVERY LAYER — so
+   without this, `.micro { font-size: var(--t-xs) }` would silently override a `text-2xs`
+   utility and every class added during the migration would do nothing. In the
+   components layer these rules still win over Preflight (base) but lose to utilities,
+   which is the order a design system wants. */
+@layer components {
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
   margin: 0; background: var(--bg0); color: var(--text1);
-  font: 400 12px/1.5 'Inter', system-ui, sans-serif;
+  font: 400 var(--t-base)/1.5 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+/* Tailwind's Preflight zeroes button padding; OpsCat's unstyled buttons relied on the
+   UA default (1px 6px). Restored so adding Tailwind stays a no-op — the fingerprint
+   harness caught this across all 16 routes. */
+button { font: inherit; cursor: pointer; border: none; background: none; color: inherit;
+  padding: 1px 6px; }
+/* same story for <option> inside a native <select> */
+option { padding: 0 2px 1px; }
 input, select, textarea {
   font: inherit; color: var(--text0); background: var(--bg3);
   border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; outline: none;
@@ -49,7 +136,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 /* layout primitives */
 .card { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 8px; padding: 14px 16px; }
 .card-title {
-  font-size: 12px; font-weight: 600; color: var(--text0); margin: 0 0 10px;
+  font-size: var(--t-base); font-weight: 600; color: var(--text0); margin: 0 0 10px;
   display: flex; align-items: center; gap: 8px;
 }
 .page { padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; height: 100%; }
@@ -57,12 +144,25 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .page > * { flex-shrink: 0; }
 /* the ONE sanctioned horizontal scroll container — wraps tables (ui.tsx TableScroll) */
 .tbl-scroll { overflow-x: auto; }
-.page-title { font-size: 16px; font-weight: 700; color: var(--text0); margin: 0; }
+.page-title { font-size: var(--t-xl); font-weight: 700; color: var(--text0); margin: 0; }
 .micro {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--text2);
 }
 .row { display: flex; align-items: center; gap: 8px; }
+
+/* Settings' label/field row (Settings.tsx <Row>). Desktop keeps the two-column look;
+   below 720px the label moves above the field, because a 200px label column left the
+   input ~96px wide and every value rendered truncated. */
+.form-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+.form-row-label { width: 200px; flex-shrink: 0; }
+.form-row-field { flex: 1; max-width: 420px; min-width: 0; }
+
+/* Component Lab entry rows (ComponentLab.tsx) — same story as .form-row: a fixed name
+   column beside a demo, which on a phone has to stack instead of widening the page. */
+.lab-row { display: flex; align-items: flex-start; gap: 14px; }
+.lab-name { width: 150px; flex-shrink: 0; }
+.lab-demo { flex: 1; min-width: 0; }
 /* Toolbar rows (title + controls, filter bars): must wrap instead of overflowing.
    Plain `.row` stays nowrap — inside table cells wrapping would break alignment.
    Page headers get this for free via <PageHeader> (ui.tsx). */
@@ -70,23 +170,23 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 
 /* buttons */
 .btn {
-  padding: 6px 12px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  padding: 6px 12px; border-radius: 5px; font-size: var(--t-base); font-weight: 600;
   border: 1px solid var(--border); background: var(--bg3); color: var(--text1);
   display: inline-flex; align-items: center; gap: 6px;
 }
 .btn:hover { color: var(--text0); border-color: var(--text3); }
 .btn-primary { background: #388bfd; border-color: #388bfd; color: #fff; }
 .btn-primary:hover { background: #2f7de6; color: #fff; }
-.btn-sm { padding: 3px 8px; font-size: 10px; border-radius: 3px; }
+.btn-sm { padding: 3px 8px; font-size: var(--t-xs); border-radius: 3px; }
 
 /* pills + badges */
 .pill {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 10px;
-  font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
+  font-size: var(--t-xs); font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
 }
 .sev-badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 3px;
-  font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
+  font-size: var(--t-xs); font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
   white-space: nowrap;
 }
 .sev-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
@@ -95,12 +195,12 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .tbl { width: 100%; }
 .tbl-head {
   display: grid; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--bg3);
-  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--text2); align-items: center;
 }
 .tbl-row {
   display: grid; gap: 8px; padding: var(--row-py) 16px; border-bottom: 1px solid var(--bg3);
-  font-size: 11px; align-items: center;
+  font-size: var(--t-sm); align-items: center;
 }
 .tbl-row:hover { background: color-mix(in srgb, var(--bg3) 40%, transparent); }
 
@@ -115,12 +215,12 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 /* nav */
 .nav-item {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px;
-  font-size: 12px; color: var(--text2); border: 1px solid transparent; width: 100%;
+  font-size: var(--t-base); color: var(--text2); border: 1px solid transparent; width: 100%;
   text-align: left; margin-bottom: 1px;
 }
 .nav-item:hover { color: var(--text0); background: color-mix(in srgb, var(--bg3) 50%, transparent); }
 .nav-item.active { background: var(--bg3); border-color: var(--border); color: var(--text0); }
-.nav-item.sub { padding-left: 30px; font-size: 11px; }
+.nav-item.sub { padding-left: 30px; font-size: var(--t-sm); }
 
 /* overlays */
 .overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 90; }
@@ -161,13 +261,13 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-pills { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; flex: 1; min-width: 0; }
 .sel-pill {
   display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-  padding: 1px 3px 1px 8px; border-radius: 999px; font-size: 10px;
+  padding: 1px 3px 1px 8px; border-radius: 999px; font-size: var(--t-xs);
   background: var(--bg2); border: 1px solid var(--border); color: var(--text0);
 }
 .sel-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel-pill button { color: var(--text2); padding: 3px; border-radius: 50%; line-height: 0; flex-shrink: 0; }
 .sel-pill button:hover { color: #f85149; }
-.sel-more { font-size: 10px; font-weight: 600; color: var(--low); padding: 2px 4px; flex-shrink: 0; }
+.sel-more { font-size: var(--t-xs); font-weight: 600; color: var(--low); padding: 2px 4px; flex-shrink: 0; }
 .sel-overview {
   position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 30;
   background: var(--bg1); border: 1px solid var(--border); border-radius: 8px;
@@ -175,7 +275,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 }
 .sel-ovhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .sel-ovpills { display: flex; flex-wrap: wrap; gap: 6px; }
-.sel-clear { font-size: 11px; color: #f85149; padding: 2px 4px; }
+.sel-clear { font-size: var(--t-sm); color: #f85149; padding: 2px 4px; }
 
 /* shared option list */
 .sel-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; flex: 1;
@@ -183,7 +283,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-list:focus-visible { outline: none; }
 .sel-opt {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 7px 10px; border-radius: 5px; font-size: 12px; color: var(--text1);
+  padding: 7px 10px; border-radius: 5px; font-size: var(--t-base); color: var(--text1);
 }
 .sel-opt[aria-selected="true"] { color: var(--text0); font-weight: 600; background: var(--bg3); }
 .sel-opt.active { box-shadow: inset 0 0 0 1px var(--low); }
@@ -191,7 +291,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-opt > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel-tick { flex-shrink: 0; color: var(--low); opacity: 0; }
 .sel-opt[aria-selected="true"] .sel-tick { opacity: 1; }
-.sel-empty { padding: 12px 14px; color: var(--text3); font-size: 12px; }
+.sel-empty { padding: 12px 14px; color: var(--text3); font-size: var(--t-base); }
 /* the ONE real text field in here — 16px, or iOS zooms the page on focus */
 .sel-search {
   font: inherit; font-size: 16px; color: var(--text0); background: var(--bg3);
@@ -251,13 +351,13 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 
 /* filter chips */
 .chip {
-  padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 600;
+  padding: 3px 10px; border-radius: 12px; font-size: var(--t-xs); font-weight: 600;
   border: 1px solid var(--border); color: var(--text2); font-family: 'JetBrains Mono', monospace;
 }
 .chip.active { color: var(--text0); background: var(--bg3); }
 
 kbd {
-  font-family: 'JetBrains Mono', monospace; font-size: 9px; padding: 1px 5px;
+  font-family: 'JetBrains Mono', monospace; font-size: var(--t-2xs); padding: 1px 5px;
   border: 1px solid var(--border); border-radius: 3px; background: var(--bg3); color: var(--text2);
 }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -296,7 +396,7 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
 .onb-foot { height: 64px; flex-shrink: 0; display: flex; align-items: center; gap: 12px;
   padding: 0 26px; border-top: 1px solid var(--bg3); background: var(--bg1); }
 .onb-mhead { display: none; }
-.onb-dot { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; font-size: 10px;
+.onb-dot { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; font-size: var(--t-xs);
   font-weight: 700; display: flex; align-items: center; justify-content: center;
   border: 1.5px solid var(--border); background: var(--bg2); color: var(--text2); }
 
@@ -324,10 +424,15 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
 
 /* mobile */
 @media (max-width: 720px) {
-  /* inputs below 16px make iOS Safari zoom the page on focus */
-  input, select, textarea { font-size: 16px; }
-  .btn { padding: 9px 14px; font-size: 13px; }
-  .btn-sm { padding: 6px 10px; font-size: 12px; }
+  .lab-row { flex-direction: column; }
+  .lab-name { width: auto; }
+  .form-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .form-row-label { width: auto; }
+  .form-row-field { max-width: none; }
+
+  /* only the touch target grows here — the label rides the scale like everything else */
+  .btn { padding: 9px 14px; }
+  .btn-sm { padding: 6px 10px; }
   .shell-burger { display: inline-flex; align-items: center; color: var(--text1); padding: 4px; }
   .shell-rail { position: fixed; top: 0; bottom: 0; left: 0; z-index: 95;
     width: 250px !important; transform: translateX(-100%);
@@ -368,4 +473,20 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
   .onb-foot { height: auto; flex-wrap: wrap; padding: 10px 16px;
     padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .onb-stepcount { display: none; }
+}
+
+}
+
+/* The 16px floor for form controls on phones — deliberately UNLAYERED, i.e. the last
+   word in this stylesheet.
+
+   Below 16px iOS Safari zooms the page on focus and never zooms back out. That is a
+   behaviour constraint, not a style preference, so it must not lose to a `text-sm`
+   utility somebody drops on an input: utilities sit in Tailwind's `utilities` layer and
+   would beat this rule from inside `@layer components`. Unlayered CSS beats every layer,
+   so here it wins.
+   Still stronger than this: an INLINE style. Never put a font-size in `style={{…}}` on
+   an input/select/textarea — density belongs in the padding. */
+@media (max-width: 720px) {
+  input, select, textarea { font-size: 16px; }
 }

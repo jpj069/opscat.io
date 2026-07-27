@@ -38,7 +38,13 @@ router.get('/', (req, res) => {
 
 router.get('/catalog', (req, res) => res.json(CATALOG));
 
-router.get('/:id(\\d+)', (req, res) => {
+// The ':id' routes below carried an inline `(\\d+)` constraint until Express 5 —
+// path-to-regexp v8 removed inline regex from path strings and THROWS at registration.
+// Dropping it is safe: the literal routes ('/catalog', '/detect', '/subscribe-catalog')
+// are declared before or on a different method than their ':id' counterpart, and a
+// non-numeric id simply matches no row, so the handlers already answer 404.
+
+router.get('/:id', (req, res) => {
   const v = getVendor.get(req.params.id, req.orgId);
   if (!v) return httpError(res, 404, 'vendor not found');
   const components = db.prepare(
@@ -117,7 +123,7 @@ router.post('/', sec.requireRole('lead'), async (req, res) => {
   res.json(polled ? vendorView(polled) : { id: info.lastInsertRowid });
 });
 
-router.patch('/:id(\\d+)', sec.requireRole('lead'), (req, res) => {
+router.patch('/:id', sec.requireRole('lead'), (req, res) => {
   const v = getVendor.get(req.params.id, req.orgId);
   if (!v) return httpError(res, 404, 'vendor not found');
   const b = req.body || {};
@@ -143,7 +149,7 @@ router.patch('/:id(\\d+)', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/:id(\\d+)', sec.requireRole('lead'), (req, res) => {
+router.delete('/:id', sec.requireRole('lead'), (req, res) => {
   const v = getVendor.get(req.params.id, req.orgId);
   if (!v) return httpError(res, 404, 'vendor not found');
   db.prepare('DELETE FROM vendors WHERE id = ? AND org_id = ?').run(v.id, req.orgId);
@@ -169,7 +175,7 @@ router.post('/subscribe-catalog', sec.requireRole('lead'), (req, res) => {
   res.json({ added, total: existing.size + added });
 });
 
-router.post('/:id(\\d+)/poll', (req, res) => {
+router.post('/:id/poll', (req, res) => {
   vendorEngine.pollNow(parseInt(req.params.id, 10), req.orgId)
     .then((v) => (v ? res.json(vendorView(v)) : httpError(res, 404, 'vendor not found')))
     .catch((e) => httpError(res, 500, e.message));

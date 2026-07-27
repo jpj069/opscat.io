@@ -54,7 +54,7 @@ export default function Users() {
         )}
       </PageHeader>
 
-      {err && <div className="card" style={{ color: '#f85149', fontSize: 12 }}>{err}</div>}
+      {err && <div className="card text-base" style={{ color: '#f85149'}}>{err}</div>}
 
       <div className="card" style={{ padding: 0 }}>
         <TableScroll minWidth={960}>
@@ -65,7 +65,7 @@ export default function Users() {
 
         {users === null && <TableSkeleton cols={GRID} rows={5} />}
         {users !== null && users.length === 0 && (
-          <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
+          <div className="text-text3 text-base" style={{ padding: 30, textAlign: 'center'}}>
             No users yet.
           </div>
         )}
@@ -78,26 +78,26 @@ export default function Users() {
             <span className="row" style={{ gap: 8, minWidth: 0 }}>
               <Avatar i={initials(u.name)} c={u.color || roleColor(u.role)} size={28} />
               <span style={{ minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text0)',
+                <span className="text-base font-semibold text-text0" style={{ display: 'block',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>ID #{u.id}</span>
+                <span className="mono text-2xs text-text3">ID #{u.id}</span>
               </span>
             </span>
             {/* email */}
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden',
+            <span className="mono text-sm text-text1" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>
             {/* role pill */}
-            <span className="pill" style={{ color: roleColor(u.role), fontSize: 10,
+            <span className="pill text-xs" style={{ color: roleColor(u.role),
               background: alpha(roleColor(u.role), 0.12), border: `1px solid ${alpha(roleColor(u.role), 0.3)}` }}>
               {u.role}
             </span>
             {/* status */}
             <span className="row" style={{ gap: 5 }}>
               <GlowDot color={u.active ? '#3fb950' : '#8b949e'} />
-              <span style={{ fontSize: 11 }}>{u.active ? 'Active' : 'Inactive'}</span>
+              <span className="text-sm">{u.active ? 'Active' : 'Inactive'}</span>
             </span>
             {/* last seen */}
-            <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(u.lastSeenAt)}</span>
+            <span className="mono text-xs text-text2">{relTime(u.lastSeenAt)}</span>
             {/* actions */}
             <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
               {isAdmin ? (
@@ -112,7 +112,7 @@ export default function Users() {
                   )}
                   <button className="btn btn-sm" onClick={() => reset(u)}>Reset password</button>
                 </>
-              ) : <span style={{ fontSize: 10, color: 'var(--text3)' }}>view only</span>}
+              ) : <span className="text-xs text-text3">view only</span>}
             </span>
           </div>
         ))}
@@ -150,7 +150,7 @@ function EditModal({ user, onClose, onSaved }:
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </Field>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Save'}</button>
       </form>
@@ -194,7 +194,7 @@ function InviteModal({ onClose, onSaved, onSecret }:
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </Field>
-        {err && <div style={{ color: '#f85149', fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
           disabled={busy}>{busy ? '…' : 'Create user'}</button>
       </form>
@@ -207,8 +207,8 @@ function InviteModal({ onClose, onSaved, onSecret }:
 function SecretModal({ title, hint, password, onClose }: Secret & { onClose: () => void }) {
   return (
     <Modal title={title} onClose={onClose}>
-      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 10 }}>{hint}</div>
-      <div className="mono" style={{ fontSize: 14, fontWeight: 600, color: 'var(--text0)',
+      <div className="text-sm text-text2" style={{ marginBottom: 10 }}>{hint}</div>
+      <div className="mono text-lg font-semibold text-text0" style={{
         background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6,
         padding: '10px 12px', userSelect: 'all', wordBreak: 'break-all' }}>{password}</div>
       <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}

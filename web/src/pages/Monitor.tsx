@@ -68,12 +68,12 @@ export default function Monitor() {
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{events.length} events</span>
+        <span className="mono text-2xs text-text3">{events.length} events</span>
       </div>
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {app.eventsLoading && <TableSkeleton cols={EVENT_COLS} rows={7} />}
         {!app.eventsLoading && events.length === 0 && (
-          <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 40, textAlign: 'center'}}>
             No active events{filter !== 'all' ? ` in band "${filter}"` : ''} — all quiet.
           </div>
         )}
@@ -89,24 +89,24 @@ export default function Monitor() {
                 background: selected ? alpha(c, 0.06) : undefined }}>
               <span className="row" style={{ gap: 4 }}>
                 <button title="Finish" onClick={(ev) => act(e.id, 'finish', ev)}
-                  style={{ color: SEV.green, fontSize: 11, opacity: 0.7 }}>✓</button>
+                  style={{ color: SEV.green, fontSize: 'var(--t-sm)', opacity: 0.7 }}>✓</button>
                 <button title="Downgrade" onClick={(ev) => act(e.id, 'downgrade', ev)}
-                  style={{ color: SEV.medium, fontSize: 11, opacity: 0.7 }}>↓</button>
+                  style={{ color: SEV.medium, fontSize: 'var(--t-sm)', opacity: 0.7 }}>↓</button>
               </span>
               <SevBadge score={e.severity} />
-              <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--text0)',
+              <span className="mono text-sm font-semibold text-text0" style={{
                 textAlign: 'right' }}>{e.hits}</span>
               <Spark data={e.spark} color={c} />
               <span style={{ minWidth: 0 }}>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--text0)', display: 'block',
+                <span className="mono text-sm text-text0" style={{ display: 'block',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.device}</span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>
+                <span className="mono text-2xs text-text3">
                   {age(Date.now() - e.lastSeen)} / {age(Date.now() - e.firstSeen)}</span>
               </span>
               <span style={{ minWidth: 0 }}>
-                <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: c, display: 'block' }}>
+                <span className="mono text-sm font-semibold" style={{ color: c, display: 'block' }}>
                   {e.name}</span>
-                <span style={{ fontSize: 10, color: 'var(--text2)', display: 'block', overflow: 'hidden',
+                <span className="text-xs text-text2" style={{ display: 'block', overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.description}</span>
               </span>
               {e.assigned
@@ -126,11 +126,14 @@ export default function Monitor() {
         borderBottom: '1px solid var(--bg3)' }}>
         <span className="row" style={{ gap: 5 }}>
           <span className="pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: SEV.green }} />
-          <span className="micro" style={{ fontSize: 9 }}>LIVE LOGS</span>
+          <span className="micro text-2xs">LIVE LOGS</span>
         </span>
+        {/* no inline font-size on a form control: an inline style beats the media query
+            that lifts inputs to 16px on phones, and below 16px iOS zooms the page on
+            focus. Density comes from the padding. */}
         <input value={logQuery} onChange={(e) => setLogQuery(e.target.value)}
-          placeholder="filter (regex)…" style={{ flex: 1, maxWidth: 280, padding: '3px 8px', fontSize: 11 }} />
-        <span className="mono" style={{ fontSize: 9, color: 'var(--text3)' }}>{logs.length}</span>
+          placeholder="filter (regex)…" style={{ flex: 1, maxWidth: 280, padding: '3px 8px' }} />
+        <span className="mono text-2xs text-text3">{logs.length}</span>
       </div>
       <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column-reverse' }}>
         <div>
@@ -138,10 +141,10 @@ export default function Monitor() {
           {logs.map((l, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: LOG_COLS, gap: 10,
               padding: 'var(--log-py) 16px', borderBottom: '1px solid var(--bg3)' }}>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtTime(l.ts)}</span>
-              <span className="mono" style={{ fontSize: 10, color: 'var(--text1)', overflow: 'hidden',
+              <span className="mono text-xs text-text3">{fmtTime(l.ts)}</span>
+              <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>
-              <span className="mono" style={{ fontSize: 10, color: logSevColor(l.sev), wordBreak: 'break-all' }}>
+              <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
                 {l.line}</span>
             </div>
           ))}
@@ -154,7 +157,7 @@ export default function Monitor() {
   return (
     <div className="page-console" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="row" style={{ padding: '10px 16px 0', gap: 6 }}>
-        <span className="micro" style={{ fontSize: 9 }}>LAYOUT</span>
+        <span className="micro text-2xs">LAYOUT</span>
         {([['horizontal', PanelTopIcon], ['vertical', PanelLeftIcon], ['events', SquareIcon]] as const).map(([l, Icon]) => (
           <button key={l} className={`chip ${layout === l ? 'active' : ''}`} title={l}
             style={{ display: 'inline-flex', alignItems: 'center' }}

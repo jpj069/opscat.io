@@ -36,13 +36,12 @@ export function StatusPill({ text, color }: { text: string; color: string }) {
 
 export function Avatar({ i, c, size = 26 }: { i: string; c: string; size?: number }) {
   return (
-    <span style={{
+    <span className="font-semibold" style={{
       width: size, height: size, borderRadius: '50%', flexShrink: 0,
       background: `linear-gradient(135deg, ${c}, ${alpha(c, 0.6)})`,
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: Math.max(8, size * 0.35), fontWeight: 600, color: '#fff',
-      fontFamily: "'JetBrains Mono', monospace",
-    }}>{i}</span>
+      fontSize: Math.max(8, size * 0.35), color: '#fff',
+      fontFamily: "'JetBrains Mono', monospace"}}>{i}</span>
   );
 }
 
@@ -82,17 +81,17 @@ export function KpiCard({ label, value, color, spark, sub }:
   { label: string; value: string | null; color: string; spark?: number[] | null; sub?: string | null }) {
   return (
     <div className="card" style={{ flex: 1, minWidth: 150 }}>
-      <div className="micro" style={{ fontSize: 9 }}>{label}</div>
+      <div className="micro text-2xs">{label}</div>
       <div className="row" style={{ justifyContent: 'space-between', marginTop: 6 }}>
         {value == null
           ? <Skeleton w={76} h={26} radius={4} />
-          : <span className="mono" style={{ fontSize: 26, fontWeight: 700, color }}>{value}</span>}
+          : <span className="mono font-bold" style={{ fontSize: 26, color }}>{value}</span>}
         {spark && <Spark data={spark} w={64} h={24} color={color} />}
       </div>
       {/* sub === null means "a sub-line is coming" → reserve it, no layout jump */}
       {sub === null
         ? <Skeleton w={54} h={9} style={{ marginTop: 7 }} />
-        : sub && <div style={{ fontSize: 10, color: 'var(--text2)', marginTop: 4 }}>{sub}</div>}
+        : sub && <div className="text-xs text-text2" style={{ marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
@@ -101,7 +100,7 @@ export function KpiCard({ label, value, color, spark, sub }:
 export function StackedArea({ data, w = 460, h = 140 }:
   { data: { d: string; c: number; h: number; m: number; l: number }[] | null; w?: number; h?: number }) {
   if (data == null) return <ChartSkeleton h={h} />;
-  if (!data.length) return <div style={{ color: 'var(--text3)', fontSize: 11 }}>no data yet</div>;
+  if (!data.length) return <div className="text-text3 text-sm">no data yet</div>;
   const keys: ('l' | 'm' | 'h' | 'c')[] = ['l', 'm', 'h', 'c'];
   const colors = { l: SEV.low, m: SEV.medium, h: SEV.high, c: SEV.critical };
   const totals = data.map((r) => r.c + r.h + r.m + r.l);
@@ -133,7 +132,7 @@ export function LineChart({ points, labels, color = SEV.green, w = 460, h = 140,
   { points: number[] | null; labels?: string[]; color?: string; w?: number; h?: number;
     fmt?: (v: number) => string }) {
   if (points == null) return <ChartSkeleton h={h} />;
-  if (!points.length) return <div style={{ color: 'var(--text3)', fontSize: 11 }}>no data yet</div>;
+  if (!points.length) return <div className="text-text3 text-sm">no data yet</div>;
   const max = Math.max(...points, 1); const min = Math.min(...points, 0);
   const range = max - min || 1;
   const px = (i: number) => points.length === 1 ? w / 2 : (i / (points.length - 1)) * (w - 20) + 10;
@@ -161,15 +160,15 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
   const max = maxOverride ?? Math.max(...items.map((i) => i.v), 1);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {items.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 11 }}>no data yet</div>}
+      {items.length === 0 && <div className="text-text3 text-sm">no data yet</div>}
       {items.map((it) => (
         <div key={it.n} className="row">
-          <span className="mono" style={{ width: 130, fontSize: 10, color: 'var(--text1)',
+          <span className="mono text-xs text-text1" style={{ width: 130,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.n}</span>
           <div style={{ flex: 1, height: 8, background: 'var(--bg3)', borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ width: `${(it.v / max) * 100}%`, height: '100%', background: it.c || color }} />
           </div>
-          <span className="mono" style={{ width: 40, fontSize: 10, color: 'var(--text2)', textAlign: 'right' }}>
+          <span className="mono text-xs text-text2" style={{ width: 40, textAlign: 'right' }}>
             {it.v}
           </span>
         </div>
@@ -187,8 +186,8 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
         width, maxWidth: '94vw', background: 'var(--bg1)', border: '1px solid var(--border)',
         borderRadius: 10, zIndex: 120, padding: 18, boxShadow: '0 16px 48px rgba(0,0,0,0.45)' }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text0)' }}>{title}</span>
-          {!hideClose && <button onClick={onClose} style={{ color: 'var(--text2)', fontSize: 16 }}>×</button>}
+          <span className="text-md font-bold text-text0">{title}</span>
+          {!hideClose && <button className="text-text2 text-xl" onClick={onClose}>×</button>}
         </div>
         {children}
       </div>
@@ -229,7 +228,7 @@ export function PageHeader({ title, children }:
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-      <span className="micro" style={{ fontSize: 9 }}>{label}</span>
+      <span className="micro text-2xs">{label}</span>
       {children}
     </label>
   );
@@ -274,12 +273,12 @@ export function TipBody({ color, title, sub, value }:
   { color: string; title: React.ReactNode; sub?: React.ReactNode; value?: React.ReactNode }) {
   return (
     <>
-      <div className="mono row" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text0)', gap: 6 }}>
+      <div className="mono row text-sm font-bold text-text0" style={{ gap: 6 }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
         {title}
       </div>
-      {sub && <div className="mono" style={{ fontSize: 9, color: 'var(--text2)', marginTop: 3 }}>{sub}</div>}
-      {value && <div className="mono" style={{ fontSize: 10, marginTop: 5, color: 'var(--text1)' }}>{value}</div>}
+      {sub && <div className="mono text-2xs text-text2" style={{ marginTop: 3 }}>{sub}</div>}
+      {value && <div className="mono text-xs text-text1" style={{ marginTop: 5}}>{value}</div>}
     </>
   );
 }
@@ -337,9 +336,8 @@ export function Busy({ children }: { children: React.ReactNode }) {
 export function StatusBadge({ label, state }: { label: string; state: CellState }) {
   const c = CELL_COLOR[state];
   return (
-    <span className="mono" style={{ background: state === 'na' ? 'var(--bg3)' : alpha(c, 0.1),
-      display: 'inline-flex', alignItems: 'center', padding: '1px 7px', borderRadius: 3,
-      fontSize: 9, fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--text1)' }}>
+    <span className="mono text-2xs font-semibold text-text1" style={{ background: state === 'na' ? 'var(--bg3)' : alpha(c, 0.1),
+      display: 'inline-flex', alignItems: 'center', padding: '1px 7px', borderRadius: 3, whiteSpace: 'nowrap'}}>
       <span style={{ width: 6, height: 6, borderRadius: '50%',
         background: state === 'na' ? 'var(--text3)' : c, marginRight: 4, display: 'inline-block' }} />
       {label}

@@ -41,12 +41,11 @@ export default function Cases() {
       <div className="row" style={{ gap: 4, borderBottom: '1px solid var(--bg3)' }}>
         {TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)} style={{
-            padding: '6px 12px', fontSize: 12, textTransform: 'capitalize', marginBottom: -1,
+            padding: '6px 12px', fontSize: 'var(--t-base)', textTransform: 'capitalize', marginBottom: -1,
             color: tab === t ? 'var(--text0)' : 'var(--text2)',
             borderBottom: tab === t ? '2px solid #388bfd' : '2px solid transparent',
           }}>
-            {t}{t !== 'all' && <span className="mono" style={{ marginLeft: 5, fontSize: 10,
-              color: 'var(--text3)' }}>{counts[t]}</span>}
+            {t}{t !== 'all' && <span className="mono text-xs text-text3" style={{ marginLeft: 5}}>{counts[t]}</span>}
           </button>
         ))}
       </div>
@@ -61,29 +60,29 @@ export default function Cases() {
         {!cases ? (
           <TableSkeleton cols={COLS} rows={6} />
         ) : rows.length === 0 ? (
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>
+          <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             {tab === 'all' ? 'no cases yet' : `no ${tab} cases`}
           </div>
         ) : rows.map((c) => (
           <div key={c.id} className="tbl-row" style={{ gridTemplateColumns: COLS, cursor: 'pointer' }}
             onClick={() => setEditing(c)}>
-            <span className="mono" style={{ fontSize: 11, color: '#388bfd' }}>{c.label}</span>
+            <span className="mono text-sm" style={{ color: '#388bfd' }}>{c.label}</span>
             <SevBadge score={c.severity} />
-            <span className="mono" style={{ fontSize: 11, color: sevColor(c.severity), overflow: 'hidden',
+            <span className="mono text-sm" style={{ color: sevColor(c.severity), overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden',
+            <span className="mono text-sm text-text1" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.device}</span>
             <StatusPill text={c.status} color={STATUS_COLORS[c.status]} />
             {c.assigned ? (
               <span className="row" style={{ gap: 6, minWidth: 0 }}>
                 <Avatar i={c.assigned.i} c={c.assigned.c} size={20} />
-                <span style={{ fontSize: 11, color: 'var(--text1)', overflow: 'hidden',
+                <span className="text-sm text-text1" style={{ overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.assigned.n}</span>
               </span>
-            ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-            <span className="mono" style={{ fontSize: 10, color: c.rootCause ? 'var(--text2)' : 'var(--text3)',
+            ) : <span className="text-text3">—</span>}
+            <span className="mono text-xs" style={{ color: c.rootCause ? 'var(--text2)' : 'var(--text3)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.rootCause || '—'}</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--text1)', textAlign: 'right' }}>
+            <span className="mono text-sm text-text1" style={{ textAlign: 'right' }}>
               {fmtDuration(c.durationMs)}</span>
           </div>
         ))}
@@ -121,9 +120,9 @@ function CaseEditor({ c, users, onClose, onSaved }:
 
   return (
     <Modal title={`Edit ${c.label}`} onClose={onClose} width={460}>
-      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 12 }}>
+      <div className="text-sm text-text2" style={{ marginBottom: 12 }}>
         <span className="mono" style={{ color: sevColor(c.severity) }}>{c.name}</span>
-        <span className="mono" style={{ color: 'var(--text3)' }}> · {c.device}</span>
+        <span className="mono text-text3"> · {c.device}</span>
       </div>
       <Field label="Status">
         <select value={status} onChange={(e) => setStatus(e.target.value as CaseRow['status'])}>
