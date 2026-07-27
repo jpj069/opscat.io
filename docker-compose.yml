@@ -26,6 +26,8 @@ services:
       - OPSCAT_SECRET=${OPSCAT_SECRET:-}
       - OPSCAT_PROBE_CITY=${OPSCAT_PROBE_CITY:-Local}
       - OPSCAT_PROBE_CC=${OPSCAT_PROBE_CC:-XX}
+      - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
+      - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
       - OPSCAT_EDITION=community
       # GitHub login (community feature) — create an OAuth app on GitHub with
       # callback <OPSCAT_BASE_URL>/api/auth/github/callback
