@@ -14,30 +14,30 @@ const { db } = require('./db');
 const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
-    limits: { users: 3, retentionDays: 7, checks: 3, sensors: 1, snmpTargets: 2, agents: 2, apiKeys: 2,
-      ingestLinesPerDay: 50000 },
+    limits: { users: 3, retentionDays: 7, checks: 3, managedLocations: 5, minIntervalS: 60, snmpTargets: 2,
+      agents: 2, apiKeys: 2, ingestLinesPerDay: 50000 },
     features: ['status_page', 'email_alerts', 'multi_org'],
   },
   pro: {
     key: 'pro', name: 'Pro', priceMonthly: 29, priceYearly: 290,
-    limits: { users: 10, retentionDays: 30, checks: 25, sensors: 5, snmpTargets: 20, agents: 25, apiKeys: 10,
-      ingestLinesPerDay: 1000000 },
+    limits: { users: 10, retentionDays: 30, checks: 25, managedLocations: 10, minIntervalS: 30, snmpTargets: 20,
+      agents: 25, apiKeys: 10, ingestLinesPerDay: 1000000 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'multi_org'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
-    limits: { users: 30, retentionDays: 90, checks: 100, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: 50,
-      ingestLinesPerDay: 10000000 },
+    limits: { users: 30, retentionDays: 90, checks: 100, managedLocations: 25, minIntervalS: 15, snmpTargets: -1,
+      agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'priority_support', 'sensor_autoprovision', 'multi_org'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
-    limits: { users: -1, retentionDays: 365, checks: -1, sensors: -1, snmpTargets: -1, agents: -1, apiKeys: -1,
-      ingestLinesPerDay: -1 },
+    limits: { users: -1, retentionDays: 365, checks: -1, managedLocations: -1, minIntervalS: 15, snmpTargets: -1,
+      agents: -1, apiKeys: -1, ingestLinesPerDay: -1 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
-      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'sla', 'multi_org'],
+      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla', 'multi_org'],
   },
 };
 
@@ -48,7 +48,7 @@ const COUNTERS = {
   users: (orgId) => db.prepare(`SELECT COUNT(*) c FROM memberships m JOIN users u ON u.id = m.user_id
     WHERE m.org_id = ? AND u.active = 1`).get(orgId).c,
   checks: (orgId) => db.prepare('SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ?').get(orgId).c,
-  sensors: (orgId) => db.prepare("SELECT COUNT(*) c FROM synthetic_locations WHERE org_id = ? AND kind = 'remote'").get(orgId).c,
+  managedLocations: (orgId) => db.prepare('SELECT COUNT(*) c FROM org_location_access WHERE org_id = ?').get(orgId).c,
   snmpTargets: (orgId) => db.prepare('SELECT COUNT(*) c FROM snmp_targets WHERE org_id = ?').get(orgId).c,
   agents: (orgId) => db.prepare('SELECT COUNT(*) c FROM agents WHERE org_id = ?').get(orgId).c,
   apiKeys: (orgId) => db.prepare('SELECT COUNT(*) c FROM api_keys WHERE org_id = ? AND active = 1').get(orgId).c,
@@ -107,5 +107,13 @@ function publicPlans() {
   }));
 }
 
+// Plan-dependent minimum check interval (cadence). Community edition and
+// unlimited plans get the technical floor of 15s.
+function minIntervalFor(planKey) {
+  if (!enforce) return 15;
+  const v = planFor(planKey).limits.minIntervalS;
+  return Number.isFinite(v) && v > 0 ? v : 15;
+}
+
 module.exports = { PLANS, planFor, hasFeature, checkLimit, limitFor, setEnforce, publicPlans,
-  checkIngestVolume, ingestLinesToday };
+  minIntervalFor, checkIngestVolume, ingestLinesToday };

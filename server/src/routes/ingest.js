@@ -300,16 +300,47 @@ function requireProbeKey(req, res, next) {
   next();
 }
 
-// Probe pulls its work list… (only its own org's checks)
+// Is a check allowed to run on / report from this probe location? Customer
+// locations serve their own org; managed locations serve every org that
+// booked them. In both cases an explicit check→location assignment
+// (check_locations rows) narrows the set; no rows = all agents.
+function checkAllowedOnLocation(check, loc) {
+  if (loc.kind === 'managed') {
+    const booked = db.prepare('SELECT 1 FROM org_location_access WHERE org_id = ? AND location_id = ?')
+      .get(check.org_id, loc.id);
+    if (!booked) return false;
+  } else if (check.org_id !== loc.org_id) {
+    return false;
+  }
+  const assigned = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?').all(check.id);
+  return assigned.length === 0 || assigned.some((a) => a.location_id === loc.id);
+}
+
+// Probe pulls its work list: own-org checks for customer locations, the union
+// of all booking orgs' checks for managed locations — filtered by assignment.
 router.get('/synthetics/checks', requireProbeKey, (req, res) => {
-  db.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?')
-    .run(now(), req.probeLocation.id);
-  res.json(db.prepare('SELECT id, type, target, interval_s, timeout_ms FROM synthetic_checks WHERE org_id = ? AND enabled = 1')
-    .all(req.probeLocation.org_id).map((c) => ({ id: c.id, type: c.type, target: c.target,
+  const loc = req.probeLocation;
+  db.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?').run(now(), loc.id);
+  if (loc.node_id) {
+    db.prepare("UPDATE sensor_nodes SET status = 'online' WHERE id = ? AND status = 'provisioning'")
+      .run(loc.node_id);
+  }
+  const rows = loc.kind === 'managed'
+    ? db.prepare(`SELECT c.* FROM synthetic_checks c
+        JOIN org_location_access a ON a.org_id = c.org_id AND a.location_id = ?
+        WHERE c.enabled = 1`).all(loc.id)
+    : db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ? AND enabled = 1').all(loc.org_id);
+  res.json(rows
+    .filter((c) => {
+      const assigned = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?').all(c.id);
+      return assigned.length === 0 || assigned.some((a) => a.location_id === loc.id);
+    })
+    .map((c) => ({ id: c.id, type: c.type, target: c.target,
       intervalS: c.interval_s, timeoutMs: c.timeout_ms })));
 });
 
-// …and reports results (only for checks in the probe's org — no cross-org injection).
+// …and reports results (only for checks this location is allowed to serve —
+// no cross-org injection).
 router.post('/synthetics/report', requireProbeKey, (req, res) => {
   const results = Array.isArray(req.body?.results) ? req.body.results : null;
   if (!results) return httpError(res, 400, 'expected {results:[...]}');
@@ -319,8 +350,8 @@ router.post('/synthetics/report', requireProbeKey, (req, res) => {
   for (const r of results) {
     const checkId = clampInt(r.checkId, 1, 1e9, 0);
     if (!checkId) continue;
-    const chk = db.prepare('SELECT org_id FROM synthetic_checks WHERE id = ?').get(checkId);
-    if (!chk || chk.org_id !== req.probeLocation.org_id) continue;
+    const chk = db.prepare('SELECT id, org_id FROM synthetic_checks WHERE id = ?').get(checkId);
+    if (!chk || !checkAllowedOnLocation(chk, req.probeLocation)) continue;
     synthEngine.recordResult(checkId, req.probeLocation.id, {
       ok: !!r.ok, latency: Number.isFinite(r.latencyMs) ? r.latencyMs : null,
       meta: r.meta && typeof r.meta === 'object' ? r.meta : null,

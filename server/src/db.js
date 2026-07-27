@@ -162,6 +162,47 @@ const MIGRATIONS = [
   () => {
     addColumn('api_keys', 'role', "TEXT NOT NULL DEFAULT 'analyst'");
   },
+  // idx 8 -> version 9: sensor agents v2 (docs/SENSOR-AGENTS.md). Rebuild
+  // synthetic_locations so kind allows 'customer'/'managed' (SQLite cannot
+  // alter a CHECK), org_id becomes nullable (managed locations belong to no
+  // tenant), and the new columns exist. Existing 'remote' locations become
+  // 'customer'. sensor_nodes / cloud_credentials / org_location_access /
+  // check_locations are created by schema.sql. No check_locations backfill on
+  // purpose: zero rows = "runs on all agents incl. future" = old behavior.
+  () => {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='synthetic_locations'").get();
+    if (row && !/'customer'/.test(row.sql)) {
+      db.exec(`
+        CREATE TABLE synthetic_locations_v2 (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id        INTEGER,
+          city          TEXT NOT NULL,
+          cc            TEXT NOT NULL,
+          kind          TEXT NOT NULL DEFAULT 'customer' CHECK (kind IN ('local','customer','managed')),
+          region        TEXT,
+          is_premium    INTEGER NOT NULL DEFAULT 0,
+          visible       INTEGER NOT NULL DEFAULT 1,
+          capabilities  TEXT,
+          node_id       INTEGER,
+          provider      TEXT,
+          provider_ref  TEXT,
+          probe_key_hash TEXT UNIQUE,
+          active        INTEGER NOT NULL DEFAULT 1,
+          last_seen_at  INTEGER,
+          created_at    INTEGER NOT NULL
+        );
+        INSERT INTO synthetic_locations_v2
+          (id, org_id, city, cc, kind, provider, provider_ref, probe_key_hash, active, last_seen_at, created_at)
+        SELECT id, org_id, city, cc,
+               CASE kind WHEN 'remote' THEN 'customer' ELSE kind END,
+               provider, provider_ref, probe_key_hash, active, last_seen_at, created_at
+        FROM synthetic_locations;
+        DROP TABLE synthetic_locations;
+        ALTER TABLE synthetic_locations_v2 RENAME TO synthetic_locations;
+        CREATE INDEX IF NOT EXISTS idx_synth_locations_org ON synthetic_locations(org_id);
+      `);
+    }
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

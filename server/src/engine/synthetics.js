@@ -14,6 +14,12 @@ const pipeline = require('./pipeline');
 const insResult = db.prepare(`INSERT INTO synthetic_results
   (check_id, location_id, ts, ok, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?)`);
 const getChecks = db.prepare('SELECT * FROM synthetic_checks WHERE enabled = 1');
+// check→location assignment: no rows = run everywhere (incl. this local probe)
+const assignedLocs = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?');
+function runsOnLocation(checkId, locationId) {
+  const rows = assignedLocs.all(checkId);
+  return rows.length === 0 || rows.some((r) => r.location_id === locationId);
+}
 const getCheck = db.prepare('SELECT * FROM synthetic_checks WHERE id = ?');
 const lastFails = db.prepare(`SELECT ok FROM synthetic_results
   WHERE check_id = ? AND location_id = ? ORDER BY ts DESC LIMIT 3`);
@@ -293,6 +299,7 @@ async function tick() {
       const runner = RUNNERS[check.type];
       if (!runner) continue;
       const locId = ensureLocalLocation(check.org_id);
+      if (!runsOnLocation(check.id, locId)) continue; // assigned to other agents only
       runner(check)
         .then((res) => recordResult(check.id, locId, res))
         .catch((e) => recordResult(check.id, locId, { ok: false, latency: null, meta: { error: String(e.message).slice(0, 100) } }));
@@ -309,6 +316,7 @@ async function runAllNow(orgId = null) {
     const runner = RUNNERS[check.type];
     if (!runner) continue;
     const locId = ensureLocalLocation(check.org_id);
+    if (!runsOnLocation(check.id, locId)) continue;
     try {
       const res = await runner(check);
       recordResult(check.id, locId, res);

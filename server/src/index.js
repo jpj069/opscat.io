@@ -114,6 +114,7 @@ require('./engine/heartbeats').start();
 require('./engine/vendors').start();
 require('./engine/reports').start();
 require('./engine/retention').start();
+require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
 
 app.listen(config.port, () => {
   console.log(`OpsCat server listening on :${config.port}`);

@@ -97,11 +97,24 @@ export interface Component {
   days: { day: string; worst: CompStatus }[];
 }
 
-export interface SynthLocation { id: number; city: string; cc: string; kind: 'local' | 'remote'; online: boolean; }
+export interface SynthLocation {
+  id: number; city: string; cc: string;
+  kind: 'local' | 'customer' | 'managed';
+  region: string | null; isPremium: boolean; booked: boolean;
+  provider: string | null; nodeStatus: 'provisioning' | 'online' | 'draining' | 'dead' | null;
+  online: boolean;
+}
+export interface CloudCredential {
+  id: number; provider: 'aws' | 'gcp'; label: string; hint: string | null;
+  createdAt: number; lastUsedAt: number | null;
+}
+export interface CatalogEntry { code: string; city: string; cc: string; region: string; }
+export interface ProviderCatalog { catalog: { aws: CatalogEntry[]; gcp: CatalogEntry[] }; instanceClasses: string[]; }
 export interface CheckAssertions { status?: number; keyword?: string; jsonPath?: string; jsonValue?: string; }
 export interface SynthCheck {
   id: number; type: 'http' | 'icmp' | 'dns' | 'tcp' | 'traceroute'; target: string;
   intervalS: number; timeoutMs: number; enabled: boolean; passing: boolean; locations: number;
+  locationIds: number[]; // empty = all agents incl. future
   assertions: CheckAssertions | null;
 }
 export interface SynthResult {
@@ -109,6 +122,12 @@ export interface SynthResult {
   meta: { status?: number; loss?: number; jitter?: number; hops?: { hop: number; ip: string; ms: number | null }[]; error?: string } | null;
 }
 export interface SynthSeriesPoint { ts: number; ok: boolean; latencyMs: number | null; }
+export interface SynthHistoryEntry {
+  checkId: number;
+  buckets: { s: 'ok' | 'warn' | 'bad' | 'na'; ms: number | null }[];
+  uptimePct: number | null;
+}
+export interface SynthHistory { since: number; bucketMs: number; checks: SynthHistoryEntry[]; }
 
 export interface UserRow {
   id: number; email: string; name: string; role: string; color: string; active: boolean;

@@ -171,18 +171,74 @@ CREATE TABLE IF NOT EXISTS agent_metrics (
   PRIMARY KEY (agent_id, ts)
 ) WITHOUT ROWID;
 
+-- Logical sensor-agent location. kind: 'local' = the built-in probe on this
+-- host, 'customer' = self-hosted or BYO-cloud agent owned by one org
+-- (org_id NOT NULL), 'managed' = OpsCat fleet shared across tenants
+-- (org_id NULL, orgs subscribe via org_location_access). Location and physical
+-- node (sensor_nodes) are separate so a VPS swap keeps history + probe key.
 CREATE TABLE IF NOT EXISTS synthetic_locations (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        INTEGER,                     -- NULL for managed locations
   city          TEXT NOT NULL,
   cc            TEXT NOT NULL,
-  kind          TEXT NOT NULL DEFAULT 'remote' CHECK (kind IN ('local','remote')),
-  provider      TEXT,                        -- hetzner|vultr|... for auto-provisioned sensors
+  kind          TEXT NOT NULL DEFAULT 'customer' CHECK (kind IN ('local','customer','managed')),
+  region        TEXT,                        -- UI cluster: 'Europe', 'North America', …
+  is_premium    INTEGER NOT NULL DEFAULT 0,  -- managed: Enterprise-plan-only location
+  visible       INTEGER NOT NULL DEFAULT 1,  -- managed: shown in tenant picker (pre-provisioning)
+  capabilities  TEXT,                        -- JSON, e.g. {"browser":true}
+  node_id       INTEGER,                     -- FK sensor_nodes for managed/BYO; NULL for self-hosted
+  provider      TEXT,                        -- aws|gcp|hetzner|vultr for auto-provisioned sensors
   provider_ref  TEXT,                        -- provider instance id (teardown)
   probe_key_hash TEXT UNIQUE,               -- null for local
   active        INTEGER NOT NULL DEFAULT 1,
   last_seen_at  INTEGER,
   created_at    INTEGER NOT NULL
+);
+
+-- Physical inventory of auto-provisioned boxes (managed fleet + BYO-cloud).
+CREATE TABLE IF NOT EXISTS sensor_nodes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider      TEXT NOT NULL,               -- 'aws'|'gcp'|'hetzner'|'vultr'
+  provider_instance_id TEXT,
+  provider_region TEXT,
+  cloud_credential_id INTEGER,               -- NULL only while provisioning fails early
+  instance_class TEXT NOT NULL DEFAULT 'standard',  -- 'standard'|'browser'
+  agent_version TEXT,
+  status        TEXT NOT NULL DEFAULT 'provisioning'
+                CHECK (status IN ('provisioning','online','draining','dead')),
+  created_at    INTEGER NOT NULL
+);
+
+-- Encrypted cloud credentials: org-owned for BYO, org_id NULL = OpsCat
+-- platform credential (managed fleet, superadmin only). Secrets are AES-256-GCM
+-- encrypted with the app secret and are never returned by the API.
+CREATE TABLE IF NOT EXISTS cloud_credentials (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER,                     -- NULL = platform credential
+  provider      TEXT NOT NULL,               -- 'aws'|'gcp'
+  label         TEXT NOT NULL,
+  key_enc       TEXT NOT NULL,               -- encrypted JSON payload (per provider)
+  key_hint      TEXT,                        -- e.g. last 4 chars of the key id
+  created_by    INTEGER,
+  created_at    INTEGER NOT NULL,
+  last_used_at  INTEGER
+);
+
+-- Which org subscribed which managed location (plan quota or add-on).
+CREATE TABLE IF NOT EXISTS org_location_access (
+  org_id        INTEGER NOT NULL,
+  location_id   INTEGER NOT NULL REFERENCES synthetic_locations(id) ON DELETE CASCADE,
+  source        TEXT NOT NULL DEFAULT 'plan' CHECK (source IN ('plan','addon')),
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (org_id, location_id)
+);
+
+-- Which check runs from which location. NO rows for a check = "all agents,
+-- including future ones" (the default).
+CREATE TABLE IF NOT EXISTS check_locations (
+  check_id      INTEGER NOT NULL REFERENCES synthetic_checks(id) ON DELETE CASCADE,
+  location_id   INTEGER NOT NULL REFERENCES synthetic_locations(id) ON DELETE CASCADE,
+  PRIMARY KEY (check_id, location_id)
 );
 
 CREATE TABLE IF NOT EXISTS synthetic_checks (

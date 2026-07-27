@@ -697,7 +697,7 @@ function BillingCard() {
         <div className="card-title">Plan &amp; Billing</div>
         {bannerEl}
         <div style={{ fontSize: 12, color: 'var(--text2)' }}>
-          Community edition — all features unlocked.
+          Community Edition (CE) — all features unlocked.
         </div>
       </div>
     );

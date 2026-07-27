@@ -4,9 +4,21 @@ OpsCat is **open core**: a fully-featured, self-hostable monitoring platform und
 the permissive **Apache-2.0** license, plus a commercially-licensed layer that
 powers the hosted **OpsCat Cloud** SaaS.
 
+## Naming (canonical)
+
+- **OpsCat CE — Community Edition** (abbreviation: **CE**): the Apache-2.0 core.
+- **OpsCat EE — Enterprise Edition** (abbreviation: **EE**): the commercial
+  edition (core + `ee/`-licensed modules).
+- **OpsCat Cloud**: the hosted SaaS at opscat.io — a *deployment* of the EE,
+  not a third edition. Never call it "Cloud Edition" (its abbreviation would
+  collide with CE).
+- **Enterprise (plan)**: the top pricing tier — a plan *inside* the EE, not
+  the edition. Write "Enterprise plan" when you mean the tier, "EE" when you
+  mean the edition.
+
 ## Two editions, one codebase
 
-| | Community (default) | Cloud |
+| | CE — Community (default) | EE — Enterprise |
 |---|---|---|
 | License | Apache-2.0 | Apache-2.0 core + EE (`ee/LICENSE`) |
 | Tenancy | Single organization | Multi-tenant (many organizations) |
@@ -18,12 +30,14 @@ powers the hosted **OpsCat Cloud** SaaS.
 | Super-admin console | — | Yes |
 | Social login | GitHub | GitHub + Google + Microsoft (SAML planned) |
 | Sensor auto-provisioning | Manual (agent installer) | Automated per plan |
-| Selected by | `OPSCAT_EDITION=community` | `OPSCAT_EDITION=cloud` |
+| Selected by | `OPSCAT_EDITION=community` | `OPSCAT_EDITION=cloud` (aliases: `enterprise`, `ee`) |
 
 The edition is chosen at runtime by the `OPSCAT_EDITION` environment variable
-(`server/src/edition.js`). In `community` mode, plan enforcement is off and the
-single default organization has everything. In `cloud` mode, per-org plans and the
-Enterprise modules under `server/src/ee/**` are active.
+(`server/src/edition.js`). In `community` mode (CE), plan enforcement is off and
+the single default organization has everything. In `cloud` mode (EE), per-org
+plans and the Enterprise modules under `server/src/ee/**` are active. The
+internal runtime value for the EE stays `cloud` for compatibility with existing
+deployments.
 
 ## Where the line is drawn
 
@@ -31,11 +45,14 @@ Enterprise modules under `server/src/ee/**` are active.
   and files headed as EE), `web/`, `sdk/`, `agent/`. Self-host it, fork it, run it
   commercially internally — the Apache license permits it.
 - **Enterprise Edition** — `server/src/ee/**`, the super-admin / billing / oauth /
-  self-service-org (`routes/orgs.js`) routes, and the sensor-provisioning orchestration.
+  self-service-org (`routes/orgs.js`) routes, and the managed sensor fleet (superadmin
+  fleet console + platform credentials). BYO-cloud provisioning (`server/src/providers/`,
+  cloud credentials, the wizard) is Apache-2.0 core.
   On the **frontend**, the cloud-only UI is swapped for stubs at publish time so no
   cloud-feature source ships into the Apache-2.0 core: the super-admin console
   (`web/src/pages/SuperAdmin.tsx`), the workspace switcher (`web/src/OrgSwitcher.tsx`,
-  → null) and the first-run onboarding (`web/src/pages/Onboarding.tsx`, → null). These
+  → null), the first-run onboarding (`web/src/pages/Onboarding.tsx`, → null) and the
+  component gallery (`web/src/pages/ComponentLab.tsx`). These
   are what OpsCat Cloud sells; they are covered by `ee/LICENSE` and live only in the
   private repository (see below). The tester-session telemetry loader
   (`web/src/testify.ts`, → no-op) is stubbed for a different reason — not licensing

@@ -240,6 +240,70 @@ export function GlowDot({ color, size = 8 }: { color: string; size?: number }) {
     boxShadow: `0 0 6px ${color}`, display: 'inline-block', flexShrink: 0 }} />;
 }
 
+// ---- synthetics atoms: cell states, tooltip, HeatBar, StatusBadge, grids ----
+
+export type CellState = 'ok' | 'warn' | 'bad' | 'na';
+export const CELL_COLOR: Record<CellState, string> = {
+  ok: SEV.green, warn: SEV.medium, bad: SEV.critical, na: 'var(--bg3)',
+};
+
+// Rich hover tooltip, one instance app-wide: mount <TipHost /> once in the app
+// shell; components call tip()/hideTip() from mouse handlers. Follows the
+// cursor and clamps to the viewport — replaces the browser's title tooltip.
+let setTipState: ((s: { x: number; y: number; node: React.ReactNode } | null) => void) | null = null;
+export function TipHost() {
+  const [s, setS] = React.useState<{ x: number; y: number; node: React.ReactNode } | null>(null);
+  React.useEffect(() => { setTipState = setS; return () => { setTipState = null; }; }, []);
+  if (!s) return null;
+  const x = Math.min(s.x + 14, (window.innerWidth || 800) - 200);
+  const y = Math.min(s.y + 14, (window.innerHeight || 600) - 96);
+  return (
+    <div style={{ position: 'fixed', left: x, top: y, zIndex: 200, pointerEvents: 'none',
+      background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 6,
+      padding: '8px 11px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 150, maxWidth: 260 }}>
+      {s.node}
+    </div>
+  );
+}
+export const tip = (node: React.ReactNode) => (e: React.MouseEvent) =>
+  setTipState?.({ x: e.clientX, y: e.clientY, node });
+export const hideTip = () => setTipState?.(null);
+
+// Standard tooltip body: name line with status dot, sub line, value line.
+export function TipBody({ color, title, sub, value }:
+  { color: string; title: React.ReactNode; sub?: React.ReactNode; value?: React.ReactNode }) {
+  return (
+    <>
+      <div className="mono row" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text0)', gap: 6 }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+        {title}
+      </div>
+      {sub && <div className="mono" style={{ fontSize: 9, color: 'var(--text2)', marginTop: 3 }}>{sub}</div>}
+      {value && <div className="mono" style={{ fontSize: 10, marginTop: 5, color: 'var(--text1)' }}>{value}</div>}
+    </>
+  );
+}
+
+export interface HeatBucket { s: CellState; ms?: number | null; tip?: React.ReactNode }
+
+// Uptime heat-bar. Flex segments always fill the container width, so the
+// bucket count may vary per range (decision: 30min/1h/6h/12h → 30 buckets,
+// 24h → 32×45min, 7d → 28×6h, 30d → 30×1d) — worst-status-wins per bucket.
+export function HeatBar({ buckets, big = false }: { buckets: HeatBucket[]; big?: boolean }) {
+  return (
+    <div style={{ display: 'flex', gap: 2, alignItems: 'center', width: '100%' }}>
+      {buckets.map((b, i) => (
+        <span key={i}
+          onMouseEnter={b.tip ? tip(b.tip) : undefined}
+          onMouseMove={b.tip ? tip(b.tip) : undefined}
+          onMouseLeave={b.tip ? hideTip : undefined}
+          style={{ flex: 1, height: big ? 18 : 14, borderRadius: 1.5, minWidth: 2,
+            background: CELL_COLOR[b.s], opacity: b.s === 'ok' ? 0.85 : 1 }} />
+      ))}
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ skeletons
 //
 // Design-system rule: a skeleton is DERIVED, never hand-drawn. Each component
@@ -265,6 +329,87 @@ export function Busy({ children }: { children: React.ReactNode }) {
     <div role="status" aria-busy="true">
       <span className="sr-only">Loading…</span>
       {children}
+    </div>
+  );
+}
+
+// Check-type label with a status dot (Checks column of the synthetics table).
+export function StatusBadge({ label, state }: { label: string; state: CellState }) {
+  const c = CELL_COLOR[state];
+  return (
+    <span className="mono" style={{ background: state === 'na' ? 'var(--bg3)' : alpha(c, 0.1),
+      display: 'inline-flex', alignItems: 'center', padding: '1px 7px', borderRadius: 3,
+      fontSize: 9, fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--text1)' }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%',
+        background: state === 'na' ? 'var(--text3)' : c, marginRight: 4, display: 'inline-block' }} />
+      {label}
+    </span>
+  );
+}
+
+export interface GridCell { state: CellState; tip?: React.ReactNode; onClick?: () => void }
+
+// Waffle status grid (GitHub-contribution style): one cell per entity. Cells
+// flow with the container width and wrap into the next row (flex-wrap) — the
+// 30+ sensor-agents view; table rows use small cells, detail views large ones.
+export function StatusGrid({ cells, cell = 12, gap = 3 }:
+  { cells: GridCell[]; cell?: number; gap?: number }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap }}>
+      {cells.map((c, i) => (
+        <span key={i}
+          onMouseEnter={c.tip ? tip(c.tip) : undefined}
+          onMouseMove={c.tip ? tip(c.tip) : undefined}
+          onMouseLeave={c.tip ? hideTip : undefined}
+          onClick={c.onClick}
+          style={{ width: cell, height: cell, borderRadius: Math.max(1.5, cell / 6),
+            background: CELL_COLOR[c.state], cursor: c.onClick ? 'pointer' : 'default' }} />
+      ))}
+    </div>
+  );
+}
+
+// Honeycomb variant of StatusGrid: interlocking pointy-top hexagons. Column
+// count is measured from the container width (and re-measured on resize), so
+// the comb fills the available width and overflows into further rows. Row
+// pitch is 3/4·h plus the gap projected on the hex diagonal, which keeps the
+// spacing between all neighbouring cells visually equal.
+export function Honeycomb({ cells, size = 22, gap = 2 }:
+  { cells: GridCell[]; size?: number; gap?: number }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [cols, setCols] = React.useState(10);
+  React.useLayoutEffect(() => {
+    const measure = () => {
+      const w = ref.current?.clientWidth || 0;
+      // odd rows shift half a cell right, so reserve that half cell
+      setCols(Math.max(1, Math.floor((w - (size + gap) / 2 + gap) / (size + gap))));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [size, gap]);
+  const h = size * 1.1547; // pointy-top hexagon: height = width * 2/sqrt(3)
+  const rowShift = -(h / 4) + gap * 0.866; // interlock rows, keep diagonal gap ≈ gap
+  const rows: GridCell[][] = [];
+  for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
+  return (
+    <div ref={ref} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+      {rows.map((row, r) => (
+        <div key={r} style={{ display: 'flex', gap,
+          marginLeft: r % 2 === 1 ? (size + gap) / 2 : 0,
+          marginTop: r > 0 ? rowShift : 0 }}>
+          {row.map((c, i) => (
+            <span key={i}
+              onMouseEnter={c.tip ? tip(c.tip) : undefined}
+              onMouseMove={c.tip ? tip(c.tip) : undefined}
+              onMouseLeave={c.tip ? hideTip : undefined}
+              onClick={c.onClick}
+              style={{ width: size, height: h, background: CELL_COLOR[c.state], flexShrink: 0,
+                clipPath: 'polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%)',
+                cursor: c.onClick ? 'pointer' : 'default' }} />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

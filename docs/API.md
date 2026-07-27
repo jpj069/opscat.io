@@ -9,8 +9,8 @@ Two surfaces:
   agent tokens (`oca_…`) or probe keys (`ocp_…`). Keys are created in the UI (Settings)
   and shown exactly once.
 
-Public (no auth): `GET /api/health`, `GET /status` (HTML status page —
-per-organization in the cloud edition: `/status/:slug`), and `GET /api/plans`
+Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HTML status
+page — per-organization in the EE: `/status/:slug`), and `GET /api/plans`
 (edition, public plan matrix, auth options for the login/pricing UI).
 
 **Token auth for the operations API.** `/api/events`, `/api/cases`, `/api/incidents`,
@@ -48,7 +48,7 @@ a status page on its own domain, and is the shape OpsCat's own vendor detector p
 
 **Multi-tenancy:** API keys, agent tokens and probe keys are each bound to one
 organization; all queries are scoped to it. A **user** may belong to several
-organizations (`memberships`, one role per org) and — in the **cloud edition** — switches
+organizations (`memberships`, one role per org) and — in the **EE** — switches
 the org their session acts in via `POST /api/auth/switch-org` (default: their home org).
 Super-admins may target any org with `?org=<id>` or the `X-OpsCat-Org` header.
 
@@ -64,13 +64,13 @@ Super-admins may target any org with `?org=<id>` or the `X-OpsCat-Org` header.
 | GET `/api/auth/orgs` | — | the caller's orgs → `{activeOrgId, orgs:[{orgId,name,slug,plan,role,onboardingDone}]}` |
 | POST `/api/auth/switch-org` | `{orgId}` | **cloud only** — set the session's active org (caller must be a member) |
 | POST `/api/auth/logout` | — | |
-| POST `/api/auth/signup` | `{orgName, name, email, password}` | cloud edition + signups open — creates organization + owner |
+| POST `/api/auth/signup` | `{orgName, name, email, password}` | EE + signups open — creates organization + owner |
 | GET `/api/auth/github` | — | GitHub login (community feature); `…/github/callback` completes — requires a verified GitHub e-mail |
 | GET `/api/auth/google` | — | Google login (cloud); `…/google/callback` completes the flow |
 | GET `/api/auth/microsoft` | — | Microsoft / Entra ID login (cloud); `…/microsoft/callback` completes the flow |
 
 Each social route 404s until its client id/secret env vars are set; `/api/plans`
-reports which providers are active. In the community edition social login signs in
+reports which providers are active. In the CE social login signs in
 existing users only — self-service signup for unknown e-mails is cloud-edition.
 A verified social login retires a pending admin-issued temporary password: the
 account adopts the provider, `mustChangePassword` is cleared and password login
@@ -140,7 +140,7 @@ one-liner shown in onboarding and Settings → Agents:
 - `GET/POST/PATCH/DELETE /api/heartbeats[/:id]` (lead+ to modify) — `{name, intervalS, graceS}`; POST returns `pingUrl` once. Public ping: `GET|POST /v1/heartbeat/:token` (no other auth); silence past interval+grace raises a `heartbeat_missed` event
 - `GET/POST /api/incidents`, `POST /api/incidents/:id/status` (`{status,message?}`), `PATCH /api/incidents/:id` (`{title?,severity?,published?,rca:{summary,impact,rootCause,resolution,actions}}`) — incident objects: `{id,label,title,severity,status,published,startedAt,resolvedAt,durationMs,updates:[{ts,status,message}],rca}`
 - `GET /api/admin/components` → `[{id,name,group,status,uptimePct,days:[{day,worst}]}]`; POST/PATCH/DELETE for lead+ (`status` ∈ operational|degraded|partial|major|maintenance)
-- `GET /api/synthetics/locations` (POST creates remote probe → `{probeKey}` once), `GET/POST/PATCH/DELETE /api/synthetics/checks` (types http|icmp|dns|tcp|traceroute; http checks accept `assertions {status?, keyword?, jsonPath?, jsonValue?}` and record `certDaysLeft` for https — ≤14 days raises `tls_cert_expiring`), `GET /api/synthetics/results` (latest per check×location), `GET /api/synthetics/results/series?checkId=&locationId=&hours=`, `GET /api/synthetics/results/route?locationId=`, `POST /api/synthetics/run`
+- `GET /api/synthetics/locations` (own + visible managed incl. `booked`/`region`/`nodeStatus`; POST creates a self-hosted sensor agent → `{probeKey}` once), `POST /api/synthetics/locations/provision` (BYO-cloud: provisions into the org's own AWS/GCP account), `POST|DELETE /api/synthetics/locations/:id/book` (managed-location booking, plan quota `managedLocations`, premium = Enterprise plan), `GET|POST|DELETE /api/synthetics/cloud-credentials` (encrypted at rest, responses carry label+hint only), `GET /api/synthetics/provider-catalog`, `GET/POST/PATCH/DELETE /api/synthetics/checks` (types http|icmp|dns|tcp|traceroute; http checks accept `assertions {status?, keyword?, jsonPath?, jsonValue?}` and record `certDaysLeft` for https — ≤14 days raises `tls_cert_expiring`), `GET /api/synthetics/results` (latest per check×location), `GET /api/synthetics/results/series?checkId=&locationId=&hours=`, `GET /api/synthetics/history?minutes=&buckets=` (bucketed uptime per check for the HeatBar — worst-status-wins per bucket: `ok`/`warn`/`bad`/`na`, plus `uptimePct` and avg latency per bucket), `GET /api/synthetics/results/route?locationId=`, `POST /api/synthetics/run`
 - `GET /api/vendors` → `[{id,slug,name,feedType,feedUrl,pageUrl,intervalS,enabled,componentId,status,lastCheckedAt,lastError,activeIncidents}]` (`status` ∈ unknown|operational|degraded|partial|major|maintenance); `GET /api/vendors/catalog` → bundled vendor catalog `[{slug,name,feedType,feedUrl,pageUrl,domains}]`; `GET /api/vendors/:id` → vendor + `components:[{name,status,updatedAt}]` + `incidents:[{id,remoteId,title,status,impact,url,startedAt,resolvedAt,updatedAt}]`; `POST /api/vendors` (lead+) — `{slug}` from the catalog **or** custom `{name, feedType:'statuspage'|'instatus'|'slack'|'gcp'|'aws'|'heroku'|'statusio'|'rss', feedUrl, pageUrl?}` (https only, SSRF-guarded), `intervalS?` 60–3600 (default 120), polls immediately; `PATCH /api/vendors/:id` (lead+) — `{intervalS?, enabled?, componentId?}` (`componentId` mirrors the vendor state onto an own status-page component, `null` unmaps); `DELETE /api/vendors/:id` (lead+); `POST /api/vendors/:id/poll` — check now. New vendor incidents raise `vendor_incident` events (severity by impact: critical 90, major 82, partial 75, minor 55, maintenance 25, unknown 65), recovery raises `vendor_recovered` (20)
 - `POST /api/vendors/detect` (lead+) — `{url}` of any status page → auto-detects the machine-readable feed behind it (Statuspage/incident.io shim, Instatus, Heroku, Slack-style, Google dashboards, status.io page-id extraction, RSS/Atom `<link>` discovery) → `{feedType, feedUrl, pageUrl, name, preview:{status,components,incidents}}`; 422 when nothing supported is found. Custom feed URLs are normalized on create (lowercase host, no trailing slash) so identical vendors across orgs share one polling fetch
 - `POST /api/vendors/subscribe-catalog` (lead+) — subscribe the org to every catalog vendor it doesn't monitor yet (interval 300 s) → `{added, total}`; used to seed the public vendor grid
@@ -159,7 +159,7 @@ one-liner shown in onboarding and Settings → Agents:
 - `GET/PUT /api/admin/ai` (admin) — org LLM override `{baseUrl (OpenAI-compatible API root), model, apiKey (write-only, stored encrypted; '' clears)}`; GET reports `{org:{baseUrl,model,hasKey}, platformConfigured, effectiveSource:'org'|'platform'|null, effectiveModel}` — never key material. `POST /api/admin/ai/test` dry-runs a one-line prompt against the effective endpoint → `{ok, source, model, latencyMs}` or 502
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 
-## Billing (cloud edition, `/api/billing`)
+## Billing (EE, `/api/billing`)
 
 | Method & path | Notes |
 |---|---|
@@ -173,9 +173,14 @@ Plan limits (`server/src/plans.js`) are enforced on create routes (users, API ke
 agents, SNMP targets, checks, sensors): exceeding a limit returns
 `402 {error, limit, plan}`. Feature flags in the same file gate cloud capabilities via
 `hasFeature` — e.g. `multi_org` (multiple organizations per account), enabled on every
-plan by default. Community edition enforces nothing.
+plan by default. CE enforces nothing.
 
-## Super-admin (cloud edition, `/api/superadmin` — requires `is_super_admin`)
+## Super-admin (EE, `/api/superadmin` — requires `is_super_admin`)
+
+Managed sensor fleet: `GET|POST /api/superadmin/platform-credentials`,
+`GET|POST|PATCH|DELETE /api/superadmin/managed-locations` (provision with the
+platform AWS/GCP credentials; PATCH toggles `visible`/`premium`; teardown
+revokes the probe key before destroying the VM).
 
 | Method & path | Notes |
 |---|---|

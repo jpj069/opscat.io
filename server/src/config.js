@@ -54,6 +54,8 @@ module.exports = {
     clientSecret: process.env.GITHUB_CLIENT_SECRET || null,
   },
   signupsOpen: (process.env.OPSCAT_SIGNUPS_OPEN || '1') === '1',
+  // BYO-cloud cost guard: max live sensor nodes per org (reconcile is the net).
+  sensorNodeCapPerOrg: int(process.env.OPSCAT_MAX_BYO_NODES, 20),
   cookieSecure: bool(process.env.OPSCAT_COOKIE_SECURE, true),
   trustProxy: bool(process.env.OPSCAT_TRUST_PROXY, true),
   sessionIdleMs: int(process.env.OPSCAT_SESSION_IDLE_MIN, 12 * 60) * 60 * 1000,
