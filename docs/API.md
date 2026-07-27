@@ -155,6 +155,8 @@ one-liner shown in onboarding and Settings → Agents:
 - `GET /api/admin/pipeline/stats?range=24h|7d|30d` → `{range, step, buckets:[{bucket,lines,bytes,events}], totals:{lines,bytes,events}}` — ingest throughput from the hourly `ingest_stats` counters (hour buckets for 24h, day buckets otherwise, gaps zero-filled)
 - `GET /api/admin/pipeline/classifiers` → `{builtin:[…], custom:[…]}` (rule shape: `{pattern, flags, name, severity, targetGroup?}`); `PUT` (admin) replaces the org's custom rules `{classifiers:[…]}` (≤100 rules, patterns validated, live reload — no restart)
 - `POST /api/admin/pipeline/test` — `{line, sev?}` → `{match:{name,severity,target,source:'custom'|'builtin'|'syslog',pattern}|null, caseThreshold}` — dry-runs a sample line through the org's classifier chain, nothing is stored
+- `GET/POST/PATCH/DELETE /api/admin/automations[/:id]` (lead+ to modify) — automation objects `{name, enabled, trigger:{event ('*'=any), severityMin}, actions:[…], cooldownM}`; action types: `{type:'close_event', raiseEvent, matchTarget?}` (lifecycle: the trigger event finishes the matching open raise event + closes its case), `{type:'assign_case', userId}`, `{type:'webhook', url}`. Max 5 actions; at most one run per event dedupe key and cooldown. `GET /api/admin/automations/runs?limit=` lists recent runs from the audit trail (action `automation_run`, system actor)
+- `GET/PUT /api/admin/ai` (admin) — org LLM override `{baseUrl (OpenAI-compatible API root), model, apiKey (write-only, stored encrypted; '' clears)}`; GET reports `{org:{baseUrl,model,hasKey}, platformConfigured, effectiveSource:'org'|'platform'|null, effectiveModel}` — never key material. `POST /api/admin/ai/test` dry-runs a one-line prompt against the effective endpoint → `{ok, source, model, latencyMs}` or 502
 - `GET /api/admin/system`, `GET /api/admin/audit` (admin)
 
 ## Billing (cloud edition, `/api/billing`)
@@ -183,6 +185,7 @@ plan by default. Community edition enforces nothing.
 | GET `/super-admins` | list platform super-admins |
 | POST `/super-admins` | `{email}` — grant the flag to an existing account (audited) |
 | POST `/users/:id/super-admin` | grant/revoke the platform role by user id (self-demote rejected) |
+| GET/PUT `/ai` | platform LLM default (OpenAI-compatible `{baseUrl, model, apiKey}` — key write-only/encrypted); orgs without their own Settings → AI override use this |
 | GET `/audit` | platform-wide audit trail |
 
 Errors are always JSON `{error}` with proper status codes. Rate limits: auth 10/min/IP,

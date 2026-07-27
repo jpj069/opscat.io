@@ -460,6 +460,31 @@ CREATE TABLE IF NOT EXISTS org_settings (
   PRIMARY KEY (org_id, key)
 ) WITHOUT ROWID;
 
+-- Automation: trigger (matched against pipeline events) -> actions. First
+-- action family: lifecycle auto-close (a clear event finishes its raise
+-- event), case auto-assign, outbound webhook. Every run is written to
+-- audit_log (action 'automation_run', user_id NULL = system actor).
+CREATE TABLE IF NOT EXISTS automations (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  name          TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  trigger_json  TEXT NOT NULL,               -- {"event":"...", "severityMin":0}
+  actions_json  TEXT NOT NULL,               -- [{"type":"close_event"|"assign_case"|"webhook", ...}]
+  cooldown_m    INTEGER NOT NULL DEFAULT 15,
+  created_by    INTEGER REFERENCES users(id),
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_org ON automations(org_id);
+
+-- cooldown memory per automation + event dedupe key (mirrors rule_fires)
+CREATE TABLE IF NOT EXISTS automation_fires (
+  automation_id INTEGER NOT NULL,
+  dedupe_key    TEXT NOT NULL,
+  fired_at      INTEGER NOT NULL,
+  PRIMARY KEY (automation_id, dedupe_key)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        INTEGER NOT NULL DEFAULT 1,

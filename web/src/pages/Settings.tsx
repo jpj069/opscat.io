@@ -178,6 +178,9 @@ export default function Settings() {
         </button>
       </div>
 
+      {/* 2c. AI endpoint (admin) */}
+      {isAdmin && <AiCard />}
+
       {/* 2b. Maintenance windows */}
       <MaintenanceCard canEdit={leadPlus} />
 
@@ -353,6 +356,112 @@ export default function Settings() {
       {modal === 'agent' && <RegisterAgentModal onClose={() => setModal(null)} onCreated={reloadAgents} onSecret={setSecret} />}
       {modal === 'target' && <AddTargetModal onClose={() => setModal(null)} onCreated={reloadTargets} />}
       {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- AI endpoint
+
+interface AiStatus {
+  org: { baseUrl: string; model: string; hasKey: boolean };
+  platformConfigured: boolean;
+  effectiveSource: 'org' | 'platform' | null;
+  effectiveModel: string | null;
+}
+
+// Org-level LLM override (OpenAI-compatible endpoint). The platform default —
+// set by the super-admin — applies when these fields stay empty.
+function AiCard() {
+  const [status, setStatus] = useState<AiStatus | null>(null);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState(''); // write-only; never echoed back
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () => api.get<AiStatus>('/api/admin/ai').then((s) => {
+    setStatus(s); setBaseUrl(s.org.baseUrl); setModel(s.org.model);
+  }).catch(() => setStatus(null));
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setBusy('save'); setMsg(null);
+    try {
+      const body: Record<string, string> = { baseUrl, model };
+      if (apiKey) body.apiKey = apiKey;
+      await api.put('/api/admin/ai', body);
+      setApiKey(''); setDirty(false);
+      setMsg({ ok: true, text: 'saved ✓' });
+      load();
+    } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
+    finally { setBusy(''); }
+  };
+  const clearKey = async () => {
+    if (!confirm('Remove the stored API key? The platform default (if any) applies again.')) return;
+    setBusy('save');
+    try { await api.put('/api/admin/ai', { apiKey: '' }); setMsg({ ok: true, text: 'key removed' }); load(); }
+    catch { setMsg({ ok: false, text: 'could not remove key' }); }
+    finally { setBusy(''); }
+  };
+  const test = async () => {
+    setBusy('test'); setMsg(null);
+    try {
+      const r = await api.post<{ ok: boolean; source: string; model: string; latencyMs: number }>(
+        '/api/admin/ai/test', {});
+      setMsg({ ok: true, text: `works — ${r.model} via ${r.source} config, ${r.latencyMs} ms` });
+    } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
+    finally { setBusy(''); }
+  };
+
+  const effective = status?.effectiveSource
+    ? `Effective: ${status.effectiveModel} (${status.effectiveSource === 'org' ? 'this organization' : 'platform default'})`
+    : 'No LLM configured — AI features (Scout suggestions) stay off.';
+
+  return (
+    <div className="card">
+      <div className="card-title">AI</div>
+      <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+        Any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, Azure, …). Leave empty to use
+        the platform default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
+        The API key is stored encrypted and never shown again.
+      </div>
+      {status === null ? <FormSkeleton rows={3} /> : (
+        <>
+          <Row label="Base URL">
+            <input className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
+              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+          </Row>
+          <Row label="Model">
+            <input className="mono" value={model} placeholder="anthropic/claude-haiku-4.5"
+              onChange={(e) => { setModel(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+          </Row>
+          <Row label={status.org.hasKey ? 'API key (stored)' : 'API key'}>
+            <div className="row" style={{ gap: 8 }}>
+              <input type="password" className="mono" value={apiKey}
+                placeholder={status.org.hasKey ? '•••••••• (set — enter to replace)' : 'sk-…'}
+                onChange={(e) => { setApiKey(e.target.value); setDirty(true); }} style={{ flex: 1 }} />
+              {status.org.hasKey && (
+                <button className="btn btn-sm" onClick={clearKey} disabled={!!busy}>Remove</button>
+              )}
+            </div>
+          </Row>
+          <div className="row row-wrap" style={{ justifyContent: 'space-between', marginTop: 8, gap: 10 }}>
+            <span style={{ fontSize: 10, color: 'var(--text3)' }}>{effective}</span>
+            <span className="row" style={{ gap: 10 }}>
+              {msg && <span style={{ fontSize: 11, fontWeight: 600,
+                color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
+              <button className="btn btn-sm" onClick={test} disabled={!!busy || dirty}
+                title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
+                {busy === 'test' ? 'Testing…' : 'Test'}
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || !!busy}>
+                {busy === 'save' ? 'Saving…' : 'Save AI Settings'}
+              </button>
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

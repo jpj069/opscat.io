@@ -55,6 +55,15 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 5. The **alert engine** matches new/escalated events against **rules**
    (trigger name, min severity, cooldown) → notifications via **Resend e-mail** or
    **Teams/webhook**, all recorded in `notifications`.
+6. The **automation engine** (`engine/automations.js`, Automation page) matches the
+   same events against per-org automations: lifecycle auto-close (a clear event
+   finishes its raise event and closes the case), case auto-assign, outbound
+   webhooks. One run per event dedupe key and cooldown; every run is written to
+   `audit_log` (`automation_run`, system actor) so automated decisions stay auditable.
+
+AI features call the org's LLM through `server/src/llm.js` (OpenAI-compatible
+chat completions): org override (Settings → AI) → platform default (super-admin
+console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by any API.
 
 ## Synthetics
 

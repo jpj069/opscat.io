@@ -9,6 +9,8 @@ const config = require('../config');
 const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt } = require('../util');
 const sec = require('../security');
 const pipelineEngine = require('../engine/pipeline');
+const automationEngine = require('../engine/automations');
+const llm = require('../llm');
 
 const plans = require('../plans');
 
@@ -278,6 +280,149 @@ router.post('/pipeline/test', (req, res) => {
       source: match.source, pattern: match.pattern } : null,
     caseThreshold: pipelineEngine.CASE_THRESHOLD,
   });
+});
+
+// ---- automations (lead+ to modify) ----
+// Trigger: {event: '<name>'|'*', severityMin?: 0-100}. Actions (1-5):
+//   {type:'close_event', raiseEvent:'<name>', matchTarget?:bool}
+//   {type:'assign_case', userId:<id>}
+//   {type:'webhook', url:'https://...'}
+const AUTOMATION_NAME_RE = /^[\w.:\- ]{1,80}$/;
+
+function validateAutomation(b, res) {
+  if (!isStr(b.name, 80) || !AUTOMATION_NAME_RE.test(b.name)) {
+    return httpError(res, 400, 'name required (letters, digits, . : - _ and spaces)');
+  }
+  const trig = b.trigger;
+  if (!trig || typeof trig !== 'object') return httpError(res, 400, 'trigger required');
+  if (!isStr(trig.event, 100)) return httpError(res, 400, "trigger.event required ('*' = any event)");
+  const severityMin = clampInt(trig.severityMin, 0, 100, 0);
+  const actions = b.actions;
+  if (!Array.isArray(actions) || actions.length < 1 || actions.length > 5) {
+    return httpError(res, 400, 'between 1 and 5 actions required');
+  }
+  const cleanActions = [];
+  for (const a of actions) {
+    if (a?.type === 'close_event') {
+      if (!isStr(a.raiseEvent, 100)) return httpError(res, 400, 'close_event needs raiseEvent (the event name it resolves)');
+      cleanActions.push({ type: 'close_event', raiseEvent: a.raiseEvent, matchTarget: a.matchTarget !== false });
+    } else if (a?.type === 'assign_case') {
+      const userId = clampInt(a.userId, 1, 1e9, 0);
+      if (!userId) return httpError(res, 400, 'assign_case needs userId');
+      cleanActions.push({ type: 'assign_case', userId });
+    } else if (a?.type === 'webhook') {
+      if (!isStr(a.url, 500) || !/^https?:\/\//.test(a.url)) return httpError(res, 400, 'webhook needs an http(s) url');
+      cleanActions.push({ type: 'webhook', url: a.url });
+    } else {
+      return httpError(res, 400, `unknown action type ${String(a?.type).slice(0, 40)}`);
+    }
+  }
+  return { name: b.name, trigger: { event: trig.event, severityMin }, actions: cleanActions,
+    cooldownM: clampInt(b.cooldownM, 0, 1440, 15), enabled: b.enabled !== false };
+}
+
+router.get('/automations', (req, res) => {
+  res.json(db.prepare('SELECT * FROM automations WHERE org_id = ? ORDER BY id').all(req.orgId)
+    .map((a) => {
+      let trigger = null, actions = [];
+      try { trigger = JSON.parse(a.trigger_json); actions = JSON.parse(a.actions_json); } catch { /* invalid */ }
+      return { id: a.id, name: a.name, enabled: !!a.enabled, trigger, actions,
+        cooldownM: a.cooldown_m, createdAt: a.created_at };
+    }));
+});
+
+// recent runs (from the audit trail; system actor)
+router.get('/automations/runs', (req, res) => {
+  const limit = clampInt(req.query.limit, 1, 200, 50);
+  res.json(db.prepare(`SELECT ts, detail FROM audit_log
+    WHERE org_id = ? AND action = 'automation_run' ORDER BY ts DESC LIMIT ?`).all(req.orgId, limit));
+});
+
+router.post('/automations', sec.requireRole('lead'), (req, res) => {
+  const v = validateAutomation(req.body || {}, res);
+  if (!v) return undefined;
+  const info = db.prepare(`INSERT INTO automations (org_id, name, enabled, trigger_json, actions_json,
+    cooldown_m, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(req.orgId, v.name, v.enabled ? 1 : 0, JSON.stringify(v.trigger), JSON.stringify(v.actions),
+      v.cooldownM, req.user.id, now());
+  automationEngine.invalidate(req.orgId);
+  sec.audit(req.user.id, 'automation_create', v.name, req.orgId);
+  res.json({ id: info.lastInsertRowid });
+});
+
+router.patch('/automations/:id', sec.requireRole('lead'), (req, res) => {
+  const a = db.prepare('SELECT * FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  if (!a) return httpError(res, 404, 'automation not found');
+  const b = req.body || {};
+  // toggle-only PATCH keeps the stored definition untouched
+  if (Object.keys(b).length === 1 && typeof b.enabled === 'boolean') {
+    db.prepare('UPDATE automations SET enabled = ? WHERE id = ?').run(b.enabled ? 1 : 0, a.id);
+  } else {
+    const v = validateAutomation(b, res);
+    if (!v) return undefined;
+    db.prepare(`UPDATE automations SET name = ?, enabled = ?, trigger_json = ?, actions_json = ?,
+      cooldown_m = ? WHERE id = ?`)
+      .run(v.name, v.enabled ? 1 : 0, JSON.stringify(v.trigger), JSON.stringify(v.actions), v.cooldownM, a.id);
+  }
+  automationEngine.invalidate(req.orgId);
+  sec.audit(req.user.id, 'automation_update', a.name, req.orgId);
+  res.json({ ok: true });
+});
+
+router.delete('/automations/:id', sec.requireRole('lead'), (req, res) => {
+  const a = db.prepare('SELECT name FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  if (!a) return httpError(res, 404, 'automation not found');
+  db.prepare('DELETE FROM automations WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+  automationEngine.invalidate(req.orgId);
+  sec.audit(req.user.id, 'automation_delete', a.name, req.orgId);
+  res.json({ ok: true });
+});
+
+// ---- AI / LLM endpoint (admin) ----
+// Org-level override of the platform default. OpenAI-compatible: base URL is
+// the API root (e.g. https://openrouter.ai/api/v1). The key is stored
+// encrypted and never returned — GET only reports hasKey.
+
+router.get('/ai', sec.requireRole('admin'), (req, res) => {
+  res.json(llm.statusFor(req.orgId));
+});
+
+router.put('/ai', sec.requireRole('admin'), (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  if (b.baseUrl !== undefined) {
+    const v = String(b.baseUrl).trim();
+    if (v && !/^https?:\/\/[^\s]{1,300}$/.test(v)) return httpError(res, 400, 'baseUrl must be an http(s) URL');
+    patch.baseUrl = v;
+  }
+  if (b.model !== undefined) {
+    if (!isStr(b.model, 200) && b.model !== '') return httpError(res, 400, 'bad model');
+    patch.model = String(b.model);
+  }
+  if (b.apiKey !== undefined) {
+    if (typeof b.apiKey !== 'string' || b.apiKey.length > 500) return httpError(res, 400, 'bad apiKey');
+    patch.apiKey = b.apiKey; // '' clears the stored key
+  }
+  llm.saveOrgConfig(req.orgId, patch);
+  sec.audit(req.user.id, 'ai_config_update',
+    Object.keys(patch).map((k) => (k === 'apiKey' ? 'apiKey(hidden)' : k)).join(','), req.orgId);
+  res.json({ ok: true, ...llm.statusFor(req.orgId) });
+});
+
+// Fire a one-line prompt at the effective endpoint (org override or platform
+// default) so admins can verify their config. Nothing is stored.
+router.post('/ai/test', sec.requireRole('admin'), async (req, res) => {
+  const t0 = Date.now();
+  try {
+    const reply = await llm.chat(req.orgId,
+      [{ role: 'user', content: 'Reply with the single word: ok' }],
+      { maxTokens: 8, timeoutMs: 20000 });
+    const status = llm.statusFor(req.orgId);
+    res.json({ ok: true, source: status.effectiveSource, model: status.effectiveModel,
+      latencyMs: Date.now() - t0, reply: reply.slice(0, 100) });
+  } catch (e) {
+    httpError(res, 502, String(e.message).slice(0, 300));
+  }
 });
 
 // ---- SNMP targets (lead+) ----

@@ -9,7 +9,7 @@ import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
   SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
-  ChevronUpIcon, FilterIcon, Building2Icon,
+  ChevronUpIcon, FilterIcon, Building2Icon, ZapIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -28,6 +28,7 @@ import Analytics from './pages/Analytics';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
 import Pipeline from './pages/Pipeline';
+import Automation from './pages/Automation';
 import SuperAdmin from './pages/SuperAdmin';
 import Onboarding from './pages/Onboarding';
 import OrgSwitcher from './OrgSwitcher';
@@ -50,6 +51,7 @@ const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
 const ADMIN_NAV: { id: string; label: string; icon: LucideIcon }[] = [
   { id: 'users', label: 'Users', icon: UsersIcon },
   { id: 'pipeline', label: 'Pipeline', icon: FilterIcon },
+  { id: 'automation', label: 'Automation', icon: ZapIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 const PLATFORM_NAV: { id: string; label: string; icon: LucideIcon }[] = [
@@ -59,7 +61,7 @@ const PAGES: Record<string, React.ComponentType> = {
   monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
   incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics, vendors: Vendors,
   logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, pipeline: Pipeline,
-  settings: Settings, platform: SuperAdmin,
+  automation: Automation, settings: Settings, platform: SuperAdmin,
 };
 
 function planPillColor(plan: string): string {
