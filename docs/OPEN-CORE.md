@@ -37,7 +37,10 @@ Enterprise modules under `server/src/ee/**` are active.
   (`web/src/pages/SuperAdmin.tsx`), the workspace switcher (`web/src/OrgSwitcher.tsx`,
   → null) and the first-run onboarding (`web/src/pages/Onboarding.tsx`, → null). These
   are what OpsCat Cloud sells; they are covered by `ee/LICENSE` and live only in the
-  private repository (see below). What *does* stay in the core is the harmless membership
+  private repository (see below). The tester-session telemetry loader
+  (`web/src/testify.ts`, → no-op) is stubbed for a different reason — not licensing
+  but hygiene: the community core loads no third-party script and contacts no
+  external service (see `docs/OPERATIONS.md` §Tester sessions). What *does* stay in the core is the harmless membership
   *plumbing* — the `memberships` table and `GET /api/auth/orgs` session context;
   `POST /api/auth/switch-org` `403`s in community — where a community user simply has one
   membership.
