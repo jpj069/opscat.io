@@ -356,7 +356,7 @@ function reportForm(v) {
 function heatStrip(days) {
   const pad = Math.max(0, 45 - days.length);
   const cells = Array.from({ length: pad }).map(() =>
-    '<i style="background:#21262d;opacity:.5"></i>').join('')
+    '<i title="no data yet — monitoring started recently" style="background:#21262d;opacity:.5"></i>').join('')
     + days.map((day) => `<i title="${esc(day.day)}: ${esc(day.worst)}" style="background:${
       day.worst === 'operational' ? 'rgba(63,185,80,.55)' : GRID_DOT[day.worst] || '#e3b341'}"></i>`).join('');
   return `<span class="strip">${cells}</span>`;
@@ -383,13 +383,16 @@ function renderVendorGrid(req, res) {
 
   const body = view === 'grid'
     ? `<div class="grid">${shown.map((v) => `<div class="v">
-        <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
-          <span class="dot" style="background:${GRID_DOT[v.status] || GRID_DOT.unknown}"></span>
-          <span class="vn">${esc(v.name)}</span>
-          <span class="vs" style="color:${GRID_DOT[v.status] || GRID_DOT.unknown}">${esc(v.status)}${
-            v.activeIncidents ? ` · ${v.activeIncidents} inc` : ''}</span>
-        </a>
-        ${reportForm(v)}
+        <div class="vtop">
+          <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
+            <span class="dot" style="background:${GRID_DOT[v.status] || GRID_DOT.unknown}"></span>
+            <span class="vn">${esc(v.name)}</span>
+            <span class="vs" style="color:${GRID_DOT[v.status] || GRID_DOT.unknown}">${esc(v.status)}${
+              v.activeIncidents ? ` · ${v.activeIncidents} inc` : ''}</span>
+          </a>
+          ${reportForm(v)}
+        </div>
+        ${heatStrip(v.days)}
       </div>`).join('')}</div>`
     : `<div class="list">${shown.map((v) => `<div class="lr">
         <a class="vlink" href="${esc(v.pageUrl || '#')}" target="_blank" rel="noreferrer">
@@ -408,17 +411,20 @@ function renderVendorGrid(req, res) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpsCat Radar — live status of ${d.total} cloud services</title>
 <meta name="description" content="Live status of ${d.total} cloud &amp; SaaS services, aggregated from their official status pages. Powered by OpsCat.">
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/brand/favicon-16.png">
 <style>
   body{margin:0;background:#0b0e14;color:#c9d1d9;font:14px/1.5 Inter,system-ui,sans-serif}
   .wrap{max-width:980px;margin:0 auto;padding:40px 20px}
   h1{font-size:20px;color:#f0f6fc;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .logo{width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#6366f1,#4338ca)}
+  .logo{width:26px;height:26px;border-radius:6px}
   .sub{font-size:13px;color:#8b949e;margin:6px 0 24px}
   .sub b{color:${d.disrupted ? '#f0883e' : '#3fb950'}}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
-  .v{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #21262d;border-radius:8px;
+  .v{display:flex;flex-direction:column;gap:7px;padding:8px 10px;border:1px solid #21262d;border-radius:8px;
      background:#161b22}
   .v:hover{border-color:#30363d}
+  .vtop{display:flex;align-items:center;gap:8px}
   .vlink{display:flex;align-items:center;gap:8px;flex:1;min-width:0;text-decoration:none;color:inherit}
   .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
   .vn{font-weight:600;color:#f0f6fc;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -442,14 +448,15 @@ function renderVendorGrid(req, res) {
      border-radius:8px;background:#161b22}
   .lr .vlink{flex:0 0 190px;min-width:0}
   .lr .vs{margin-left:0;flex:0 0 90px;text-align:right}
-  .strip{flex:1;display:flex;gap:2px;height:16px;min-width:120px}
+  .strip{flex:1;display:flex;gap:2px;height:12px;min-width:120px}
+  .lr .strip{height:16px}
   .strip i{flex:1;border-radius:1px}
   .pct{font-family:'JetBrains Mono',monospace;font-size:11px;color:#c9d1d9;flex:0 0 62px;text-align:right}
   @media (max-width:640px){.lr .vlink{flex-basis:110px}.lr .vs{display:none}}
   footer{margin-top:32px;font-size:11px;color:#484f58}
   footer a{color:#58a6ff;text-decoration:none}
 </style></head><body><div class="wrap">
-<h1><span class="logo"></span>OpsCat Radar</h1>
+<h1><img class="logo" src="/brand/opscat-mark-dark-64.png" alt="OpsCat">OpsCat Radar</h1>
 <div class="sub">Live status of <b>${d.total}</b> cloud &amp; SaaS services — ${
     d.disrupted ? `<b>${d.disrupted} with issues right now</b>` : '<b>all operational</b>'}.
   Aggregated from the vendors' official status pages, refreshed continuously.

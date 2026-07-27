@@ -39,6 +39,11 @@ async function fetchFeed(feedType, feedUrl, cache = {}) {
       if (cache.etag) headers['If-None-Match'] = cache.etag;
       if (cache.lastModified) headers['If-Modified-Since'] = cache.lastModified;
       resp = await fetch(url, { signal: ctrl.signal, redirect: 'manual', headers });
+      // 304 first — it sits inside the 3xx range but is a cache hit, not a redirect
+      if (resp.status === 304) {
+        await resp.arrayBuffer().catch(() => {});
+        return { notModified: true };
+      }
       if (resp.status >= 300 && resp.status < 400) {
         const loc = resp.headers.get('location');
         await resp.arrayBuffer().catch(() => {});
@@ -46,7 +51,6 @@ async function fetchFeed(feedType, feedUrl, cache = {}) {
         url = new URL(loc, url).href;
         continue;
       }
-      if (resp.status === 304) return { notModified: true };
       if (resp.status !== 200) {
         await resp.arrayBuffer().catch(() => {});
         throw new Error(`feed returned HTTP ${resp.status}`);
