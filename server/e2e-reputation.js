@@ -93,9 +93,23 @@ async function main() {
   // A wildcard resolver answers EVERYTHING, including the negative control.
   const wildcard = { resolve4: async () => ['127.0.0.2'] };
   const hijack = await reputation.lookup('1.2.3.4', 500, wildcard);
-  chk('a wildcard resolver fails the negative control', hijack.listed.length === 0,
+  chk('a wildcard resolver fails the negative control (ip)', hijack.listed.length === 0,
     `listed ${hijack.listed.length}, worstTier ${hijack.worstTier}`);
-  chk('a wildcard resolver leaves criticalCovered false', hijack.criticalCovered === false);
+  chk('a wildcard resolver leaves criticalCovered false (ip)', hijack.criticalCovered === false);
+
+  // The SAME must hold for domains. RHSBLs have no standardised test entry, so
+  // the IP pair cannot serve as their negative control — without one of their
+  // own, a hijacking resolver reports every monitored sending DOMAIN as
+  // critically listed (severity 85 + an auto-opened case each). Shipped that way
+  // once; this is the regression test.
+  reputation.resetCanaryCache();
+  const hijackDom = await reputation.lookup('mail.example.com', 500, wildcard);
+  chk('a wildcard resolver fails the negative control (domain)', hijackDom.listed.length === 0,
+    `listed ${hijackDom.listed.length}, worstTier ${hijackDom.worstTier}`);
+  chk('a wildcard resolver leaves criticalCovered false (domain)',
+    hijackDom.criticalCovered === false);
+  chk('a wildcard resolver reports zero domain zones as queried',
+    hijackDom.zonesQueried === 0, String(hijackDom.zonesQueried));
 
   // ── 4. a real listing, on a resolver that passes both canary halves ──────
   reputation.resetCanaryCache();
@@ -186,27 +200,79 @@ async function main() {
   synth.recordResult(repId, loc, { ok: true, latency: 30, meta: infoMeta });
   chk('an informational-only listing raises no event', evCount() === beforeInfo);
 
-  // the count in the description comes from listedCount, not the truncated list
+  // The headline count must be the ACTIONABLE count over the full result, not
+  // something reconstructed from the truncated top-10. The shape that matters is
+  // the ordinary one: `listed` is built in zone order (criticals, standards,
+  // then informationals), so informational entries are exactly what slice(0,10)
+  // drops — 8 actionable + 4 informational, of which only 2 informational are
+  // still visible. Deriving from listedCount here would say 10.
   const manyMeta = {
-    kind: 'ip', zonesQueried: 32, listedCount: 14, worstTier: 'standard',
-    listed: Array.from({ length: 10 }, (_, i) => ({
-      name: `List ${i}`, zone: `l${i}.example`, tier: 'standard', codes: ['127.0.0.2'],
-    })),
+    kind: 'ip', zonesQueried: 31, listedCount: 12, actionableCount: 8, worstTier: 'standard',
+    listed: [
+      ...Array.from({ length: 8 }, (_, i) => ({
+        name: `Std ${i}`, zone: `s${i}.example`, tier: 'standard', codes: ['127.0.0.2'],
+      })),
+      ...Array.from({ length: 2 }, (_, i) => ({
+        name: `Info ${i}`, zone: `i${i}.example`, tier: 'informational', codes: ['127.0.0.2'],
+      })),
+    ],
   };
   synth.recordResult(repId, loc, { ok: false, latency: 30, meta: manyMeta });
   const many = db.prepare("SELECT * FROM events WHERE name = 'reputation_listed' ORDER BY id DESC LIMIT 1").get();
-  chk('the description counts all findings, not just the stored top 10',
-    many && / on 14 blocklist/.test(many.description), many ? many.description : '');
+  chk('the headline count is the actionable count over the FULL result',
+    many && / on 8 blocklist/.test(many.description), many ? many.description : '');
+  chk('informational listings never inflate the headline count',
+    many && !/ on (10|12) blocklist/.test(many.description), many ? many.description : '');
+
+  // …and checkReputation must actually emit it, or the above only proves the
+  // consumer works on a hand-made fixture.
+  const repSrcEngine = fs.readFileSync(path.join(__dirname, 'src', 'engine', 'synthetics.js'), 'utf8');
+  chk('checkReputation emits actionableCount from the full list',
+    /actionableCount: actionable\.length/.test(repSrcEngine));
 
   // ── 8. reputation never fans out from the "run everything" button ────────
   const ran = await synth.runAllNow(org.id);
   chk('runAllNow skips reputation assets', ran.every((r) => r.check_id !== repId),
     JSON.stringify(ran.map((r) => r.check_id)));
 
-  // ── 9. reputation stays out of the synthetics surface ────────────────────
-  const synthRows = db.prepare(
-    "SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ? AND type != 'reputation'").get(org.id).c;
-  chk('the synthetics list query excludes reputation', synthRows === 1, String(synthRows));
+  // ── 9. reputation stays out of the synthetics + MCP surfaces ─────────────
+  // Reads the SQL out of the shipped source rather than re-stating it here: a
+  // hand-written copy of the clause under test asserts only that SQLite can
+  // count rows, and passes even when the fix is reverted.
+  const srcOf = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
+  const synthSrc = srcOf('routes/synthetics.js');
+  const mcpSrc = srcOf('mcp/tools.js');
+  const guard = /type\s*!=\s*'reputation'|c\.type\s*!=\s*'reputation'/g;
+  chk('routes/synthetics.js guards every result surface',
+    (synthSrc.match(guard) || []).length >= 5, `${(synthSrc.match(guard) || []).length} guards`);
+  chk('mcp/tools.js guards list_checks + the dashboard count',
+    (mcpSrc.match(guard) || []).length >= 2, `${(mcpSrc.match(guard) || []).length} guards`);
+
+  // ── 10. the probe cannot submit a reputation result at all ───────────────
+  // The forged-event test above covers recordResult; this covers the OTHER half
+  // of the boundary — /v1/synthetics/report must drop the row before it lands.
+  const ingestSrc = srcOf('routes/ingest.js');
+  chk('the probe work list never hands out reputation',
+    /\.filter\(\(c\) => c\.type !== 'reputation'\)/.test(ingestSrc));
+  chk('the report endpoint refuses reputation results',
+    /chk\.type === 'reputation'\) continue;/.test(ingestSrc)
+    && /SELECT id, org_id, type FROM synthetic_checks/.test(ingestSrc), 'no type-gated skip found');
+
+  // ── 11. the 1h interval floor is the feature's own, not the plan's ───────
+  const repSrc = srcOf('routes/reputation.js');
+  chk('the interval floor is 3600s', /MIN_INTERVAL_S = 3600/.test(repSrc));
+  chk('the floor is never below the plan floor and is used at both write sites',
+    /Math\.max\(MIN_INTERVAL_S, plans\.minIntervalFor\(plan\)\)/.test(repSrc)
+    && (repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length === 2,
+    `${(repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length} call sites`);
+  chk('the latest-result query breaks ts ties on id',
+    /ORDER BY ts DESC, id DESC/.test(repSrc));
+  chk('coverage is reported per kind', /coverage: \{ ip: ipCov, domain: domainCov \}/.test(repSrc));
+
+  // ── 12. an incomplete run is never rendered as a listing ────────────────
+  const opsSrc = srcOf('routes/ops.js');
+  chk('/api/assets distinguishes unknown from listed',
+    /status = listed\.length \? 'listed' : 'unknown'/.test(opsSrc));
 
   console.log(R.join('\n'));
   const failed = R.filter((r) => r.startsWith('FAIL')).length;

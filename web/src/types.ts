@@ -141,14 +141,19 @@ export interface ReputationAsset {
   id: number; target: string; kind: 'ip' | 'domain' | null; rdns: string | null;
   enabled: boolean; intervalS: number; status: ReputationStatus;
   worstTier: ReputationTier | null; listings: ReputationListing[];
-  policy: string[]; unavailable: string[]; zonesQueried: number | null;
+  policy: string[]; unavailable: string[]; errored: string[]; zonesQueried: number | null;
   error: string | null; lastCheckedAt: number | null; lastDurationMs: number | null;
 }
 export interface ReputationCoverage {
   queried: number | null;   // lists that actually answered
-  total: number | null;     // lists we try for this kind (~32 ip / ~8 domain)
+  total: number | null;     // lists we try for this kind (31 ip / 8 domain)
   unavailable: number;      // refused/timed out — why a verdict may be partial
 }
+export interface ReputationZone { name: string; zone: string; tier: ReputationTier }
+// The curated catalog, GET /api/reputation/zones. Static config — fetched once
+// and diffed against an asset's findings to render every list's state.
+export interface ReputationZones { ip: ReputationZone[]; domain: ReputationZone[] }
+
 export interface ReputationOverview {
   total: number; ip: number; domain: number;
   listed: number; informational: number; clean: number; unknown: number; pending: number;

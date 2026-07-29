@@ -284,6 +284,11 @@ async function checkReputation(check) {
     rdns,
     zonesQueried: res.zonesQueried,
     listedCount: res.listed.length,
+    // The count the event headline uses. Computed here, where the FULL list is
+    // in hand — `listed` below is truncated to the top 10, and informational
+    // entries are pushed out first (they sort last), so reconstructing this
+    // downstream systematically overcounts.
+    actionableCount: actionable.length,
     worstTier: res.worstTier,
     listed: res.listed.slice(0, 10).map((l) => ({
       name: l.name, zone: l.zone, tier: l.tier, codes: l.codes.slice(0, 3), url: l.url,
@@ -291,6 +296,9 @@ async function checkReputation(check) {
   };
   if (res.policy.length) meta.policy = res.policy.map((p) => p.name);
   if (res.unavailable.length) meta.unavailable = res.unavailable.map((u) => u.name);
+  // Named, not just counted: an unnamed error is indistinguishable from
+  // "clean" once the per-zone breakdown is rendered from the catalog.
+  if (res.errored && res.errored.length) meta.errored = res.errored.map((e) => e.name);
   if (res.errors) meta.errors = res.errors;
 
   if (!res.criticalCovered) {
@@ -339,11 +347,10 @@ function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
       const actionable = meta.listed.filter((l) => l.tier !== 'informational');
       if (actionable.length) {
         listedEvent = true;
-        // meta.listed is truncated to the top 10 findings, so the COUNT comes
-        // from listedCount minus the informational ones we can still see.
-        const informational = meta.listed.length - actionable.length;
-        const total = Number.isFinite(meta.listedCount)
-          ? Math.max(actionable.length, meta.listedCount - informational)
+        // meta.listed is truncated to the top 10, so the count comes from
+        // actionableCount, which checkReputation computed on the full list.
+        const total = Number.isFinite(meta.actionableCount)
+          ? Math.max(actionable.length, meta.actionableCount)
           : actionable.length;
         const names = actionable.map((l) => l.name).join(', ');
         pipeline.ingestEvent({
@@ -407,7 +414,8 @@ async function runAllNow(orgId = null) {
     .filter((c) => orgId == null || c.org_id === orgId)
     // Reputation is excluded on purpose. This is reachable by any analyst
     // (POST /api/synthetics/run, MCP opscat_run_checks) and one reputation asset
-    // is ~40 queries against third-party lists that rate-limit per source IP —
+    // is ~93 queries on a cold canary cache against third-party lists that
+    // rate-limit per source IP —
     // a "run everything" button must not be able to get the host refused by
     // Spamhaus. Reputation has its own per-asset run at POST
     // /api/reputation/assets/:id/run (lead role).

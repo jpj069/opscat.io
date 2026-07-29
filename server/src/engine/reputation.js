@@ -1,4 +1,5 @@
 'use strict';
+const crypto = require('crypto');
 // DNSBL / RHSBL reputation lookups for the `reputation` synthetic check type.
 //
 // A reputation check answers "is this asset on a blocklist?" — NOT "is it up?".
@@ -265,35 +266,49 @@ function buildResolver(timeoutMs) {
 // zone, a mistyped OPSCAT_REPUTATION_DNS) answers every query, so every zone
 // "lists" every target — reporting the org's entire mail estate as critically
 // listed, severity 85, one case each. One extra query per zone per hour.
+//
+// The negative control applies to BOTH kinds. RHSBLs have no standardised test
+// entry, so the IP pair is useless there — but a name under `.invalid` works
+// universally: RFC 2606 reserves that TLD, so it can never be registered and no
+// conforming list can legitimately have an opinion about it. The label is random
+// per lookup so a poisoned cache cannot be primed against a known probe.
 const IP_CANARY = '2.0.0.127';       // must be listed
 const IP_ANTI_CANARY = '1.0.0.127';  // must NOT be listed
+const domainAntiCanary = () => `nx-${crypto.randomBytes(8).toString('hex')}.invalid`;
 const CANARY_TTL_MS = 60 * 60 * 1000;
 const canaryCache = new Map(); // zone -> { usable: boolean, at: number }
 
 const answers = (addrs) => (addrs || []).some((a) => !isErrorCode(a));
 
-// defaultCanary is the IP test pair for IP zones and null for RHSBLs, where test
-// entries are per-zone rather than standardised. A domain zone without a
-// documented test entry cannot be validated, so its answers are accepted rather
-// than dropping coverage we can prove nothing about either way.
+// A zone that answers about the anti-canary is wildcarding. `classify` rather
+// than a raw answer check, so a zone politely reporting "you queried me wrong"
+// (Spamhaus DBL's 127.0.1.255) is not mistaken for one.
+function assertsAnything(zone, addrs) {
+  const v = classify(zone, addrs || []);
+  return v.listed || v.policy;
+}
+
+// A zone with no positive canary (most RHSBLs — test entries there are per-zone,
+// not standardised) still gets the negative control: we cannot prove it is
+// alive, but we can prove it is lying.
 async function zoneUsable(z, resolver, timeoutMs, defaultCanary, antiCanary) {
   const probe = z.canary || defaultCanary;
-  if (!probe) return true;
   const cached = canaryCache.get(z.zone);
   if (cached && Date.now() - cached.at < CANARY_TTL_MS) return cached.usable;
 
-  let usable = false;
-  try {
-    usable = answers(await withTimeout(resolver.resolve4(`${probe}.${z.zone}`), timeoutMs));
-  } catch { usable = false; }
+  let usable = true;
+  if (probe) {
+    try {
+      usable = answers(await withTimeout(resolver.resolve4(`${probe}.${z.zone}`), timeoutMs));
+    } catch { usable = false; }
+  }
 
-  // A zone that also "lists" the address the RFC forbids is not answering about
-  // our target at all — trust nothing it says rather than one verdict of it.
+  // A zone that also "lists" what cannot be listed is not answering about our
+  // target at all — trust nothing it says rather than one verdict of it.
   if (usable && antiCanary) {
     try {
-      if (answers(await withTimeout(resolver.resolve4(`${antiCanary}.${z.zone}`), timeoutMs))) {
-        usable = false;
-      }
+      const addrs = await withTimeout(resolver.resolve4(`${antiCanary}.${z.zone}`), timeoutMs);
+      if (assertsAnything(z.zone, addrs)) usable = false;
     } catch { /* NXDOMAIN here is exactly the expected answer */ }
   }
 
@@ -317,10 +332,13 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
 
   const resolver = injectedResolver || buildResolver(timeoutMs);
   const defaultCanary = parsed.kind === 'ip' ? IP_CANARY : null;
-  const antiCanary = parsed.kind === 'ip' ? IP_ANTI_CANARY : null;
+  // Both kinds get a negative control — see the canary block above for why the
+  // domain one is a random .invalid name rather than the RFC 5782 IP pair.
+  const antiCanary = parsed.kind === 'ip' ? IP_ANTI_CANARY : domainAntiCanary();
   const listed = [];
   const policy = [];
   const unavailable = [];
+  const errored = [];
   let errors = 0;
   let criticalCovered = false;
 
@@ -336,13 +354,17 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
       } catch (e) {
         // NXDOMAIN is the overwhelmingly common answer: not listed.
         if (e && (e.code === 'ENOTFOUND' || e.code === 'ENODATA')) return { z, addresses: [] };
-        throw e;
+        // Anything else (SERVFAIL, timeout, …) is a zone we did NOT get an
+        // answer from. Name it rather than counting it: an unnamed error is
+        // indistinguishable from "clean" in every surface downstream.
+        return { z, error: String((e && (e.code || e.message)) || 'error').slice(0, 40) };
       }
     }));
     for (const r of results) {
       if (r.status !== 'fulfilled') { errors++; continue; }
-      const { z, addresses, unusable } = r.value;
+      const { z, addresses, unusable, error } = r.value;
       if (unusable) { unavailable.push({ name: z.name, zone: z.zone, tier: z.tier }); continue; }
+      if (error) { errors++; errored.push({ name: z.name, zone: z.zone, tier: z.tier, error }); continue; }
       if (z.tier === 'critical') criticalCovered = true;
       const verdict = classify(z.zone, addresses);
       const url = INFO_URLS[z.zone] ? INFO_URLS[z.zone].replace('{q}', encodeURIComponent(target)) : null;
@@ -362,6 +384,7 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
     listed,
     policy,
     unavailable,
+    errored,
     errors,
     worstTier,
     criticalCovered,
@@ -375,7 +398,10 @@ const TIER_SEVERITY = { critical: 85, standard: 65, informational: 30 };
 // The form a target is stored in: trimmed, lower-cased, no trailing root dot.
 // Returns null for anything parseTarget would reject.
 function normalizeTarget(raw) {
-  const t = String(raw || '').trim().toLowerCase().replace(/\.$/, '');
+  // `\.+$` not `\.$`: parseTarget strips one trailing dot itself, so stripping
+  // only one here let "example.com.." through as "example.com." — stored,
+  // displayed and baked into the delist URL with a stray dot.
+  const t = String(raw || '').trim().toLowerCase().replace(/\.+$/, '');
   return parseTarget(t) ? t : null;
 }
 

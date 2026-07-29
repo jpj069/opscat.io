@@ -16,7 +16,7 @@ import {
   Toggle, KpiCard,
 } from '../ui';
 import type {
-  ReputationAsset, ReputationOverview, ReputationStatus, ReputationTier,
+  ReputationAsset, ReputationOverview, ReputationStatus, ReputationTier, ReputationZones,
 } from '../types';
 
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
@@ -40,6 +40,25 @@ const HOURS = [
   { v: 43200, l: '12 h' }, { v: 86400, l: '24 h' },
 ];
 
+// Interval as an operator reads it. Never Math.round(s/3600) — that renders a
+// sub-hour interval (reachable via the API) as "0h".
+const everyLabel = (s: number): string => (
+  s >= 3600 && s % 3600 === 0 ? `${s / 3600}h`
+    : s >= 3600 ? `${(s / 3600).toFixed(1)}h`
+      : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
+
+// What one blocklist did on the last run. `clean` is the only one that is an
+// actual verdict — the other three all mean "we did not get an answer", which
+// is the distinction the whole feature is built on.
+type ZoneState = 'listed' | 'policy' | 'unreachable' | 'error' | 'clean';
+const ZONE_UI: Record<ZoneState, { label: string; color: string }> = {
+  listed: { label: 'listed', color: SEV.critical },
+  policy: { label: 'policy', color: SEV.low },
+  unreachable: { label: 'unreachable', color: SEV.medium },
+  error: { label: 'error', color: SEV.medium },
+  clean: { label: 'clean', color: SEV.green },
+};
+
 const ago = (ts: number | null): string => {
   if (!ts) return 'never';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -57,6 +76,7 @@ export default function Reputation() {
   const [showAdd, setShowAdd] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [zones, setZones] = useState<ReputationZones | null>(null);
 
   const canWrite = (ROLE_RANK[app.user?.role ?? ''] ?? 0) >= ROLE_RANK.lead;
 
@@ -65,6 +85,13 @@ export default function Reputation() {
     api.get<ReputationOverview>('/api/reputation/overview').then(setOverview).catch(() => { /* keep prior */ });
   };
   useEffect(() => { load(); }, []);
+  // The zone catalog is static config, so it is fetched once and reused: the
+  // flyout renders every list's state by diffing it against the asset's
+  // findings, which needs no extra payload on the result row.
+  useEffect(() => {
+    api.get<ReputationZones>('/api/reputation/zones').then(setZones)
+      .catch(() => { /* flyout falls back to findings-only */ });
+  }, []);
   useEffect(() => {
     const iv = setInterval(load, 60000); // blocklist state moves over hours
     return () => clearInterval(iv);
@@ -106,6 +133,11 @@ export default function Reputation() {
   const toggle = async (a: ReputationAsset) => {
     setErr(null);
     try { await api.patch(`/api/reputation/assets/${a.id}`, { enabled: !a.enabled }); load(); }
+    catch (e) { fail(e); }
+  };
+  const setInterval_ = async (a: ReputationAsset, intervalS: number) => {
+    setErr(null);
+    try { await api.patch(`/api/reputation/assets/${a.id}`, { intervalS }); load(); }
     catch (e) { fail(e); }
   };
   const remove = async (a: ReputationAsset) => {
@@ -198,12 +230,14 @@ export default function Reputation() {
         </TableScroll>
       </div>
 
-      {sel && <AssetFlyout asset={sel} canWrite={canWrite} busy={busyId === sel.id}
+      {sel && <AssetFlyout asset={sel} canWrite={canWrite} busy={busyId === sel.id} zones={zones}
         onToggle={() => toggle(sel)} onDelete={() => remove(sel)}
+        onInterval={(v) => setInterval_(sel, v)}
         onRun={() => runNow(sel)} onClose={() => setSelId(null)} />}
 
       {showAdd && (
-        <AddAsset onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); load(); }} />
+        <AddAsset zones={zones} onClose={() => setShowAdd(false)}
+          onAdded={() => { setShowAdd(false); load(); }} />
       )}
     </div>
   );
@@ -214,9 +248,10 @@ export default function Reputation() {
 // Detail lives in the platform's standard right-side slide-over (same shape as the
 // Synthetics check flyout): backdrop + sticky header carrying identity, status and
 // the write actions, body below.
-function AssetFlyout({ asset, canWrite, busy, onToggle, onDelete, onRun, onClose }: {
-  asset: ReputationAsset; canWrite: boolean; busy: boolean;
-  onToggle: () => void; onDelete: () => void; onRun: () => void; onClose: () => void;
+function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInterval, onRun, onClose }: {
+  asset: ReputationAsset; canWrite: boolean; busy: boolean; zones: ReputationZones | null;
+  onToggle: () => void; onDelete: () => void; onInterval: (v: number) => void;
+  onRun: () => void; onClose: () => void;
 }) {
   const ui = STATUS_UI[asset.status];
   const actionable = asset.listings.filter((l) => l.tier !== 'informational');
@@ -257,6 +292,18 @@ function AssetFlyout({ asset, canWrite, busy, onToggle, onDelete, onRun, onClose
               </span>
               <button className="btn btn-sm" onClick={onRun} disabled={busy}>
                 {busy ? 'checking…' : 'Check now'}</button>
+              <span className="row" style={{ gap: 6 }}>
+                <span className="micro text-2xs">EVERY</span>
+                <select value={asset.intervalS} style={{ maxWidth: 92 }}
+                  onChange={(e) => onInterval(Number(e.target.value))}>
+                  {/* a stored value outside the presets (set via the API) must
+                      still show, or changing anything else silently rewrites it */}
+                  {!HOURS.some((h) => h.v === asset.intervalS) && (
+                    <option value={asset.intervalS}>{everyLabel(asset.intervalS)}</option>
+                  )}
+                  {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
+                </select>
+              </span>
               <span style={{ flex: 1 }} />
               <button className="btn btn-sm" onClick={onDelete} style={{ color: SEV.critical }}>Delete</button>
             </div>
@@ -273,7 +320,7 @@ function AssetFlyout({ asset, canWrite, busy, onToggle, onDelete, onRun, onClose
                 actionable.length ? SEV.critical : 'var(--text0)'],
               ['Unreachable', String(asset.unavailable.length),
                 asset.unavailable.length ? SEV.medium : 'var(--text0)'],
-              ['Interval', `${Math.round(asset.intervalS / 3600)}h`, 'var(--text0)'],
+              ['Interval', everyLabel(asset.intervalS), 'var(--text0)'],
             ] as [string, string, string][]).map(([k, v, c]) => (
               <div key={k}>
                 <div className="micro text-2xs">{k}</div>
@@ -326,26 +373,14 @@ function AssetFlyout({ asset, canWrite, busy, onToggle, onDelete, onRun, onClose
                 {info.map((l) => l.name).join(', ')}
               </div>
             )}
-
-            {asset.policy.length > 0 && (
-              <div className="mono text-2xs text-text2" style={{ marginTop: 8, lineHeight: 1.6 }}>
-                Policy listings (the range is flagged as “should not send mail directly”, not
-                as abusive): {asset.policy.join(', ')}
-              </div>
-            )}
-
-            {asset.unavailable.length > 0 && (
-              <div className="mono text-2xs" style={{ marginTop: 8, lineHeight: 1.6, color: SEV.medium }}>
-                Not reachable, so not checked — these are unknown, not clean:{' '}
-                {asset.unavailable.join(', ')}
-              </div>
-            )}
           </div>
+
+          <ZoneBreakdown asset={asset} zones={zones} />
 
           {/* config */}
           <div className="mono text-2xs text-text2" style={{ background: 'var(--bg3)',
             borderRadius: 6, padding: 10, lineHeight: 1.7 }}>
-            kind: {asset.kind || '—'} · interval: {Math.round(asset.intervalS / 3600)}h
+            kind: {asset.kind || '—'} · interval: {everyLabel(asset.intervalS)}
             {asset.rdns && <> · rdns: {asset.rdns}</>}<br />
             last checked: {ago(asset.lastCheckedAt)}
             {asset.lastDurationMs != null && <> · took {Math.round(asset.lastDurationMs)}ms</>}<br />
@@ -357,9 +392,107 @@ function AssetFlyout({ asset, canWrite, busy, onToggle, onDelete, onRun, onClose
   );
 }
 
+// ------------------------------------------------------- per-zone breakdown
+
+// Every list the asset was checked against, and what each one said. Derived
+// entirely client-side by diffing the static catalog against the asset's
+// findings — the result row carries only the exceptions, so this costs nothing
+// on the wire. A list that is not an exception is genuinely clean; a list that
+// is unreachable or errored is NOT, which is the point of showing them here
+// rather than in a footnote.
+function ZoneBreakdown({ asset, zones }: { asset: ReputationAsset; zones: ReputationZones | null }) {
+  const [open, setOpen] = useState(false);
+
+  const rows = useMemo(() => {
+    if (!zones || !asset.kind) return null;
+    const catalog = asset.kind === 'ip' ? zones.ip : zones.domain;
+    const listed = new Map(asset.listings.map((l) => [l.name, l]));
+    const policy = new Set(asset.policy);
+    const unreachable = new Set(asset.unavailable);
+    const errored = new Set(asset.errored);
+    const rank: Record<ZoneState, number> = {
+      listed: 0, unreachable: 1, error: 2, policy: 3, clean: 4,
+    };
+    return catalog.map((z) => {
+      const hit = listed.get(z.name);
+      const state: ZoneState = hit ? 'listed'
+        : unreachable.has(z.name) ? 'unreachable'
+          : errored.has(z.name) ? 'error'
+            : policy.has(z.name) ? 'policy' : 'clean';
+      return { ...z, state, codes: hit?.codes ?? [], url: hit?.url ?? null };
+    }).sort((a, b) => rank[a.state] - rank[b.state]
+      || a.tier.localeCompare(b.tier) || a.name.localeCompare(b.name));
+  }, [asset, zones]);
+
+  if (!rows) return null;
+  const counts = rows.reduce((m, r) => { m[r.state] = (m[r.state] || 0) + 1; return m; },
+    {} as Record<ZoneState, number>);
+  // Anything that is not a plain "clean" is worth seeing without a click.
+  const notable = rows.filter((r) => r.state !== 'clean');
+  const shown = open ? rows : notable;
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div className="card-title" style={{ marginBottom: 0 }}>
+          Lists checked
+          <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>
+            {rows.length} {asset.kind === 'ip' ? 'IP blocklists' : 'domain blocklists'}
+          </span>
+        </div>
+        <button className="mono text-2xs" style={{ color: 'var(--text2)' }}
+          onClick={() => setOpen(!open)}>
+          {open ? 'hide clean' : `show all (${counts.clean || 0} clean)`}
+        </button>
+      </div>
+
+      <div className="row row-wrap" style={{ gap: 6, margin: '8px 0 10px' }}>
+        {(['listed', 'unreachable', 'error', 'policy', 'clean'] as ZoneState[])
+          .filter((k) => counts[k])
+          .map((k) => (
+            <StatusPill key={k} text={`${counts[k]} ${ZONE_UI[k].label}`} color={ZONE_UI[k].color} />
+          ))}
+      </div>
+
+      {shown.length === 0 && (
+        <div className="mono text-2xs text-text3">Nothing to flag — every list answered clean.</div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {shown.map((z) => (
+          <div key={z.zone} className="row" style={{ gap: 8, justifyContent: 'space-between',
+            padding: '5px 0', borderTop: '1px solid var(--bg3)' }}>
+            <span className="row" style={{ gap: 8, minWidth: 0 }}>
+              <GlowDot color={ZONE_UI[z.state].color} size={6} />
+              <span className="mono text-sm text-text0" style={{ overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{z.name}</span>
+              <span className="mono text-2xs text-text3">{z.zone}</span>
+            </span>
+            <span className="row" style={{ gap: 8, flexShrink: 0 }}>
+              {z.codes.length > 0 && (
+                <span className="mono text-2xs text-text3">{z.codes.join(' ')}</span>
+              )}
+              <StatusPill text={z.tier} color={TIER_COLOR[z.tier]} />
+              <StatusPill text={ZONE_UI[z.state].label} color={ZONE_UI[z.state].color} />
+              {z.url && z.state === 'listed' && (
+                <a className="mono text-2xs" href={z.url} target="_blank"
+                  rel="noreferrer noopener">delist ↗</a>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- add
 
-function AddAsset({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+function AddAsset({ zones, onClose, onAdded }: {
+  zones: ReputationZones | null; onClose: () => void; onAdded: () => void;
+}) {
+  const nIp = zones ? zones.ip.length : 31;
+  const nDomain = zones ? zones.domain.length : 8;
   const [target, setTarget] = useState('');
   const [intervalS, setIntervalS] = useState(21600);
   const [busy, setBusy] = useState(false);
@@ -380,10 +513,20 @@ function AddAsset({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
           <input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
             placeholder="198.51.100.25 or example.com" />
         </Field>
-        <div className="micro text-2xs text-text2" style={{ margin: '-4px 0 10px', lineHeight: 1.6 }}>
-          An IP address or a domain — no scheme, no path. The target is checked verbatim: a
-          domain is not resolved first, otherwise you would be checking the website instead of
-          the mail sender.
+        <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
+          <b className="text-text1">One IP or one domain per asset</b> — no <span className="mono">https://</span>,
+          no path.
+          <div style={{ marginTop: 6 }}>
+            An <b className="text-text1">IP</b> is checked against {nIp} blocklists, a{' '}
+            <b className="text-text1">domain</b> against {nDomain} — different lists, so
+            they are separate assets. Adding a domain does <b className="text-text1">not</b> check
+            the IPs it sends from; add those too.
+          </div>
+          <div style={{ marginTop: 6 }}>
+            The IPs are the ones in your <span className="mono">SPF</span> record — that is what
+            receivers actually score. The domain is what follows the{' '}
+            <span className="mono">@</span> in your From address.
+          </div>
         </div>
         <Field label="Interval">
           <select value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>

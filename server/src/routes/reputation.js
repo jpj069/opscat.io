@@ -22,8 +22,9 @@ router.use(sec.requireSessionOrToken);
 
 const MAX_INTERVAL_S = 86400;      // 24h — blocklist state moves over hours
 const DEFAULT_INTERVAL_S = 21600;  // 6h
-// A reputation run costs ~40 DNS queries against third-party lists that
-// rate-limit per source IP, and blocklist state does not move in minutes. The
+// A reputation run costs ~93 DNS queries on a cold canary cache (31 zones plus
+// both controls each) and 31 warm, against third-party lists that rate-limit per
+// source IP — and blocklist state does not move in minutes. The
 // floor is therefore this feature's own, NOT the plan's synthetic-check floor
 // (15s/60s) — a plan that allows fast HTTP checks must not turn a handful of
 // assets into a query flood that gets the whole host refused by Spamhaus.
@@ -88,6 +89,7 @@ function toAsset(check) {
     listings: listed,
     policy: (meta && meta.policy) || [],
     unavailable: (meta && meta.unavailable) || [],
+    errored: (meta && meta.errored) || [],   // answered with an error, NOT clean
     zonesQueried: meta ? (meta.zonesQueried ?? null) : null,
     error: meta ? (meta.error || null) : null,
     lastCheckedAt: last ? last.ts : null,

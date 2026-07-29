@@ -100,9 +100,15 @@ a listing raises its own event (`reputation_listed`) rather than
   UCEPROTECT L2/L3 and friends, which list whole ASNs, so a clean sender is caught by a
   noisy neighbour — are recorded and displayed but never flip the check or alert. Without
   that split the feature generates enough noise to get muted within a fortnight.
-- **"No answer" is not "clean".** Every zone is validated with the test entry RFC 5782
-  §5 mandates (`127.0.0.2` listed, `127.0.0.1` not). Zones failing that canary are
-  reported as *unavailable*, never as clean, and the result is cached for an hour. This
+- **"No answer" is not "clean".** Every zone gets a positive control (the test entry
+  RFC 5782 §5 mandates — `127.0.0.2` listed) **and a negative control**, and failing
+  either means *unavailable*, never clean; the verdict is cached for an hour. The
+  negative control is `127.0.0.1` for IP zones, and for RHSBLs — which have no
+  standardised test entry — a random name under `.invalid`, a TLD RFC 2606 reserves so
+  no conforming list can have an opinion about it. Both kinds need one: a wildcard or
+  NXDOMAIN-hijacking resolver answers *every* query, so without a negative control every
+  zone "lists" every target and the whole mail estate pages at severity 85. Shipping the
+  IP half alone left exactly that hole open for domains. This
   matters: Spamhaus answers plain NXDOMAIN to queries arriving via large public
   resolvers, and a retired list (SORBS) answers NXDOMAIN forever — both are
   indistinguishable from a clean verdict otherwise. If no `critical` zone is reachable
@@ -113,9 +119,10 @@ a listing raises its own event (`reputation_listed`) rather than
   rate-limit large public resolvers. Override with `OPSCAT_REPUTATION_DNS`
   (comma-separated) when the host resolver is unfit.
 - **Cadence**: interval floor **1h**, ceiling 24h, default 6h. The floor is the feature's
-  own, not the plan's — one asset is ~40 queries against lists that rate-limit per source
-  IP, so a plan that permits 15s HTTP checks must not be able to turn a handful of assets
-  into a flood that gets the whole host refused. For the same reason reputation is
+  own, not the plan's — one IP asset is ~93 queries on a cold canary cache (31 zones plus
+  both controls each) and 31 warm, against lists that rate-limit per source IP, so a plan
+  that permits 15s HTTP checks must not be able to turn a handful of assets into a flood
+  that gets the whole host refused. For the same reason reputation is
   **excluded from "run all checks"** (`POST /api/synthetics/run`, MCP
   `opscat_run_checks` — both analyst-reachable); the per-asset
   `POST /api/reputation/assets/:id/run` is lead-only.
