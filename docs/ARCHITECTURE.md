@@ -167,6 +167,23 @@ a listing raises its own event (`reputation_listed`) rather than
   raise a `reputation_listed` event against any check. `engine/reputation.js` is now the
   only writer of runs and listings, and it acts on evidence it gathered itself, so the
   guards are gone rather than merely satisfied.
+- **SPF discovery finds the assets.** `POST /api/reputation/discover` reads a domain's SPF
+  record and proposes what to watch, because the address worth finding is the one nobody
+  remembers — asking the operator to transcribe it just relocates the problem. Only
+  mechanisms written **directly** in the record (`ip4`, `ip6`, `a`, `mx`) become
+  candidates: an `include:` delegates to a provider whose shared pool is thousands of
+  addresses they monitor themselves, and offering those would bury the eight that are
+  actually the org's. Those are reported as *pools* with their lookup cost instead.
+  `redirect=` is the exception — RFC 7208 §6.1 has it *replace* the record, so its
+  mechanisms recurse as top-level. CIDR blocks wider than `/32` are reported as *ranges*,
+  since DNSBLs answer about addresses, not networks.
+- **The SPF lookup budget comes out of the same walk**, and it outranks every blocklist
+  verdict: exceeding RFC 7208's limit of 10 DNS lookups is a **PermError**, which means SPF
+  fails outright no matter how clean the addresses are. link11.com's own record needs 11.
+  Discovery reports `lookups {used, limit, permerror}` and surfaces it in the picker,
+  alongside the other things that walk turns up — a domain with no SPF at all, two SPF
+  records (a PermError in itself), a deprecated `ptr`. Bounded by design: a lookup budget,
+  a depth cap and a hard query ceiling, so a looping or hostile record cannot fan out.
 - **Delisting is observable.** Because a listing has a lifecycle, the engine can tell
   "gone" from "never there" and raises `reputation_cleared` (severity 20, below the
   alerting floor) when the last actionable episode closes — a clear event a `close_event`

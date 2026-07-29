@@ -16,8 +16,8 @@ import {
   Toggle, KpiCard,
 } from '../ui';
 import type {
-  ReputationAsset, ReputationListing, ReputationOverview, ReputationStatus,
-  ReputationTier, ReputationZones,
+  BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
+  ReputationOverview, ReputationStatus, ReputationTier, ReputationZones,
 } from '../types';
 
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
@@ -26,6 +26,8 @@ const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 
 const GRID = 'minmax(150px,1.4fr) minmax(140px,1.2fr) 150px minmax(150px,1.4fr) 110px 70px';
 // head, rows and skeleton of the history table share this one string
 const HISTORY_GRID = 'minmax(130px,1.5fr) 90px 100px 110px 90px';
+// same for the SPF discovery picker (checkbox · target · kind · source)
+const SPF_GRID = '24px minmax(120px,1.4fr) 74px minmax(90px,1fr)';
 
 const STATUS_UI: Record<ReputationStatus, { label: string; color: string }> = {
   listed: { label: 'listed', color: SEV.critical },
@@ -566,10 +568,37 @@ function ZoneBreakdown({ asset, zones }: { asset: ReputationAsset; zones: Reputa
 function AddAsset({ zones, onClose, onAdded }: {
   zones: ReputationZones | null; onClose: () => void; onAdded: () => void;
 }) {
+  // SPF first: it is the right way in. The addresses that matter are the ones in
+  // the record, and the one worth finding is always the one nobody remembers.
+  const [mode, setMode] = useState<'spf' | 'single'>('spf');
+  const [intervalS, setIntervalS] = useState(21600);
+
+  return (
+    <Modal title="Add asset" onClose={onClose}>
+      <div className="row row-wrap" style={{ gap: 6, marginBottom: 14 }}>
+        {([['spf', 'From SPF record'], ['single', 'One target']] as const).map(([m, label]) => (
+          <button key={m} type="button" onClick={() => setMode(m)}
+            className={`btn ${mode === m ? 'btn-primary' : ''}`}>{label}</button>
+        ))}
+      </div>
+      <Field label="Interval">
+        <select value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>
+          {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
+        </select>
+      </Field>
+      {mode === 'spf'
+        ? <FromSpf intervalS={intervalS} onAdded={onAdded} />
+        : <SingleTarget zones={zones} intervalS={intervalS} onAdded={onAdded} />}
+    </Modal>
+  );
+}
+
+function SingleTarget({ zones, intervalS, onAdded }: {
+  zones: ReputationZones | null; intervalS: number; onAdded: () => void;
+}) {
   const nIp = zones ? zones.ip.length : 31;
   const nDomain = zones ? zones.domain.length : 8;
   const [target, setTarget] = useState('');
-  const [intervalS, setIntervalS] = useState(21600);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -582,37 +611,191 @@ function AddAsset({ zones, onClose, onAdded }: {
   };
 
   return (
-    <Modal title="Add asset" onClose={onClose}>
-      <form onSubmit={submit}>
-        <Field label="Target">
-          <input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
-            placeholder="198.51.100.25 or example.com" />
+    <form onSubmit={submit}>
+      <Field label="Target">
+        <input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
+          placeholder="198.51.100.25 or example.com" />
+      </Field>
+      <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
+        <b className="text-text1">One IP or one domain per asset</b> — no <span className="mono">https://</span>,
+        no path.
+        <div style={{ marginTop: 6 }}>
+          An <b className="text-text1">IP</b> is checked against {nIp} blocklists, a{' '}
+          <b className="text-text1">domain</b> against {nDomain} — different lists, so
+          they are separate assets. Adding a domain does <b className="text-text1">not</b> check
+          the IPs it sends from; add those too, or let{' '}
+          <b className="text-text1">From SPF record</b> find them.
+        </div>
+      </div>
+      {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
+      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+        disabled={busy || !target.trim()}>
+        {busy ? '…' : 'Add asset'}</button>
+    </form>
+  );
+}
+
+// Read the SPF record and offer what it actually authorises. Two things fall out
+// of the same walk: the senders to monitor, and whether the record blows the
+// RFC 7208 budget of 10 DNS lookups — a PermError is as fatal for delivery as a
+// blocklist entry and far less visible, so it is surfaced here rather than buried.
+function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => void }) {
+  const [domain, setDomain] = useState('');
+  const [result, setResult] = useState<ReputationDiscovery | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const scan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setScanning(true); setErr(''); setResult(null);
+    try {
+      const r = await api.post<ReputationDiscovery>('/api/reputation/discover', { domain: domain.trim() });
+      setResult(r);
+      // Pre-select everything not already watched — the common case is "take all".
+      setPicked(new Set(r.candidates.filter((c) => !c.alreadyMonitored).map((c) => c.target)));
+    } catch (ex) { setErr(ex instanceof Error ? ex.message : 'lookup failed'); }
+    finally { setScanning(false); }
+  };
+
+  const add = async () => {
+    setBusy(true); setErr('');
+    try {
+      const r = await api.post<BulkAddResult>('/api/reputation/assets/bulk',
+        { targets: [...picked], intervalS });
+      if (!r.added.length && r.skipped.length) {
+        setErr(`nothing added — ${r.skipped[0].reason}`);
+        setBusy(false); return;
+      }
+      onAdded();
+    } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); setBusy(false); }
+  };
+
+  const toggle = (t: string) => setPicked((p) => {
+    const n = new Set(p); if (n.has(t)) n.delete(t); else n.add(t); return n;
+  });
+
+  const fresh = result?.candidates.filter((c) => !c.alreadyMonitored) ?? [];
+
+  return (
+    <div>
+      <form onSubmit={scan}>
+        <Field label="Sending domain">
+          <input required autoFocus value={domain} onChange={(e) => setDomain(e.target.value)}
+            placeholder="example.com" />
         </Field>
         <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
-          <b className="text-text1">One IP or one domain per asset</b> — no <span className="mono">https://</span>,
-          no path.
-          <div style={{ marginTop: 6 }}>
-            An <b className="text-text1">IP</b> is checked against {nIp} blocklists, a{' '}
-            <b className="text-text1">domain</b> against {nDomain} — different lists, so
-            they are separate assets. Adding a domain does <b className="text-text1">not</b> check
-            the IPs it sends from; add those too.
-          </div>
-          <div style={{ marginTop: 6 }}>
-            The IPs are the ones in your <span className="mono">SPF</span> record — that is what
-            receivers actually score. The domain is what follows the{' '}
-            <span className="mono">@</span> in your From address.
-          </div>
+          Reads the domain's <span className="mono">SPF</span> record and lists the senders it
+          authorises directly. Third-party <span className="mono">include:</span> pools
+          (Microsoft&nbsp;365, Pardot, Mailgun) are shown but not offered — those are the
+          provider's addresses, and they watch them.
         </div>
-        <Field label="Interval">
-          <select value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>
-            {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
-          </select>
-        </Field>
-        {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || !target.trim()}>
-          {busy ? '…' : 'Add asset'}</button>
+          disabled={scanning || !domain.trim()}>
+          {scanning ? 'Reading SPF…' : 'Read SPF record'}
+        </button>
       </form>
-    </Modal>
+
+      {scanning && <div style={{ marginTop: 14 }}><TableSkeleton cols={SPF_GRID} rows={4} /></div>}
+
+      {result && !scanning && (
+        <div style={{ marginTop: 16 }}>
+          {result.lookups.permerror && (
+            <div className="text-2xs" style={{ background: 'var(--bg3)', borderLeft: `3px solid ${SEV.critical}`,
+              borderRadius: 4, padding: '8px 10px', marginBottom: 10, lineHeight: 1.6 }}>
+              <b style={{ color: SEV.critical }}>SPF is failing on its own.</b> The record needs{' '}
+              <span className="mono">{result.lookups.used}</span> DNS lookups, above the limit of{' '}
+              <span className="mono">{result.lookups.limit}</span> — receivers treat that as a
+              PermError, so SPF does not pass no matter which addresses you monitor. Flatten an{' '}
+              <span className="mono">include:</span> into its literal ranges to get back under.
+            </div>
+          )}
+          {!result.lookups.permerror && result.spf && (
+            <div className="text-2xs text-text3" style={{ marginBottom: 10 }}>
+              {result.lookups.used}/{result.lookups.limit} SPF DNS lookups used.
+            </div>
+          )}
+
+          {result.warnings.filter((w) => !w.includes('DNS lookups')).map((w) => (
+            <div key={w} className="text-2xs" style={{ color: SEV.medium, marginBottom: 6 }}>{w}</div>
+          ))}
+
+          {fresh.length === 0 && (
+            <div className="text-2xs text-text2" style={{ marginBottom: 10 }}>
+              Nothing new — every sender this record authorises is already monitored.
+            </div>
+          )}
+
+          {fresh.length > 0 && (
+            <>
+              <div className="row row-wrap" style={{ gap: 8, justifyContent: 'space-between',
+                alignItems: 'baseline', marginBottom: 6 }}>
+                <span className="text-sm text-text1">{fresh.length} sender(s) found</span>
+                <button type="button" className="mono text-2xs" style={{ color: 'var(--text2)' }}
+                  onClick={() => setPicked(picked.size === fresh.length
+                    ? new Set() : new Set(fresh.map((c) => c.target)))}>
+                  {picked.size === fresh.length ? 'select none' : 'select all'}
+                </button>
+              </div>
+              <TableScroll minWidth={420}>
+                <div className="tbl-head" style={{ gridTemplateColumns: SPF_GRID }}>
+                  <span /><span>Target</span><span>Kind</span><span>From</span>
+                </div>
+                {fresh.map((c) => (
+                  <label key={c.target} className="tbl-row" style={{ gridTemplateColumns: SPF_GRID,
+                    cursor: 'pointer', alignItems: 'center' }}>
+                    <input type="checkbox" checked={picked.has(c.target)}
+                      onChange={() => toggle(c.target)} style={{ width: 14, height: 14 }} />
+                    <span className="mono text-2xs text-text0">{c.target}</span>
+                    <span><StatusPill text={c.kind} color={SEV.info} /></span>
+                    <span className="mono text-2xs text-text3">{c.source}</span>
+                  </label>
+                ))}
+              </TableScroll>
+            </>
+          )}
+
+          {result.candidates.some((c) => c.alreadyMonitored) && (
+            <div className="text-2xs text-text3" style={{ marginTop: 8 }}>
+              Already monitored:{' '}
+              {result.candidates.filter((c) => c.alreadyMonitored).map((c) => c.target).join(', ')}
+            </div>
+          )}
+
+          {result.pools.length > 0 && (
+            <div className="text-2xs text-text3" style={{ marginTop: 10, lineHeight: 1.7 }}>
+              <b className="text-text2">Delegated to third parties</b> (not monitorable per
+              address — shared provider pools):
+              <div className="mono" style={{ marginTop: 3 }}>
+                {result.pools.map((p) => `${p.include} (${p.lookups} lookup${p.lookups === 1 ? '' : 's'})`).join(' · ')}
+              </div>
+            </div>
+          )}
+
+          {result.ranges.length > 0 && (
+            <div className="text-2xs text-text3" style={{ marginTop: 8, lineHeight: 1.7 }}>
+              <b className="text-text2">Ranges</b> — blocklists answer about single addresses, so
+              these cannot be watched as assets:
+              <div className="mono" style={{ marginTop: 3 }}>
+                {result.ranges.map((r) => r.range).join(' · ')}
+              </div>
+            </div>
+          )}
+
+          {err && <div className="text-sm" style={{ color: SEV.critical, margin: '10px 0 0' }}>{err}</div>}
+
+          {fresh.length > 0 && (
+            <button type="button" className="btn btn-primary"
+              style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
+              disabled={busy || picked.size === 0} onClick={add}>
+              {busy ? '…' : `Add ${picked.size} asset${picked.size === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      )}
+
+      {err && !result && <div className="text-sm" style={{ color: SEV.critical, marginTop: 10 }}>{err}</div>}
+    </div>
   );
 }

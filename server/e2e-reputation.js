@@ -374,10 +374,16 @@ async function main() {
   // ── 11. the 1h interval floor is the feature's own, not the plan's ───────
   const repSrc = srcOf('routes/reputation.js');
   chk('the interval floor is 3600s', /MIN_INTERVAL_S = 3600/.test(repSrc));
-  chk('the floor is never below the plan floor and is used at both write sites',
-    /Math\.max\(MIN_INTERVAL_S, plans\.minIntervalFor\(plan\)\)/.test(repSrc)
-    && (repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length === 2,
-    `${(repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length} call sites`);
+  // Counted, not hard-coded: every site that writes an interval must derive its
+  // floor. A new route that clamps to the plan floor alone would slip a 15s
+  // cadence past the feature's 1h minimum and flood the blocklists.
+  const intervalWrites = (repSrc.match(/clampInt\([^)]*MAX_INTERVAL_S/g) || []).length;
+  const floorUses = (repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length;
+  chk('the floor is never below the plan floor',
+    /Math\.max\(MIN_INTERVAL_S, plans\.minIntervalFor\(plan\)\)/.test(repSrc));
+  chk('every interval write site derives that floor',
+    intervalWrites > 0 && floorUses === intervalWrites,
+    `${floorUses} floors for ${intervalWrites} interval writes`);
   chk('the latest-run query breaks ts ties on id', /ORDER BY ts DESC, id DESC/.test(repSrc));
   chk('reputation assets count against the plan check budget',
     /FROM reputation_assets WHERE org_id/.test(srcOf('plans.js')));
@@ -386,6 +392,129 @@ async function main() {
   const retSrc = srcOf('engine/retention.js');
   chk('reputation_runs is pruned', /DELETE FROM reputation_runs WHERE ts </.test(retSrc));
   chk('reputation_listings is NOT pruned', !/DELETE FROM reputation_listings/.test(retSrc));
+
+  // ── 13. SPF discovery ────────────────────────────────────────────────────
+  // The real link11.com tree, which is the case the feature exists for: eight
+  // senders written directly into the record (one of them the forgotten relay on
+  // a budget hoster), five third-party pools, and 11 lookups against a limit of 10.
+  const SPF_TXT = {
+    'link11.com': [['v=spf1 a:mail01.emkick.eu ip6:2a06:2380:0:1::44f ip4:185.102.93.53/32 '
+      + 'ip4:85.131.131.20/32 ip4:85.131.136.235/32 ip4:64.31.63.144/32 '
+      + 'include:spf.protection.outlook.com include:aspmx.pardot.com include:stspg-customer.com '
+      + 'include:spf-de.emailsignatures365.com include:mailgun.org -all']],
+    'spf.protection.outlook.com': [['v=spf1 ip4:40.92.0.0/15 -all']],
+    'stspg-customer.com': [['v=spf1 ip4:23.253.182.103 -all']],
+    'spf-de.emailsignatures365.com': [['v=spf1 ip4:20.79.220.33 -all']],
+    'aspmx.pardot.com': [['v=spf1 include:et._spf.pardot.com -all']],
+    'et._spf.pardot.com': [['v=spf1 ip4:198.245.81.0/24 -all']],
+    'mailgun.org': [['v=spf1 include:_spf.mailgun.org include:_spf.eu.mailgun.org -all']],
+    '_spf.mailgun.org': [['v=spf1 include:_spf1.mailgun.org include:_spf2.mailgun.org ~all']],
+    '_spf1.mailgun.org': [['v=spf1 ip4:209.61.151.0/24 ~all']],
+    '_spf2.mailgun.org': [['v=spf1 ip4:104.130.122.0/23 ~all']],
+    '_spf.eu.mailgun.org': [['v=spf1 ip4:141.193.32.0/23 ~all']],
+  };
+  const nx = () => { const e = new Error('NXDOMAIN'); e.code = 'ENOTFOUND'; throw e; };
+  const spfStub = (txt = SPF_TXT, a = { 'mail01.emkick.eu': ['185.102.93.53'] }, mx = null) => ({
+    resolveTxt: async (n) => txt[n] || nx(),
+    resolve4: async (n) => a[n] || nx(),
+    resolve6: async () => { const e = new Error('NODATA'); e.code = 'ENODATA'; throw e; },
+    resolveMx: async (n) => (mx && mx[n]) || nx(),
+  });
+
+  const disc = await reputation.discoverSpf('link11.com', 200, spfStub());
+  const targets = disc.candidates.map((c) => c.target);
+  chk('discovery finds the addresses written directly in the record',
+    ['185.102.93.53', '2a06:2380:0:1::44f', '85.131.131.20', '85.131.136.235', '64.31.63.144']
+      .every((t) => targets.includes(t)), targets.join(', '));
+  chk('the forgotten relay is among them', targets.includes('64.31.63.144'));
+  chk('the sending domain itself is a candidate',
+    disc.candidates.some((c) => c.target === 'link11.com' && c.kind === 'domain'));
+  chk('an `a:` mechanism is resolved to its address',
+    disc.candidates.some((c) => c.target === '185.102.93.53' && c.source.startsWith('a:')));
+
+  // The load-bearing separation: a provider's shared pool is not the customer's
+  // asset. Without this the eight addresses that matter drown in thousands.
+  // Both shapes matter. A CIDR block inside an include is filtered twice over
+  // (wrong scope AND too wide), so testing only those proves nothing: 23.253.182.103
+  // and 20.79.220.33 are SINGLE addresses inside third-party includes, and they are
+  // the ones that slip through if the include/own distinction breaks.
+  chk('single addresses inside a third-party include are NOT offered as assets',
+    !targets.includes('23.253.182.103') && !targets.includes('20.79.220.33'),
+    targets.join(', '));
+  chk('provider CIDR blocks are not offered either',
+    !targets.some((t) => t.startsWith('40.92') || t.startsWith('198.245') || t.startsWith('209.61')),
+    targets.join(', '));
+  chk('…but they are reported as pools',
+    disc.pools.length === 5
+    && ['spf.protection.outlook.com', 'aspmx.pardot.com', 'mailgun.org']
+      .every((i) => disc.pools.some((p) => p.include === i)),
+    disc.pools.map((p) => p.include).join(', '));
+  chk('nested includes stay out of the pool list',
+    !disc.pools.some((p) => p.include.startsWith('_spf')),
+    disc.pools.map((p) => p.include).join(', '));
+  chk('a pool carries the lookup cost it rolls up to',
+    (disc.pools.find((p) => p.include === 'mailgun.org') || {}).lookups === 5,
+    JSON.stringify(disc.pools.map((p) => [p.include, p.lookups])));
+
+  // The lookup budget falls out of the same walk, and it is the finding that
+  // outranks every blocklist verdict: a PermError means SPF fails outright.
+  chk('the RFC 7208 lookup budget is counted across the whole tree',
+    disc.lookups.used === 11, String(disc.lookups.used));
+  chk('exceeding it is reported as a PermError', disc.lookups.permerror === true);
+  chk('the PermError is spelled out in the warnings',
+    disc.warnings.some((w) => /11 DNS lookups/.test(w) && /PermError/.test(w)),
+    disc.warnings.join(' | '));
+
+  // A record that fits stays quiet about it.
+  const okDisc = await reputation.discoverSpf('small.example', 200,
+    spfStub({ 'small.example': [['v=spf1 ip4:198.51.100.7 -all']] }, {}));
+  chk('a record inside the budget is not flagged',
+    okDisc.lookups.used === 0 && okDisc.lookups.permerror === false);
+  chk('a bare ip4 with no prefix is a candidate',
+    okDisc.candidates.some((c) => c.target === '198.51.100.7'));
+
+  // Ranges are not assets: blocklists answer about addresses, not networks.
+  const rangeDisc = await reputation.discoverSpf('range.example', 200,
+    spfStub({ 'range.example': [['v=spf1 ip4:203.0.113.0/24 ip4:203.0.113.9/32 -all']] }, {}));
+  chk('a /24 is reported as a range, not an asset',
+    rangeDisc.ranges.some((r) => r.range === '203.0.113.0/24')
+    && !rangeDisc.candidates.some((c) => c.target.startsWith('203.0.113.0')));
+  chk('…while the /32 beside it still is an asset',
+    rangeDisc.candidates.some((c) => c.target === '203.0.113.9'));
+
+  // redirect= REPLACES the record (RFC 7208 §6.1), so its mechanisms are ours —
+  // unlike include:, which delegates.
+  const redir = await reputation.discoverSpf('redir.example', 200,
+    spfStub({
+      'redir.example': [['v=spf1 redirect=_spf.redir.example']],
+      '_spf.redir.example': [['v=spf1 ip4:192.0.2.10 -all']],
+    }, {}));
+  chk('redirect= contributes its addresses as the domain\'s own',
+    redir.candidates.some((c) => c.target === '192.0.2.10'), redir.candidates.map((c) => c.target).join(', '));
+
+  // Two SPF records is a PermError in its own right and a real misconfiguration.
+  const dup = await reputation.discoverSpf('dup.example', 200,
+    spfStub({ 'dup.example': [['v=spf1 ip4:198.51.100.1 -all'], ['v=spf1 ip4:198.51.100.2 -all']] }, {}));
+  chk('two SPF records are reported as a PermError',
+    dup.warnings.some((w) => /2 SPF records/.test(w) && /PermError/.test(w)), dup.warnings.join(' | '));
+
+  // A domain with no SPF at all must say so rather than look like "nothing to do".
+  const noSpf = await reputation.discoverSpf('nospf.example', 200, spfStub({}, {}));
+  chk('a domain without SPF is reported, not silently empty',
+    noSpf.warnings.some((w) => /no SPF record|could not read/.test(w)), noSpf.warnings.join(' | '));
+
+  chk('an IP is refused as a discovery target', await (async () => {
+    try { await reputation.discoverSpf('1.2.3.4', 200, spfStub()); return false; } catch { return true; }
+  })());
+
+  // mx: resolves through the MX names to their addresses.
+  const mxDisc = await reputation.discoverSpf('mx.example', 200,
+    spfStub({ 'mx.example': [['v=spf1 mx -all']] },
+      { 'mail.mx.example': ['198.51.100.44'] },
+      { 'mx.example': [{ exchange: 'mail.mx.example', priority: 10 }] }));
+  chk('an `mx` mechanism resolves to its addresses',
+    mxDisc.candidates.some((c) => c.target === '198.51.100.44' && c.source.startsWith('mx:')),
+    mxDisc.candidates.map((c) => c.target + '/' + c.source).join(', '));
 
   // ── 13. migration v10 -> v11 carries an open listing across ─────────────
   // db.js is a singleton, so the migration cannot re-run in this process: build

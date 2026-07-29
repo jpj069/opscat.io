@@ -207,6 +207,72 @@ router.post('/assets/:id/run', sec.requireRole('lead'), async (req, res) => {
   }
 });
 
+// ---- discovery ---------------------------------------------------------------
+
+// Read a domain's SPF record and propose the senders worth watching. This is the
+// step that makes the feature usable: the address that started this whole thread
+// (a forgotten relay on a budget hoster, outside the company's own ASN) is only
+// ever found by parsing the record — asking an operator to type it in by hand
+// just relocates the problem.
+//
+// POST rather than GET because it performs a bounded fan-out of DNS queries, and
+// lead-only for the same reason. It writes nothing.
+router.post('/discover', sec.requireRole('lead'), async (req, res) => {
+  const { domain } = req.body || {};
+  if (!isStr(domain, 300)) return httpError(res, 400, 'domain required');
+  let result;
+  try {
+    result = await reputation.discoverSpf(domain);
+  } catch (e) {
+    return httpError(res, 400, String(e.message).slice(0, 200));
+  }
+  // Mark what is already monitored so the UI can pre-select only the rest
+  // instead of offering duplicates that would 409 one by one.
+  const known = new Set(listAssets.all(req.orgId).map((a) => reputation.targetKey(a.target)));
+  res.json({
+    ...result,
+    candidates: result.candidates.map((c) => ({
+      ...c, alreadyMonitored: known.has(reputation.targetKey(c.target)),
+    })),
+  });
+});
+
+// Add several assets at once — the natural follow-up to discovery. Partial
+// success is reported per target rather than failing the batch: one bad entry in
+// a list of eight should not cost the other seven.
+router.post('/assets/bulk', sec.requireRole('lead'), (req, res) => {
+  const targets = Array.isArray(req.body?.targets) ? req.body.targets.slice(0, 100) : null;
+  if (!targets || !targets.length) return httpError(res, 400, 'expected {targets:[...]}');
+  const minIv = floorFor(req.org.plan);
+  const intervalS = clampInt(req.body?.intervalS, minIv, MAX_INTERVAL_S,
+    Math.max(DEFAULT_INTERVAL_S, minIv));
+  const ins = db.prepare(`INSERT INTO reputation_assets
+      (org_id, target, kind, rdns, interval_s, enabled, created_at)
+    VALUES (?, ?, ?, NULL, ?, 1, ?)`);
+
+  const added = [];
+  const skipped = [];
+  for (const raw of targets) {
+    const normalized = isStr(raw, 300) ? reputation.normalizeTarget(raw) : null;
+    if (!normalized) { skipped.push({ target: String(raw).slice(0, 80), reason: 'not an IP or domain' }); continue; }
+    const key = reputation.targetKey(normalized);
+    // Re-read inside the loop: two targets in the same batch can collapse onto
+    // one canonical key, and the earlier one is already in the table by then.
+    if (listAssets.all(req.orgId).some((a) => reputation.targetKey(a.target) === key)) {
+      skipped.push({ target: normalized, reason: 'already monitored' });
+      continue;
+    }
+    // Checked per row, not once up front: the budget is consumed as we go, so a
+    // batch must stop at the limit rather than sail past it.
+    const lim = plans.checkLimit(req.orgId, req.org.plan, 'checks');
+    if (!lim.ok) { skipped.push({ target: normalized, reason: `plan limit reached (${lim.used}/${lim.limit})` }); continue; }
+    ins.run(req.orgId, normalized, reputation.parseTarget(normalized).kind, intervalS, now());
+    added.push(normalized);
+  }
+  if (added.length) sec.audit(req.user.id, 'reputation_asset_create', `${added.length} from SPF: ${added.join(', ')}`.slice(0, 300), req.orgId);
+  res.json({ added, skipped });
+});
+
 // The curated zone list, so the UI can explain what "19 of 31" actually covers.
 router.get('/zones', (req, res) => {
   const shape = (z) => ({ name: z.name, zone: z.zone, tier: z.tier });

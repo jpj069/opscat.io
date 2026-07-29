@@ -160,6 +160,32 @@ export interface ReputationZone { name: string; zone: string; tier: ReputationTi
 // and diffed against an asset's findings to render every list's state.
 export interface ReputationZones { ip: ReputationZone[]; domain: ReputationZone[] }
 
+// SPF discovery: GET the senders out of a domain's SPF record instead of asking
+// the operator to transcribe them. `source` says which mechanism produced the
+// candidate (`ip4`, `a:mail01.example.com`, `mx:…`, `domain`).
+export interface SpfCandidate {
+  target: string; kind: 'ip' | 'domain'; source: string; alreadyMonitored: boolean;
+}
+// A third-party `include:` — the provider's shared pool, thousands of addresses
+// they monitor themselves. Shown so the delegation is visible, never offered as
+// an asset. `lookups` is what it costs against the RFC 7208 budget of 10.
+export interface SpfPool { include: string; via: string; lookups: number }
+export interface SpfRange { range: string; via: string }
+export interface ReputationDiscovery {
+  domain: string;
+  spf: string | null;
+  lookups: { used: number; limit: number; permerror: boolean };
+  candidates: SpfCandidate[];
+  pools: SpfPool[];
+  ranges: SpfRange[];     // CIDR blocks wider than /32 — not queryable per address
+  warnings: string[];
+  queries: number;
+}
+export interface BulkAddResult {
+  added: string[];
+  skipped: { target: string; reason: string }[];
+}
+
 export interface ReputationOverview {
   total: number; ip: number; domain: number;
   listed: number; informational: number; clean: number; unknown: number; pending: number;

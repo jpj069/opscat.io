@@ -251,8 +251,11 @@ function withTimeout(promise, ms) {
 // resolvers (answering 127.255.255.x), so a probe using its local resolver gets
 // real answers where a centralised SaaS scraper gets rate limited. Override with
 // OPSCAT_REPUTATION_DNS="9.9.9.9,149.112.112.112" if the host resolver is unfit.
-function buildResolver(timeoutMs) {
-  const resolver = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+// `tries` defaults to 1: across 31 zones a retry storm costs more than the one
+// zone it might recover, and the canary reports the gap honestly. SPF discovery
+// passes a higher value — see discoverSpf.
+function buildResolver(timeoutMs, tries = 1) {
+  const resolver = new dns.promises.Resolver({ timeout: timeoutMs, tries });
   const override = String(process.env.OPSCAT_REPUTATION_DNS || '').trim();
   if (override) {
     const servers = override.split(',').map((s) => s.trim()).filter(Boolean);
@@ -603,9 +606,210 @@ function resetSchedule(assetId = null) {
   if (assetId == null) lastRun.clear(); else lastRun.delete(assetId);
 }
 
+// ---- SPF discovery -----------------------------------------------------------
+//
+// Reads a domain's SPF record and turns it into a list of assets worth watching.
+// This is the step that makes the feature usable: the finding that started it —
+// a forgotten relay on a budget hoster, outside the company's own ASN — is only
+// findable if something parses the SPF record, because nobody types that address
+// into a lookup tool by hand. Asking the operator to enter it manually just moves
+// the same problem one screen over.
+//
+// WHAT COUNTS AS OURS. Only mechanisms written directly in the record —
+// `ip4`, `ip6`, `a`, `mx` — become candidates. An `include:` delegates to a third
+// party (Microsoft 365, Pardot, Mailgun) whose shared pools are thousands of
+// addresses that the provider monitors itself; listing them as the customer's
+// assets would bury the eight addresses that actually are. Those are reported as
+// pools instead, so the operator can see the delegation without drowning in it.
+// `redirect=` is the exception: per RFC 7208 §6.1 it REPLACES the record rather
+// than adding to it, so its mechanisms are the domain's own and recurse as
+// top-level.
+//
+// The lookup budget falls out of the same walk for free, and it is worth more
+// than it costs: link11.com's record needs 11 DNS lookups against a limit of 10,
+// which is a PermError — every bit as fatal for delivery as a blocklist entry and
+// far less visible.
+
+const SPF_MAX_LOOKUPS = 10;   // RFC 7208 §4.6.4 — exceeded means PermError
+const SPF_MAX_DEPTH = 8;      // include nesting; the lookup budget usually bites first
+const SPF_MAX_QUERIES = 60;   // hard stop, so a looping or hostile record cannot fan out
+
+const txtOf = async (resolver, name, timeoutMs) => {
+  const rows = await withTimeout(resolver.resolveTxt(name), timeoutMs);
+  // node returns each record as an array of strings that must be concatenated
+  return (rows || []).map((r) => (Array.isArray(r) ? r.join('') : String(r)));
+};
+
+/**
+ * Resolve a domain's SPF record into monitorable senders.
+ * @returns {Promise<{domain, spf, lookups:{used,limit,permerror}, candidates:Array,
+ *   pools:Array, ranges:Array, warnings:string[], queries:number}>}
+ */
+async function discoverSpf(domain, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver = null) {
+  const root = normalizeTarget(domain);
+  if (!root || parseTarget(root).kind !== 'domain') throw new Error('a domain name is required');
+
+  // Two retries here, unlike the blocklist path. There a lost packet costs one
+  // zone out of 31 and the canary reports the gap; here a lost packet costs the
+  // whole answer, and a TXT response is big enough to be the one that gets
+  // dropped by a middlebox.
+  const resolver = injectedResolver || buildResolver(timeoutMs, 3);
+  const state = {
+    lookups: 0, queries: 0, seen: new Set(), warnings: [],
+    candidates: [], pools: [], ranges: [], rootSpf: null,
+  };
+  const addWarning = (w) => { if (!state.warnings.includes(w)) state.warnings.push(w); };
+
+  // A single /32 or /128 is an address we can query a blocklist about. Anything
+  // wider is a range: DNSBLs answer about addresses, not networks, and expanding
+  // a /24 into 256 assets would be absurd.
+  const asAddress = (spec) => {
+    const [addr, prefix] = String(spec).split('/');
+    const bare = addr.trim();
+    if (!net.isIP(bare)) return null;
+    if (prefix != null) {
+      const p = Number(prefix);
+      const full = net.isIPv4(bare) ? 32 : 128;
+      if (!Number.isFinite(p) || p !== full) return null; // a real range
+    }
+    return bare;
+  };
+
+  const push = (target, source) => {
+    const key = targetKey(target);
+    if (!key || state.seen.has(key)) return;
+    state.seen.add(key);
+    state.candidates.push({ target: normalizeTarget(target) || target, kind: parseTarget(target).kind, source });
+  };
+
+  const resolveHostAddresses = async (host, source) => {
+    for (const [fn, label] of [['resolve4', 'A'], ['resolve6', 'AAAA']]) {
+      if (typeof resolver[fn] !== 'function') continue;
+      state.queries++;
+      try {
+        const addrs = await withTimeout(resolver[fn](host), timeoutMs);
+        for (const a of addrs || []) push(a, source);
+      } catch { /* no record of that family, or refused — the other family may still answer */ }
+      void label;
+    }
+  };
+
+  // `own` = these mechanisms belong to the domain itself (top level, or reached
+  // through a redirect). When false we are inside an include and only counting.
+  async function walk(name, depth, own) {
+    if (depth > SPF_MAX_DEPTH || state.queries >= SPF_MAX_QUERIES) return;
+    state.queries++;
+    let records;
+    try {
+      records = await txtOf(resolver, name, timeoutMs);
+    } catch {
+      if (own) addWarning(`could not read the SPF record of ${name}`);
+      return;
+    }
+    const spfs = records.filter((r) => /^v=spf1(\s|$)/i.test(r.trim()));
+    if (!spfs.length) {
+      if (own) addWarning(`${name} publishes no SPF record`);
+      return;
+    }
+    // More than one is a PermError in its own right (RFC 7208 §4.5) and a real
+    // misconfiguration we should surface rather than silently pick one.
+    if (spfs.length > 1) addWarning(`${name} publishes ${spfs.length} SPF records — that is a PermError`);
+    const spf = spfs[0].trim();
+    if (depth === 0) state.rootSpf = spf;
+
+    for (const raw of spf.split(/\s+/).slice(1)) {
+      if (state.queries >= SPF_MAX_QUERIES) { addWarning('stopped early: the record fans out too far'); return; }
+      const tok = raw.replace(/^[+\-~?]/, ''); // qualifiers do not change what we resolve
+      const lower = tok.toLowerCase();
+
+      if (lower.startsWith('ip4:') || lower.startsWith('ip6:')) {
+        const spec = tok.slice(4);
+        const addr = asAddress(spec);
+        if (!own) continue;                       // inside an include: pool detail
+        if (addr) push(addr, lower.slice(0, 3));
+        else state.ranges.push({ range: spec, via: name });
+        continue;
+      }
+
+      if (lower === 'a' || lower.startsWith('a:')) {
+        state.lookups++;
+        const host = lower === 'a' ? name : tok.slice(2).split('/')[0];
+        if (own) await resolveHostAddresses(host, `a:${host}`);
+        continue;
+      }
+
+      if (lower === 'mx' || lower.startsWith('mx:')) {
+        state.lookups++;
+        const host = lower === 'mx' ? name : tok.slice(3).split('/')[0];
+        if (!own || typeof resolver.resolveMx !== 'function') continue;
+        state.queries++;
+        try {
+          const mxs = await withTimeout(resolver.resolveMx(host), timeoutMs);
+          for (const mx of (mxs || []).slice(0, 10)) {
+            state.lookups++;                      // each MX name costs its own lookup
+            await resolveHostAddresses(mx.exchange, `mx:${mx.exchange}`);
+          }
+        } catch { addWarning(`could not resolve the MX of ${host}`); }
+        continue;
+      }
+
+      if (lower.startsWith('include:')) {
+        state.lookups++;
+        const target = tok.slice(8);
+        const before = state.lookups;
+        // Walk it anyway — not for candidates, but because its nested includes
+        // count against the same budget, which is exactly how records overflow.
+        await walk(target, depth + 1, false);
+        // Only top-level includes are reported. Nested ones are the provider's
+        // internal structure — an operator needs "mailgun.org costs 5 lookups",
+        // not the four sub-records it spends them on. The cost still rolls up.
+        if (depth === 0) {
+          state.pools.push({ include: target, via: name, lookups: state.lookups - before + 1 });
+        }
+        continue;
+      }
+
+      if (lower.startsWith('redirect=')) {
+        state.lookups++;
+        // Replaces the record rather than adding to it, so its mechanisms are ours.
+        await walk(tok.slice(9), depth + 1, own);
+        continue;
+      }
+
+      if (lower.startsWith('exists:') || lower === 'ptr' || lower.startsWith('ptr:')) {
+        state.lookups++;                          // costs budget, yields no address
+        if (lower.startsWith('ptr') && own) addWarning('the record uses `ptr`, which RFC 7208 deprecates');
+      }
+    }
+  }
+
+  await walk(root, 0, true);
+
+  // The sending domain itself is an asset: RHSBLs answer about domains, and a
+  // domain listing (Spamhaus DBL) is as fatal as an address listing.
+  push(root, 'domain');
+
+  const permerror = state.lookups > SPF_MAX_LOOKUPS;
+  if (permerror) {
+    addWarning(`the SPF record needs ${state.lookups} DNS lookups, above the limit of `
+      + `${SPF_MAX_LOOKUPS} — receivers treat this as a PermError, so SPF fails`);
+  }
+  return {
+    domain: root,
+    spf: state.rootSpf,
+    lookups: { used: state.lookups, limit: SPF_MAX_LOOKUPS, permerror },
+    candidates: state.candidates,
+    pools: state.pools,
+    ranges: state.ranges,
+    warnings: state.warnings,
+    queries: state.queries,
+  };
+}
+
 module.exports = {
   lookup, parseTarget, classify, reverseIPv4, reverseIPv6, expandIPv6, resetCanaryCache,
   normalizeTarget, targetKey,
   runAsset, syncListings, tick, start, resetSchedule,
-  IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS,
+  discoverSpf,
+  IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS, SPF_MAX_LOOKUPS,
 };
