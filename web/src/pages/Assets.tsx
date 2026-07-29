@@ -21,12 +21,16 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   container: { label: 'container', color: '#58a6ff' },
   source: { label: 'source', color: '#3fb950' },
   vendor: { label: 'vendor', color: '#d29922' },
+  reputation: { label: 'reputation', color: '#f85149' },
 };
 
 function statusColor(s: string): string {
   if (s === 'online' || s === 'ok' || s === 'active' || s === 'running') return SEV.green;
-  if (s === 'pending' || s === 'late' || s === 'restarting' || s === 'paused') return '#e3b341';
+  // `unknown` = a reputation run that could not complete. Amber, not red: there
+  // is no evidence against the asset, only missing evidence.
+  if (s === 'pending' || s === 'late' || s === 'restarting' || s === 'paused' || s === 'unknown') return '#e3b341';
   if (s === 'disabled' || s === 'waiting' || s === 'created') return 'var(--text3)';
+  if (s === 'listed') return SEV.high;
   return SEV.critical; // offline / failing / missing / exited / unreachable / error text
 }
 

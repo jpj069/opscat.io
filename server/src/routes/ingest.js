@@ -331,6 +331,10 @@ router.get('/synthetics/checks', requireProbeKey, (req, res) => {
         WHERE c.enabled = 1`).all(loc.id)
     : db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ? AND enabled = 1').all(loc.org_id);
   res.json(rows
+    // Reputation checks stay on the server's local probe. A DNSBL answer does not
+    // vary by vantage point the way latency does, and agents have no runner for
+    // the type — handing one out would report "unknown check type" forever.
+    .filter((c) => c.type !== 'reputation')
     .filter((c) => {
       const assigned = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?').all(c.id);
       return assigned.length === 0 || assigned.some((a) => a.location_id === loc.id);
@@ -350,8 +354,13 @@ router.post('/synthetics/report', requireProbeKey, (req, res) => {
   for (const r of results) {
     const checkId = clampInt(r.checkId, 1, 1e9, 0);
     if (!checkId) continue;
-    const chk = db.prepare('SELECT id, org_id FROM synthetic_checks WHERE id = ?').get(checkId);
+    const chk = db.prepare('SELECT id, org_id, type FROM synthetic_checks WHERE id = ?').get(checkId);
     if (!chk || !checkAllowedOnLocation(chk, req.probeLocation)) continue;
+    // Reputation is never handed out above, so a report for one is either a
+    // stale work list or a forgery. Accepting it would let a probe write a
+    // "clean" result over a real listing — the asset view reads the newest row
+    // regardless of location, so the critical finding would silently disappear.
+    if (chk.type === 'reputation') continue;
     synthEngine.recordResult(checkId, req.probeLocation.id, {
       ok: !!r.ok, latency: Number.isFinite(r.latencyMs) ? r.latencyMs : null,
       meta: r.meta && typeof r.meta === 'object' ? r.meta : null,

@@ -203,6 +203,32 @@ const MIGRATIONS = [
       `);
     }
   },
+  // idx 9 -> version 10: the `reputation` check type (DNSBL/RHSBL blocklist
+  // lookups). The type CHECK is baked into the table, so rebuild it — same
+  // approach as the alert_rules channel widening above.
+  () => {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='synthetic_checks'").get();
+    if (!row || row.sql.includes("'reputation'")) return; // fresh install already has the wide CHECK
+    db.exec(`
+      CREATE TABLE synthetic_checks_v2 (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        INTEGER NOT NULL DEFAULT 1,
+        type          TEXT NOT NULL CHECK (type IN ('http','icmp','dns','tcp','traceroute','reputation')),
+        target        TEXT NOT NULL,
+        interval_s    INTEGER NOT NULL DEFAULT 60,
+        timeout_ms    INTEGER NOT NULL DEFAULT 5000,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        assertions    TEXT,
+        created_at    INTEGER NOT NULL
+      );
+      INSERT INTO synthetic_checks_v2
+        (id, org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at)
+        SELECT id, org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at
+        FROM synthetic_checks;
+      DROP TABLE synthetic_checks;
+      ALTER TABLE synthetic_checks_v2 RENAME TO synthetic_checks;
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

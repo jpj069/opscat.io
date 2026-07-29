@@ -52,7 +52,7 @@ export interface Rule {
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
 export interface AssetRow {
-  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source' | 'vendor';
+  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source' | 'vendor' | 'reputation';
   id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
 }
 
@@ -128,6 +128,33 @@ export interface SynthHistoryEntry {
   uptimePct: number | null;
 }
 export interface SynthHistory { since: number; bucketMs: number; checks: SynthHistoryEntry[]; }
+
+// ---------------------------------------------------------------- reputation
+// Blocklist monitoring. `status` is what a table row renders from; note that
+// `unknown` means a list could not be queried — explicitly NOT the same as clean.
+export type ReputationTier = 'critical' | 'standard' | 'informational';
+export type ReputationStatus = 'listed' | 'informational' | 'clean' | 'unknown' | 'pending';
+export interface ReputationListing {
+  name: string; zone: string; tier: ReputationTier; codes: string[]; url: string | null;
+}
+export interface ReputationAsset {
+  id: number; target: string; kind: 'ip' | 'domain' | null; rdns: string | null;
+  enabled: boolean; intervalS: number; status: ReputationStatus;
+  worstTier: ReputationTier | null; listings: ReputationListing[];
+  policy: string[]; unavailable: string[]; zonesQueried: number | null;
+  error: string | null; lastCheckedAt: number | null; lastDurationMs: number | null;
+}
+export interface ReputationCoverage {
+  queried: number | null;   // lists that actually answered
+  total: number | null;     // lists we try for this kind (~32 ip / ~8 domain)
+  unavailable: number;      // refused/timed out — why a verdict may be partial
+}
+export interface ReputationOverview {
+  total: number; ip: number; domain: number;
+  listed: number; informational: number; clean: number; unknown: number; pending: number;
+  // per kind: the denominators differ, so a single merged number would lie
+  coverage: { ip: ReputationCoverage; domain: ReputationCoverage };
+}
 
 export interface UserRow {
   id: number; email: string; name: string; role: string; color: string; active: boolean;

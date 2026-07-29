@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS check_locations (
 CREATE TABLE IF NOT EXISTS synthetic_checks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        INTEGER NOT NULL DEFAULT 1,
-  type          TEXT NOT NULL CHECK (type IN ('http','icmp','dns','tcp','traceroute')),
+  type          TEXT NOT NULL CHECK (type IN ('http','icmp','dns','tcp','traceroute','reputation')),
   target        TEXT NOT NULL,
   interval_s    INTEGER NOT NULL DEFAULT 60,
   timeout_ms    INTEGER NOT NULL DEFAULT 5000,

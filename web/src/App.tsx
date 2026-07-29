@@ -9,7 +9,7 @@ import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
   SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
-  ChevronUpIcon, LayoutGridIcon, FilterIcon, Building2Icon, ZapIcon,
+  ChevronUpIcon, LayoutGridIcon, FilterIcon, Building2Icon, ZapIcon, ShieldAlertIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -21,6 +21,7 @@ import Cases from './pages/Cases';
 import Incidents from './pages/Incidents';
 import StatusPageAdmin from './pages/StatusPageAdmin';
 import Synthetics from './pages/Synthetics';
+import Reputation from './pages/Reputation';
 import Vendors from './pages/Vendors';
 import LogsPage from './pages/LogsPage';
 import Rules from './pages/Rules';
@@ -44,6 +45,7 @@ const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
   { id: 'incidents', label: 'Incidents', icon: TriangleAlertIcon },
   { id: 'statuspage', label: 'Status Page', icon: GlobeIcon },
   { id: 'synthetics', label: 'Synthetics', icon: RadarIcon },
+  { id: 'reputation', label: 'Reputation', icon: ShieldAlertIcon },
   { id: 'vendors', label: 'Vendors', icon: Building2Icon },
   { id: 'logs', label: 'Logs', icon: ScrollTextIcon },
   { id: 'rules', label: 'Alert Rules', icon: BellRingIcon },
@@ -61,7 +63,8 @@ const PLATFORM_NAV: { id: string; label: string; icon: LucideIcon }[] = [
 ];
 const PAGES: Record<string, React.ComponentType> = {
   monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
-  incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics, vendors: Vendors,
+  incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics,
+  reputation: Reputation, vendors: Vendors,
   logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, pipeline: Pipeline,
   automation: Automation, settings: Settings, platform: SuperAdmin, components: ComponentLab,
 };

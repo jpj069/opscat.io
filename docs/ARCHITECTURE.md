@@ -74,6 +74,66 @@ console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by a
 - Failing checks feed the pipeline as events (`synthetic_check_failed`), so alert rules
   and the status page react automatically.
 
+## Reputation (`engine/reputation.js`, `routes/reputation.js`, page `Reputation.tsx`)
+
+Blocklist monitoring for the org's sending assets. **Its own feature, its own top-level
+page and its own API** (`/api/reputation/*`) — but deliberately not its own storage: an
+asset is a `synthetic_checks` row of type `reputation` and its history is
+`synthetic_results`. That reuse is what buys the scheduler, result history, event
+pipeline, alert rules, cases and status page without duplicated machinery, while the
+separate API and page keep the feature legible on its own terms. Reputation rows are
+excluded from the Synthetics surface entirely (GET hides them, POST refuses the type),
+and surface as their own `kind` in the `/api/assets` aggregate.
+
+It is the one check that does not test reachability. A listed server answers perfectly well; it just stops being delivered, so
+a listing raises its own event (`reputation_listed`) rather than
+`synthetic_check_failed`, which would send whoever is on call hunting for an outage.
+
+- **Target is used verbatim.** An IPv4/IPv6 target is reversed and queried against 31 IP
+  blocklists; a domain goes to 8 RHSBLs. A domain is deliberately *not* resolved to its
+  A record first — that would check the website instead of the mail sender. Targets are
+  stored normalised (lower-cased, no trailing root dot) and de-duplicated on their
+  *canonical* key, so `MAIL.Example.com.` and `2001:0db8::1` cannot be added twice under
+  different spellings.
+- **Severity comes from the list, not from the fact of listing.** Zones are tiered
+  `critical` (85) / `standard` (65) / `informational` (30). Informational listings —
+  UCEPROTECT L2/L3 and friends, which list whole ASNs, so a clean sender is caught by a
+  noisy neighbour — are recorded and displayed but never flip the check or alert. Without
+  that split the feature generates enough noise to get muted within a fortnight.
+- **"No answer" is not "clean".** Every zone is validated with the test entry RFC 5782
+  §5 mandates (`127.0.0.2` listed, `127.0.0.1` not). Zones failing that canary are
+  reported as *unavailable*, never as clean, and the result is cached for an hour. This
+  matters: Spamhaus answers plain NXDOMAIN to queries arriving via large public
+  resolvers, and a retired list (SORBS) answers NXDOMAIN forever — both are
+  indistinguishable from a clean verdict otherwise. If no `critical` zone is reachable
+  the check fails outright rather than reporting a pass it cannot back up.
+- **Spamhaus PBL is a policy statement**, not an accusation — `127.0.0.10/11` mean "this
+  range should not send mail directly". Surfaced separately; never alerts.
+- **Resolver**: the host's own by default, which is the point — DNSBLs refuse or
+  rate-limit large public resolvers. Override with `OPSCAT_REPUTATION_DNS`
+  (comma-separated) when the host resolver is unfit.
+- **Cadence**: interval floor **1h**, ceiling 24h, default 6h. The floor is the feature's
+  own, not the plan's — one asset is ~40 queries against lists that rate-limit per source
+  IP, so a plan that permits 15s HTTP checks must not be able to turn a handful of assets
+  into a flood that gets the whole host refused. For the same reason reputation is
+  **excluded from "run all checks"** (`POST /api/synthetics/run`, MCP
+  `opscat_run_checks` — both analyst-reachable); the per-asset
+  `POST /api/reputation/assets/:id/run` is lead-only.
+- **A finding outranks a partial outage.** If some zones answered and one of them listed
+  the asset the status is `listed`, not `unknown`, and the incompleteness rides along in
+  the `error` field — reporting `unknown` there would contradict the alert the on-call
+  just received. Coverage is reported **per kind**
+  (`{ip:{queried,total,unavailable}, domain:{…}}`) because the denominators differ; one
+  merged number made a domain-only org look catastrophic.
+- **Server-local, and that is a trust boundary.** Reputation is excluded from probe
+  distribution (`/v1/synthetics/checks`) *and* refused on submission
+  (`POST /v1/synthetics/report`). A DNSBL answer does not vary by vantage point the way
+  latency does and agents ship no runner for the type — but the load-bearing reason is
+  that probe-supplied `meta` is attacker-controlled: without the second half a probe key
+  could post a forged "clean" result over a real listing, or forge a `reputation_listed`
+  event (severity 85, auto-opened case) against any check. The event is therefore gated
+  on the **check row's own type**, never on the shape of `meta`.
+
 ## SNMP
 
 `engine/snmp.js` polls targets (v2c) on their interval for standard OIDs

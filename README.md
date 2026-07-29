@@ -20,6 +20,8 @@ edition with `OPSCAT_EDITION=community` (default).
   metrics and (optionally) journald logs.
 - **Synthetics** — HTTP/ICMP/DNS/TCP/traceroute checks from the platform host plus any
   number of remote probe locations (the agent in `--probe` mode).
+- **Reputation** — blocklist monitoring for your sending IPs and domains across 31 IP / 8 domain lists, tiered so range-wide listings never page anyone, and honest about
+  lists that could not be queried (unknown, never "clean").
 - **SNMP** — v2c polling of network devices with unreachable/threshold events.
 - **Vendor monitoring** — supply-chain watch on the official status pages of 220+
   services (GitHub, AWS, Cloudflare, Stripe, Notion, GitLab, Heroku, Snowflake,

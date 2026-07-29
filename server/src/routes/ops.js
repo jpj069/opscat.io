@@ -412,12 +412,38 @@ router.get('/assets', (req, res) => {
       status: !s.enabled ? 'disabled' : s.last_status === 'ok' ? 'ok' : (s.last_status || 'pending'),
       lastSeen: s.last_seen_at || null });
   }
-  const lastResult = db.prepare('SELECT ok, MAX(ts) AS ts FROM synthetic_results WHERE check_id = ?');
+  const lastResult = db.prepare('SELECT ok, meta, MAX(ts) AS ts FROM synthetic_results WHERE check_id = ?');
+  const everyLabel = (s) => (s >= 3600 && s % 3600 === 0 ? `every ${s / 3600}h`
+    : s >= 3600 ? `every ${(s / 3600).toFixed(1)}h`
+      : s >= 60 ? `every ${Math.round(s / 60)}m` : `every ${s}s`);
   for (const c of db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ?').all(req.orgId)) {
     const last = lastResult.get(c.id);
-    rows.push({ kind: 'check', id: c.id, name: `${c.type} ${c.target}`, detail: `every ${c.interval_s}s`,
-      status: !c.enabled ? 'disabled' : last && last.ts != null ? (last.ok ? 'ok' : 'failing') : 'pending',
-      lastSeen: last ? last.ts : null });
+    // reputation is its own feature (own page, own API) — surface it as its own
+    // kind here too, otherwise it hides among the reachability checks
+    const isRep = c.type === 'reputation';
+    let status;
+    if (!c.enabled) status = 'disabled';
+    else if (!last || last.ts == null) status = 'pending';
+    else if (last.ok) status = 'ok';
+    else if (!isRep) status = 'failing';
+    else {
+      // A failing reputation check is EITHER a real listing OR a run that could
+      // not complete (no critical zone answered). Calling the second one
+      // "listed" would put a blocklist finding on an asset nobody has evidence
+      // against — the whole point of the unknown state.
+      let meta = null;
+      try { meta = last.meta ? JSON.parse(last.meta) : null; } catch { /* keep null */ }
+      const listed = meta && Array.isArray(meta.listed)
+        ? meta.listed.filter((l) => l.tier !== 'informational') : [];
+      status = listed.length ? 'listed' : 'unknown';
+    }
+    rows.push({
+      kind: isRep ? 'reputation' : 'check', id: c.id,
+      name: isRep ? c.target : `${c.type} ${c.target}`,
+      detail: isRep ? `blocklists · ${everyLabel(c.interval_s)}` : `every ${c.interval_s}s`,
+      status,
+      lastSeen: last ? last.ts : null,
+    });
   }
   for (const hb of db.prepare('SELECT * FROM heartbeats WHERE org_id = ?').all(req.orgId)) {
     rows.push({ kind: 'heartbeat', id: hb.id, name: hb.name, detail: `every ${hb.interval_s}s (+${hb.grace_s}s grace)`,

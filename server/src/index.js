@@ -63,6 +63,7 @@ try { app.use('/api/orgs', require('./routes/orgs')); } catch (e) { /* EE module
 // /api/* routes, so it MUST be mounted last.
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/synthetics', require('./routes/synthetics'));
+app.use('/api/reputation', require('./routes/reputation'));
 app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api', require('./routes/ops'));
 

@@ -26,6 +26,9 @@ services:
       - OPSCAT_SECRET=${OPSCAT_SECRET:-}
       - OPSCAT_PROBE_CITY=${OPSCAT_PROBE_CITY:-Local}
       - OPSCAT_PROBE_CC=${OPSCAT_PROBE_CC:-XX}
+      # Resolver for blocklist (DNSBL) lookups. Blank = the host's own resolver,
+      # which is what the lists want; they refuse queries via 1.1.1.1/8.8.8.8.
+      - OPSCAT_REPUTATION_DNS=${OPSCAT_REPUTATION_DNS:-}
       - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
       - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
       - OPSCAT_EDITION=community

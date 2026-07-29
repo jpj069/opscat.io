@@ -6,6 +6,8 @@ It runs on Linux servers and reports host health to your OpsCat instance:
 - **Heartbeat + metrics** every interval (CPU, load, memory, disk, network).
 - **journald logs** (`--logs`) — tails the system journal and ships lines.
 - **Synthetic probes** (`--probe`) — runs http / icmp / dns / tcp / traceroute
+  (`reputation` checks are deliberately not distributed to agents — they run on the
+  OpsCat server, since a blocklist answer does not vary by vantage point)
   checks assigned to this probe location and reports the results.
 
 Requires **Node.js ≥ 18** (uses the built-in `fetch` and `AbortController`).
