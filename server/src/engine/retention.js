@@ -70,6 +70,12 @@ function prune() {
   db.prepare('DELETE FROM agent_containers WHERE ts < ?').run(t - config.retentionMetricsDays * 86400000);
   db.prepare('DELETE FROM maintenance_windows WHERE ends_at < ?').run(t - 30 * 86400000);
   db.prepare('DELETE FROM synthetic_results WHERE ts < ?').run(t - config.retentionResultsDays * 86400000);
+  // reputation_runs is a sample table and ages out with the rest of them.
+  // reputation_listings deliberately does NOT: an episode of being listed is the
+  // evidence a delisting request or a postmaster escalation is argued with, and
+  // "how often were we on Spamhaus last year" has to survive longer than a
+  // month. It is bounded by nature — one row per (asset, list, episode).
+  db.prepare('DELETE FROM reputation_runs WHERE ts < ?').run(t - config.retentionResultsDays * 86400000);
   db.prepare('DELETE FROM snmp_results WHERE ts < ?').run(t - config.retentionResultsDays * 86400000);
   db.prepare('DELETE FROM event_buckets WHERE bucket < ?').run(Math.floor((t - 7 * 86400000) / 60000));
   db.prepare("DELETE FROM events WHERE status != 'active' AND last_seen < ?").run(t - 90 * 86400000);

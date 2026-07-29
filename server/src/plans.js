@@ -47,7 +47,11 @@ function planFor(planKey) { return PLANS[planKey] || PLANS.free; }
 const COUNTERS = {
   users: (orgId) => db.prepare(`SELECT COUNT(*) c FROM memberships m JOIN users u ON u.id = m.user_id
     WHERE m.org_id = ? AND u.active = 1`).get(orgId).c,
-  checks: (orgId) => db.prepare('SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ?').get(orgId).c,
+  // Reputation assets have their own table but consume the same budget: both are
+  // scheduled outbound probes run on the org's behalf. Counting only
+  // synthetic_checks here would make the quota bypassable by adding assets.
+  checks: (orgId) => db.prepare('SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ?').get(orgId).c
+    + db.prepare('SELECT COUNT(*) c FROM reputation_assets WHERE org_id = ?').get(orgId).c,
   managedLocations: (orgId) => db.prepare('SELECT COUNT(*) c FROM org_location_access WHERE org_id = ?').get(orgId).c,
   snmpTargets: (orgId) => db.prepare('SELECT COUNT(*) c FROM snmp_targets WHERE org_id = ?').get(orgId).c,
   agents: (orgId) => db.prepare('SELECT COUNT(*) c FROM agents WHERE org_id = ?').get(orgId).c,

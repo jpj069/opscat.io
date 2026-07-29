@@ -1,11 +1,12 @@
 'use strict';
 const crypto = require('crypto');
-// DNSBL / RHSBL reputation lookups for the `reputation` synthetic check type.
+// Reputation — DNSBL / RHSBL blocklist monitoring for an org's sending assets.
 //
-// A reputation check answers "is this asset on a blocklist?" — NOT "is it up?".
-// A listed mail server is usually perfectly reachable, so the check deliberately
-// keeps its own event (`reputation_listed`) instead of `synthetic_check_failed`;
-// see engine/synthetics.js.
+// This asks "is this asset on a blocklist?" — NOT "is it up?". A listed mail
+// server answers perfectly well; it has simply stopped being delivered. So a
+// listing raises its own event (`reputation_listed`), never
+// `synthetic_check_failed`, which would send whoever is on call hunting an
+// outage that is not happening.
 //
 // Two query shapes, picked from the target:
 //   IPv4/IPv6  -> reversed address + IP zone      (e.g. 2.0.0.127.zen.spamhaus.org)
@@ -13,9 +14,24 @@ const crypto = require('crypto');
 // The target is checked verbatim; a domain is NOT resolved to its A record first.
 // That would silently check the website instead of the mail sender, which is the
 // opposite of what anyone configuring a reputation check wants.
+//
+// STORAGE. Two tables, because they answer different questions and deserve
+// different lifetimes:
+//   reputation_runs     — one row per lookup. A time series; pruned like every
+//                         other sample table.
+//   reputation_listings — one row per episode of being listed, with
+//                         first_seen / resolved_at. Kept, because "since when
+//                         are we on Spamhaus?" is the first question asked after
+//                         a listing, and it is the evidence a delisting request
+//                         is argued with.
+// Storing verdicts as samples (which is what the first version did, in
+// synthetic_results.meta) can express neither.
 
 const dns = require('dns');
 const net = require('net');
+const { db } = require('../db');
+const { now } = require('../util');
+const pipeline = require('./pipeline');
 
 // ---- zones -----------------------------------------------------------------
 //
@@ -339,6 +355,7 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
   const policy = [];
   const unavailable = [];
   const errored = [];
+  const answered = [];
   let errors = 0;
   let criticalCovered = false;
 
@@ -365,6 +382,10 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
       const { z, addresses, unusable, error } = r.value;
       if (unusable) { unavailable.push({ name: z.name, zone: z.zone, tier: z.tier }); continue; }
       if (error) { errors++; errored.push({ name: z.name, zone: z.zone, tier: z.tier, error }); continue; }
+      // This zone gave us a real answer. Recorded by name because resolving an
+      // open listing is only defensible against a zone that actually replied —
+      // see syncListings.
+      answered.push(z.zone);
       if (z.tier === 'critical') criticalCovered = true;
       const verdict = classify(z.zone, addresses);
       const url = INFO_URLS[z.zone] ? INFO_URLS[z.zone].replace('{q}', encodeURIComponent(target)) : null;
@@ -381,10 +402,12 @@ async function lookup(target, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver =
     kind: parsed.kind,
     target,
     zonesQueried: parsed.zones.length - unavailable.length - errors,
+    zonesTotal: parsed.zones.length,
     listed,
     policy,
     unavailable,
     errored,
+    answered,        // zone names that replied — the only ones a verdict covers
     errors,
     worstTier,
     criticalCovered,
@@ -414,8 +437,175 @@ function targetKey(raw) {
   return parsed ? `${parsed.kind}:${parsed.query}` : null;
 }
 
+// ---- persistence -------------------------------------------------------------
+
+const insRun = db.prepare(`INSERT INTO reputation_runs
+  (asset_id, ts, status, zones_queried, zones_total, worst_tier, duration_ms,
+   unavailable, errored, policy, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+const openListingsFor = db.prepare(
+  'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL');
+const touchListing = db.prepare(`UPDATE reputation_listings
+  SET last_seen = ?, codes = ?, url = ?, tier = ?, name = ? WHERE id = ?`);
+const openListing = db.prepare(`INSERT INTO reputation_listings
+  (asset_id, zone, name, tier, codes, url, first_seen, last_seen, resolved_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+const resolveListing = db.prepare('UPDATE reputation_listings SET resolved_at = ? WHERE id = ?');
+const setRdns = db.prepare('UPDATE reputation_assets SET rdns = ? WHERE id = ?');
+const enabledAssets = db.prepare('SELECT * FROM reputation_assets WHERE enabled = 1');
+
+const jsonOrNull = (v) => (v && v.length ? JSON.stringify(v) : null);
+
+/**
+ * Fold one lookup's findings into the open-listing state.
+ *
+ * The load-bearing rule is in the second loop: a listing may only be resolved by
+ * a zone that ANSWERED this run. A zone that refused, timed out or failed its
+ * canary has told us nothing, and reading its silence as a delisting would erase
+ * a live critical finding every time the resolver has a bad day — the same
+ * "no answer is not clean" principle the canary enforces one level down.
+ *
+ * @returns {{opened:Array, resolved:Array}} state transitions, for the events
+ */
+function syncListings(assetId, found, answeredZones, ts) {
+  const answered = new Set(answeredZones);
+  const open = openListingsFor.all(assetId);
+  const byZone = new Map(open.map((l) => [l.zone, l]));
+  const foundZones = new Set(found.map((f) => f.zone));
+  const opened = [];
+  const resolved = [];
+
+  for (const f of found) {
+    const existing = byZone.get(f.zone);
+    if (existing) {
+      // Same episode continuing: extend it, and refresh the fields a list can
+      // change under us (a new return code, a moved delisting page).
+      touchListing.run(ts, jsonOrNull(f.codes), f.url || null, f.tier, f.name, existing.id);
+    } else {
+      openListing.run(assetId, f.zone, f.name, f.tier, jsonOrNull(f.codes), f.url || null, ts, ts);
+      opened.push(f);
+    }
+  }
+
+  for (const l of open) {
+    if (foundZones.has(l.zone)) continue;
+    if (!answered.has(l.zone)) continue; // silent zone — prove nothing, change nothing
+    resolveListing.run(ts, l.id);
+    resolved.push(l);
+  }
+  return { opened, resolved };
+}
+
+/**
+ * Look one asset up, record the run, fold the findings into the listing history
+ * and raise the events. This is the only writer — nothing outside this module
+ * decides what a listing is, which is why no probe can forge one.
+ */
+// `injectedResolver` exists so the whole path — run, listing lifecycle, events —
+// is testable without network access, the same contract lookup() offers. Nothing
+// in the app passes it; see server/e2e-reputation.js.
+async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver = null) {
+  const started = process.hrtime.bigint();
+  const ts = now();
+  let res = null;
+  let failure = null;
+  try {
+    res = await lookup(asset.target, timeoutMs, injectedResolver);
+  } catch (e) {
+    failure = String((e && e.message) || 'lookup failed').slice(0, 160);
+  }
+  const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+  if (!res) {
+    // An unusable target or a resolver that gave us nothing at all. Recorded as
+    // `unknown`, never as clean, and the open listings stay open.
+    insRun.run(asset.id, ts, 'unknown', 0, 0, null, durationMs, null, null, null, failure);
+    return { status: 'unknown', error: failure, listed: [], opened: [], resolved: [] };
+  }
+
+  // Reverse DNS names the asset in operator terms — "mail4.link11.com" says far
+  // more in a table than "85.131.131.20". Best-effort: a sender without a PTR is
+  // a finding of its own, not a reason to fail the run.
+  if (asset.kind === 'ip') {
+    try {
+      const names = await (injectedResolver || dns.promises).reverse(asset.target);
+      const rdns = names && names.length ? String(names[0]).slice(0, 253) : null;
+      if (rdns !== asset.rdns) setRdns.run(rdns, asset.id);
+    } catch { /* no PTR, or the resolver refused — keep the last known value */ }
+  }
+
+  const actionable = res.listed.filter((l) => l.tier !== 'informational');
+  // A finding outranks a partial outage: if zones answered and one of them
+  // listed the asset, that is a fact, and reporting `unknown` would contradict
+  // the alert the on-call just received. The incompleteness still rides along in
+  // `error` so the UI can say the run did not cover everything.
+  let status;
+  if (actionable.length) status = 'listed';
+  else if (!res.criticalCovered) status = 'unknown';
+  else if (res.listed.length) status = 'informational';
+  else status = 'clean';
+
+  const error = res.criticalCovered ? null
+    : 'no critical blocklist reachable — check the resolver (OPSCAT_REPUTATION_DNS)';
+
+  insRun.run(asset.id, ts, status, res.zonesQueried, res.zonesTotal,
+    res.worstTier || null, durationMs,
+    jsonOrNull(res.unavailable), jsonOrNull(res.errored), jsonOrNull(res.policy), error);
+
+  const { opened, resolved } = syncListings(asset.id, res.listed, res.answered, ts);
+
+  if (actionable.length) {
+    const names = actionable.map((l) => l.name).join(', ');
+    pipeline.ingestEvent({
+      name: 'reputation_listed', device: asset.target, target: asset.target,
+      severity: TIER_SEVERITY[res.worstTier] || TIER_SEVERITY.standard,
+      description: `reputation_listed ${asset.target} listed on ${actionable.length} blocklist(s): ${names}`.slice(0, 300),
+    }, 'reputation', false, asset.org_id);
+  } else if (resolved.some((l) => l.tier !== 'informational')) {
+    // Delisted. Only reachable now that a listing has a lifecycle — the sample
+    // model could not tell "gone" from "never there". Emitted as a clear event so
+    // a close_event automation can finish the raise and close its case; kept
+    // below the alerting floor so nobody is paged for good news.
+    const names = resolved.filter((l) => l.tier !== 'informational').map((l) => l.name).join(', ');
+    pipeline.ingestEvent({
+      name: 'reputation_cleared', device: asset.target, target: asset.target,
+      severity: 20,
+      description: `reputation_cleared ${asset.target} delisted from ${names}`.slice(0, 300),
+    }, 'reputation', false, asset.org_id);
+  }
+
+  return { status, error, listed: res.listed, opened, resolved };
+}
+
+// ---- scheduler ---------------------------------------------------------------
+
+const lastRun = new Map(); // assetId -> ts
+
+async function tick() {
+  const t = now();
+  for (const asset of enabledAssets.all()) {
+    const due = (lastRun.get(asset.id) || 0) + asset.interval_s * 1000;
+    if (t < due) continue;
+    lastRun.set(asset.id, t);
+    // Sequential on purpose: one asset is ~40 DNS queries against lists that
+    // rate-limit per source IP, and blocklist state does not move in seconds.
+    // eslint-disable-next-line no-await-in-loop
+    try { await runAsset(asset); } catch { /* recorded as a run above; never kill the tick */ }
+  }
+}
+
+function start() {
+  const iv = setInterval(() => { tick().catch(() => {}); }, 30000);
+  iv.unref();
+}
+
+/** Forget the schedule (tests, and after an interval change). */
+function resetSchedule(assetId = null) {
+  if (assetId == null) lastRun.clear(); else lastRun.delete(assetId);
+}
+
 module.exports = {
   lookup, parseTarget, classify, reverseIPv4, reverseIPv6, expandIPv6, resetCanaryCache,
   normalizeTarget, targetKey,
+  runAsset, syncListings, tick, start, resetSchedule,
   IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS,
 };

@@ -10,19 +10,22 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshCwIcon } from 'lucide-react';
 import { useApp } from '../state';
 import { api } from '../api';
-import { SEV } from '../format';
+import { SEV, relTime } from '../format';
 import {
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
   Toggle, KpiCard,
 } from '../ui';
 import type {
-  ReputationAsset, ReputationOverview, ReputationStatus, ReputationTier, ReputationZones,
+  ReputationAsset, ReputationListing, ReputationOverview, ReputationStatus,
+  ReputationTier, ReputationZones,
 } from '../types';
 
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
 
 // one grid string for head, rows and skeleton — never inline it twice
 const GRID = 'minmax(150px,1.4fr) minmax(140px,1.2fr) 150px minmax(150px,1.4fr) 110px 70px';
+// head, rows and skeleton of the history table share this one string
+const HISTORY_GRID = 'minmax(130px,1.5fr) 90px 100px 110px 90px';
 
 const STATUS_UI: Record<ReputationStatus, { label: string; color: string }> = {
   listed: { label: 'listed', color: SEV.critical },
@@ -351,12 +354,16 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                   <div key={l.zone} className="row" style={{ gap: 8, justifyContent: 'space-between',
                     background: 'var(--bg3)', border: '1px solid var(--border)',
                     borderRadius: 6, padding: '8px 10px' }}>
-                    <span className="row" style={{ gap: 8, minWidth: 0 }}>
+                    <span className="row row-wrap" style={{ gap: 8, minWidth: 0 }}>
                       <StatusPill text={l.tier} color={TIER_COLOR[l.tier]} />
                       <span className="mono text-sm text-text0">{l.name}</span>
                       {l.codes?.length > 0 && (
                         <span className="mono text-2xs text-text3">{l.codes.join(' ')}</span>
                       )}
+                      {/* how long this has been going on — the first thing asked
+                          about a listing, and the reason listings are their own
+                          table rather than a field on the latest sample */}
+                      <span className="mono text-2xs text-text3">listed {relTime(l.firstSeen)}</span>
                     </span>
                     {l.url && (
                       <a className="mono text-2xs" href={l.url} target="_blank"
@@ -377,6 +384,8 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
 
           <ZoneBreakdown asset={asset} zones={zones} />
 
+          <ListingHistory assetId={asset.id} />
+
           {/* config */}
           <div className="mono text-2xs text-text2" style={{ background: 'var(--bg3)',
             borderRadius: 6, padding: 10, lineHeight: 1.7 }}>
@@ -389,6 +398,72 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
         </div>
       </div>
     </>
+  );
+}
+
+// ------------------------------------------------------- listing history
+
+// Every episode of being listed, open and closed. This exists because listings
+// are their own table with first_seen/resolved_at — the previous model stored
+// verdicts as samples and could answer "are we listed" but never "since when",
+// "for how long", or "how often did this happen last year".
+function ListingHistory({ assetId }: { assetId: number }) {
+  const [rows, setRows] = useState<ReputationListing[] | null>(null);
+
+  // null = loading, [] = loaded and empty (see CLAUDE.md § Loading States)
+  useEffect(() => {
+    setRows(null);
+    api.get<ReputationListing[]>(`/api/reputation/assets/${assetId}/history?limit=50`)
+      .then(setRows).catch(() => setRows([]));
+  }, [assetId]);
+
+  const span = (l: ReputationListing) => {
+    const end = l.resolvedAt ?? l.lastSeen;
+    const days = Math.max(0, Math.round((end - l.firstSeen) / 86400000));
+    if (!l.resolvedAt) return `open · ${days}d so far`;
+    return days >= 1 ? `${days}d` : '<1d';
+  };
+
+  return (
+    <div className="card">
+      <div className="card-title">
+        Listing history
+        {rows && rows.length > 0 && (
+          <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>
+            {rows.filter((r) => !r.resolvedAt).length} open · {rows.length} total
+          </span>
+        )}
+      </div>
+
+      {rows === null && <TableSkeleton cols={HISTORY_GRID} rows={3} />}
+
+      {rows !== null && rows.length === 0 && (
+        <div className="mono text-2xs text-text3">
+          Never listed on any blocklist we track.
+        </div>
+      )}
+
+      {rows !== null && rows.length > 0 && (
+        <TableScroll minWidth={520}>
+          <div className="tbl-head" style={{ gridTemplateColumns: HISTORY_GRID }}>
+            <span>List</span><span>Tier</span><span>From</span><span>Until</span><span>Duration</span>
+          </div>
+          {rows.map((l) => (
+            <div key={`${l.zone}-${l.firstSeen}`} className="tbl-row"
+              style={{ gridTemplateColumns: HISTORY_GRID }}>
+              <span className="mono text-2xs text-text0">{l.name}</span>
+              <span><StatusPill text={l.tier} color={TIER_COLOR[l.tier]} /></span>
+              <span className="mono text-2xs text-text2">{relTime(l.firstSeen)}</span>
+              <span className="mono text-2xs text-text2">
+                {l.resolvedAt ? relTime(l.resolvedAt)
+                  : <span style={{ color: SEV.critical }}>still listed</span>}
+              </span>
+              <span className="mono text-2xs text-text3">{span(l)}</span>
+            </div>
+          ))}
+        </TableScroll>
+      )}
+    </div>
   );
 }
 

@@ -134,14 +134,20 @@ export interface SynthHistory { since: number; bucketMs: number; checks: SynthHi
 // `unknown` means a list could not be queried — explicitly NOT the same as clean.
 export type ReputationTier = 'critical' | 'standard' | 'informational';
 export type ReputationStatus = 'listed' | 'informational' | 'clean' | 'unknown' | 'pending';
+// One episode of being listed. `firstSeen` is why reputation has its own tables:
+// "on Spamhaus since the 3rd" is the first question after a listing, and it
+// cannot be recovered from a series of samples. `resolvedAt` non-null = delisted.
 export interface ReputationListing {
   name: string; zone: string; tier: ReputationTier; codes: string[]; url: string | null;
+  firstSeen: number; lastSeen: number; resolvedAt: number | null;
 }
 export interface ReputationAsset {
   id: number; target: string; kind: 'ip' | 'domain' | null; rdns: string | null;
   enabled: boolean; intervalS: number; status: ReputationStatus;
-  worstTier: ReputationTier | null; listings: ReputationListing[];
-  policy: string[]; unavailable: string[]; errored: string[]; zonesQueried: number | null;
+  worstTier: ReputationTier | null;
+  listings: ReputationListing[];        // currently open only; history has its own endpoint
+  policy: string[]; unavailable: string[]; errored: string[];
+  zonesQueried: number | null; zonesTotal: number | null;
   error: string | null; lastCheckedAt: number | null; lastDurationMs: number | null;
 }
 export interface ReputationCoverage {

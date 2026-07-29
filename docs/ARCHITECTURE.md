@@ -77,13 +77,40 @@ console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by a
 ## Reputation (`engine/reputation.js`, `routes/reputation.js`, page `Reputation.tsx`)
 
 Blocklist monitoring for the org's sending assets. **Its own feature, its own top-level
-page and its own API** (`/api/reputation/*`) — but deliberately not its own storage: an
-asset is a `synthetic_checks` row of type `reputation` and its history is
-`synthetic_results`. That reuse is what buys the scheduler, result history, event
-pipeline, alert rules, cases and status page without duplicated machinery, while the
-separate API and page keep the feature legible on its own terms. Reputation rows are
-excluded from the Synthetics surface entirely (GET hides them, POST refuses the type),
-and surface as their own `kind` in the `/api/assets` aggregate.
+page, its own API** (`/api/reputation/*`) **and its own storage** — three tables, with
+the split between them carrying the design:
+
+| Table | Holds | Retention |
+|---|---|---|
+| `reputation_assets` | the monitored IP or domain | — |
+| `reputation_runs` | one row per lookup (a time series) | pruned like every sample table |
+| `reputation_listings` | one row per **episode** of being listed, with `first_seen` / `resolved_at` | **kept** |
+
+The first version stored an asset as a `synthetic_checks` row of type `reputation` and
+its verdicts in `synthetic_results.meta`, to inherit the scheduler. That reuse was a
+mistake, and migration v11 undoes it. Three things went wrong, in rising order of cost:
+
+- **Fifteen `type != 'reputation'` guards** across six files. A row type that has to be
+  filtered out of nearly every query against its own table is not a member of that table,
+  and each guard was a place the next feature could forget.
+- **A forged-event path.** `recordResult` decided "this is a listing" from `meta`, which
+  arrives from `POST /v1/synthetics/report` — so a probe key could raise a severity-85
+  event and open a case against any check. That needed a gate; now the listing decision
+  lives entirely inside the engine and there is no input to gate.
+- **A model that could not answer the first question.** "Since when are we listed?" is
+  what anyone asks after a listing, and it is the evidence a delisting request is argued
+  with. A listing is a *state with a lifecycle*; `synthetic_results` is a table of
+  *samples*, pruned after 30 days. It could express neither the start date nor the
+  duration, and losing that history was silent.
+
+What the reuse actually bought was a ~20-line scheduler; the event pipeline, alert rules,
+cases and status page all hang off `pipeline.ingestEvent()`, which is an import, not a
+storage layout. The `type` CHECK on `synthetic_checks` deliberately still permits
+`reputation`: narrowing it means rebuilding a table that six figures of
+`synthetic_results` rows reference, and a permitted value that is never written again
+costs nothing.
+
+Assets surface as their own `kind` in the `/api/assets` aggregate.
 
 It is the one check that does not test reachability. A listed server answers perfectly well; it just stops being delivered, so
 a listing raises its own event (`reputation_listed`) rather than
@@ -122,9 +149,10 @@ a listing raises its own event (`reputation_listed`) rather than
   own, not the plan's — one IP asset is ~93 queries on a cold canary cache (31 zones plus
   both controls each) and 31 warm, against lists that rate-limit per source IP, so a plan
   that permits 15s HTTP checks must not be able to turn a handful of assets into a flood
-  that gets the whole host refused. For the same reason reputation is
-  **excluded from "run all checks"** (`POST /api/synthetics/run`, MCP
-  `opscat_run_checks` — both analyst-reachable); the per-asset
+  that gets the whole host refused. "Run all checks" (`POST /api/synthetics/run`, MCP
+  `opscat_run_checks` — both analyst-reachable) cannot reach reputation at all any more:
+  v10 needed an explicit filter to keep that button from flooding the lists, v11 simply
+  does not have the assets in that table. The per-asset
   `POST /api/reputation/assets/:id/run` is lead-only.
 - **A finding outranks a partial outage.** If some zones answered and one of them listed
   the asset the status is `listed`, not `unknown`, and the incompleteness rides along in
@@ -132,14 +160,20 @@ a listing raises its own event (`reputation_listed`) rather than
   just received. Coverage is reported **per kind**
   (`{ip:{queried,total,unavailable}, domain:{…}}`) because the denominators differ; one
   merged number made a domain-only org look catastrophic.
-- **Server-local, and that is a trust boundary.** Reputation is excluded from probe
-  distribution (`/v1/synthetics/checks`) *and* refused on submission
-  (`POST /v1/synthetics/report`). A DNSBL answer does not vary by vantage point the way
-  latency does and agents ship no runner for the type — but the load-bearing reason is
-  that probe-supplied `meta` is attacker-controlled: without the second half a probe key
-  could post a forged "clean" result over a real listing, or forge a `reputation_listed`
-  event (severity 85, auto-opened case) against any check. The event is therefore gated
-  on the **check row's own type**, never on the shape of `meta`.
+- **Server-local, and the trust boundary is now structural.** A DNSBL answer does not
+  vary by vantage point the way latency does, and agents ship no runner for it. In v10
+  that was enforced by two guards, because probe-supplied `meta` decided what counted as
+  a listing — without them a probe key could post a forged "clean" over a real listing or
+  raise a `reputation_listed` event against any check. `engine/reputation.js` is now the
+  only writer of runs and listings, and it acts on evidence it gathered itself, so the
+  guards are gone rather than merely satisfied.
+- **Delisting is observable.** Because a listing has a lifecycle, the engine can tell
+  "gone" from "never there" and raises `reputation_cleared` (severity 20, below the
+  alerting floor) when the last actionable episode closes — a clear event a `close_event`
+  automation can use to finish the raise and close its case. A listing is only ever
+  resolved by a zone that **answered that run**: a zone that refused, timed out or failed
+  its canary has told us nothing, and reading its silence as a delisting would erase a
+  live finding every time the resolver has a bad day.
 
 ## SNMP
 

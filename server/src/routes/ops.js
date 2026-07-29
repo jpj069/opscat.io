@@ -418,31 +418,31 @@ router.get('/assets', (req, res) => {
       : s >= 60 ? `every ${Math.round(s / 60)}m` : `every ${s}s`);
   for (const c of db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ?').all(req.orgId)) {
     const last = lastResult.get(c.id);
-    // reputation is its own feature (own page, own API) — surface it as its own
-    // kind here too, otherwise it hides among the reachability checks
-    const isRep = c.type === 'reputation';
-    let status;
-    if (!c.enabled) status = 'disabled';
-    else if (!last || last.ts == null) status = 'pending';
-    else if (last.ok) status = 'ok';
-    else if (!isRep) status = 'failing';
-    else {
-      // A failing reputation check is EITHER a real listing OR a run that could
-      // not complete (no critical zone answered). Calling the second one
-      // "listed" would put a blocklist finding on an asset nobody has evidence
-      // against — the whole point of the unknown state.
-      let meta = null;
-      try { meta = last.meta ? JSON.parse(last.meta) : null; } catch { /* keep null */ }
-      const listed = meta && Array.isArray(meta.listed)
-        ? meta.listed.filter((l) => l.tier !== 'informational') : [];
-      status = listed.length ? 'listed' : 'unknown';
-    }
     rows.push({
-      kind: isRep ? 'reputation' : 'check', id: c.id,
-      name: isRep ? c.target : `${c.type} ${c.target}`,
-      detail: isRep ? `blocklists · ${everyLabel(c.interval_s)}` : `every ${c.interval_s}s`,
-      status,
+      kind: 'check', id: c.id, name: `${c.type} ${c.target}`,
+      detail: `every ${c.interval_s}s`,
+      status: !c.enabled ? 'disabled'
+        : (!last || last.ts == null) ? 'pending' : last.ok ? 'ok' : 'failing',
       lastSeen: last ? last.ts : null,
+    });
+  }
+  // Reputation is its own feature (own page, own tables) and surfaces as its own
+  // kind — otherwise it hides among the reachability checks. The run's stored
+  // status IS the asset status: the distinction that matters here, a real
+  // listing versus a run that could not complete, was decided by the engine
+  // when it had the evidence in hand, so nothing is reconstructed from a blob.
+  const lastRepRun = db.prepare(
+    'SELECT status, ts FROM reputation_runs WHERE asset_id = ? ORDER BY ts DESC, id DESC LIMIT 1');
+  // 'clean' and 'informational' are both fine on an inventory screen; only a real
+  // listing or an incomplete run deserve attention here.
+  const REP_STATUS = { clean: 'ok', informational: 'ok', listed: 'listed', unknown: 'unknown' };
+  for (const a of db.prepare('SELECT * FROM reputation_assets WHERE org_id = ?').all(req.orgId)) {
+    const run = lastRepRun.get(a.id);
+    rows.push({
+      kind: 'reputation', id: a.id, name: a.target,
+      detail: `blocklists · ${everyLabel(a.interval_s)}`,
+      status: !a.enabled ? 'disabled' : run ? (REP_STATUS[run.status] || run.status) : 'pending',
+      lastSeen: run ? run.ts : null,
     });
   }
   for (const hb of db.prepare('SELECT * FROM heartbeats WHERE org_id = ?').all(req.orgId)) {

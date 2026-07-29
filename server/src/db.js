@@ -229,6 +229,79 @@ const MIGRATIONS = [
       ALTER TABLE synthetic_checks_v2 RENAME TO synthetic_checks;
     `);
   },
+  // idx 10 -> version 11: reputation gets its own tables. v10 stored an asset as
+  // a `synthetic_checks` row of type 'reputation' and its verdicts as
+  // `synthetic_results.meta`. That reuse bought a scheduler and cost fifteen
+  // `type != 'reputation'` guards, a forged-event path (probe-supplied meta
+  // decided "this is a listing"), and — the reason this migration exists — a
+  // model that cannot answer "since when are we listed?", because a listing is a
+  // state with a lifecycle and synthetic_results is a table of samples.
+  //
+  // The `type` CHECK on synthetic_checks deliberately KEEPS 'reputation' as a
+  // legal value. Narrowing it means rebuilding the table, and synthetic_results
+  // (six figures of rows on a live instance) plus check_locations reference it.
+  // A permitted value that is never written again costs nothing; that rebuild
+  // could cost data.
+  () => {
+    const rows = db.prepare("SELECT * FROM synthetic_checks WHERE type = 'reputation' ORDER BY id").all();
+    if (!rows.length) return; // fresh install, or no assets were ever created
+
+    // kind normally comes from the stored verdict; this fallback only has to
+    // separate an address from a name — db.js must not import the engine, which
+    // imports db.js.
+    const kindOf = (t) => (/^[0-9.]+$/.test(t) || t.includes(':') ? 'ip' : 'domain');
+    const insAsset = db.prepare(`INSERT INTO reputation_assets
+      (org_id, target, kind, rdns, interval_s, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    const insRun = db.prepare(`INSERT INTO reputation_runs
+      (asset_id, ts, status, zones_queried, zones_total, worst_tier, duration_ms,
+       unavailable, errored, policy, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insListing = db.prepare(`INSERT INTO reputation_listings
+      (asset_id, zone, name, tier, codes, url, first_seen, last_seen, resolved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+    const lastResult = db.prepare(
+      'SELECT ts, meta FROM synthetic_results WHERE check_id = ? ORDER BY ts DESC, id DESC LIMIT 1');
+
+    for (const c of rows) {
+      const last = lastResult.get(c.id);
+      let meta = null;
+      try { meta = last && last.meta ? JSON.parse(last.meta) : null; } catch { meta = null; }
+      const assetId = insAsset.run(c.org_id, c.target, (meta && meta.kind) || kindOf(c.target),
+        (meta && meta.rdns) || null, c.interval_s, c.enabled, c.created_at).lastInsertRowid;
+
+      // Carry the latest verdict across. Historical samples are deliberately not
+      // migrated — they are the part with a 30-day retention anyway — but an OPEN
+      // listing must survive, or the migration would silently clear a critical
+      // finding the on-call is currently working.
+      if (!meta) continue;
+      const listed = Array.isArray(meta.listed) ? meta.listed : [];
+      const actionable = listed.filter((l) => l && l.tier !== 'informational');
+      const status = actionable.length ? 'listed'
+        : meta.error ? 'unknown'
+          : listed.length ? 'informational' : 'clean';
+      insRun.run(assetId, last.ts, status, meta.zonesQueried ?? 0, meta.zonesQueried ?? 0,
+        meta.worstTier || null, null,
+        meta.unavailable ? JSON.stringify(meta.unavailable) : null,
+        meta.errored ? JSON.stringify(meta.errored) : null,
+        meta.policy ? JSON.stringify(meta.policy) : null,
+        meta.error || null);
+      // first_seen is the run we are reading: the old model never recorded when a
+      // listing began, and dating it earlier would be an invention.
+      for (const l of listed) {
+        if (!l || !l.zone) continue;
+        insListing.run(assetId, l.zone, l.name || l.zone, l.tier || 'standard',
+          l.codes ? JSON.stringify(l.codes) : null, l.url || null, last.ts, last.ts);
+      }
+    }
+
+    // Foreign keys are OFF during migrations, so the ON DELETE CASCADE that would
+    // normally clear these does not fire — and foreign_key_check runs afterwards.
+    const ids = rows.map((r) => r.id).join(',');
+    db.exec(`
+      DELETE FROM synthetic_results WHERE check_id IN (${ids});
+      DELETE FROM check_locations  WHERE check_id IN (${ids});
+      DELETE FROM synthetic_checks WHERE id       IN (${ids});
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

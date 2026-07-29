@@ -112,6 +112,7 @@ seed();
 require('./engine/alerts').start();
 require('./engine/automations').start();
 require('./engine/synthetics').start();
+require('./engine/reputation').start();
 require('./engine/snmp').start();
 require('./engine/heartbeats').start();
 require('./engine/vendors').start();

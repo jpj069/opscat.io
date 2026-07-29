@@ -10,7 +10,6 @@ const { db } = require('../db');
 const config = require('../config');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
-const reputation = require('./reputation');
 
 const insResult = db.prepare(`INSERT INTO synthetic_results
   (check_id, location_id, ts, ok, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?)`);
@@ -247,73 +246,7 @@ async function checkTraceroute(check) {
   return { ok: hops.length > 0 && !!last, latency: last ? last.ms : null, meta: { hops: hops.slice(0, 20) } };
 }
 
-// Blocklist reputation. Unlike every other runner this does not test reachability
-// — a listed mail server answers fine, it just stops being delivered. `ok` is
-// therefore "not listed anywhere that matters":
-//   critical/standard listing -> ok:false, raises reputation_listed
-//   informational only        -> ok:true, recorded but never alerted (UCEPROTECT
-//                                L3 and friends list whole ASNs, so a clean
-//                                sender gets caught by a noisy neighbour)
-//   no critical zone reachable-> ok:false, because the check did not actually run
-async function checkReputation(check) {
-  const started = process.hrtime.bigint();
-  let res;
-  try {
-    res = await reputation.lookup(check.target, check.timeout_ms || reputation.DEFAULT_TIMEOUT_MS);
-  } catch (e) {
-    return { ok: false, latency: null, meta: { error: String(e.message).slice(0, 120) } };
-  }
-  const latency = Number(process.hrtime.bigint() - started) / 1e6;
-  const actionable = res.listed.filter((l) => l.tier !== 'informational');
-
-  // Reverse DNS names the asset in operator terms — "mail4.link11.com" says far
-  // more in a table than "85.131.131.20". Best-effort and never fatal: a sender
-  // without a PTR is a finding of its own, not a reason to fail the check.
-  let rdns = null;
-  if (res.kind === 'ip') {
-    try {
-      const names = await dns.promises.reverse(check.target);
-      if (names && names.length) rdns = String(names[0]).slice(0, 253);
-    } catch { /* no PTR, or resolver refused — leave null */ }
-  }
-
-  // synthetic_results.meta is truncated at 4000 chars, so keep the payload lean:
-  // full detail lives on the event, the row keeps counts plus the top findings.
-  const meta = {
-    kind: res.kind,
-    rdns,
-    zonesQueried: res.zonesQueried,
-    listedCount: res.listed.length,
-    // The count the event headline uses. Computed here, where the FULL list is
-    // in hand — `listed` below is truncated to the top 10, and informational
-    // entries are pushed out first (they sort last), so reconstructing this
-    // downstream systematically overcounts.
-    actionableCount: actionable.length,
-    worstTier: res.worstTier,
-    listed: res.listed.slice(0, 10).map((l) => ({
-      name: l.name, zone: l.zone, tier: l.tier, codes: l.codes.slice(0, 3), url: l.url,
-    })),
-  };
-  if (res.policy.length) meta.policy = res.policy.map((p) => p.name);
-  if (res.unavailable.length) meta.unavailable = res.unavailable.map((u) => u.name);
-  // Named, not just counted: an unnamed error is indistinguishable from
-  // "clean" once the per-zone breakdown is rendered from the catalog.
-  if (res.errored && res.errored.length) meta.errored = res.errored.map((e) => e.name);
-  if (res.errors) meta.errors = res.errors;
-
-  if (!res.criticalCovered) {
-    // Every critical zone refused or timed out. Reporting "clean" here would be
-    // a lie of omission, so fail the check instead and say why.
-    meta.error = 'no critical blocklist reachable — check the resolver (OPSCAT_REPUTATION_DNS)';
-    return { ok: false, latency, meta };
-  }
-  return { ok: actionable.length === 0, latency, meta };
-}
-
-const RUNNERS = {
-  http: checkHttp, icmp: checkIcmp, dns: checkDns, tcp: checkTcp,
-  traceroute: checkTraceroute, reputation: checkReputation,
-};
+const RUNNERS = { http: checkHttp, icmp: checkIcmp, dns: checkDns, tcp: checkTcp, traceroute: checkTraceroute };
 
 // ---- recording + failure events --------------------------------------------
 
@@ -331,38 +264,7 @@ function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
       }, 'synthetics', false, check.org_id);
     }
   }
-  // A blocklist listing gets its own event: the asset is reachable, so
-  // "synthetic_check_failed" would send whoever is on call looking for an
-  // outage. It also fires on first detection rather than after two consecutive
-  // failures — a listing is a state, not a flap.
-  //
-  // Gated on the CHECK ROW's own type, never on the shape of `meta`: meta can
-  // arrive from a remote probe (POST /v1/synthetics/report) and is therefore
-  // attacker-controlled. Reading `meta.listed` alone would let any probe key
-  // forge a severity-85 event (and an auto-opened case) against any check.
-  let listedEvent = false;
-  if (meta && Array.isArray(meta.listed) && meta.listed.length) {
-    const check = getCheck.get(checkId);
-    if (check && check.type === 'reputation') {
-      const actionable = meta.listed.filter((l) => l.tier !== 'informational');
-      if (actionable.length) {
-        listedEvent = true;
-        // meta.listed is truncated to the top 10, so the count comes from
-        // actionableCount, which checkReputation computed on the full list.
-        const total = Number.isFinite(meta.actionableCount)
-          ? Math.max(actionable.length, meta.actionableCount)
-          : actionable.length;
-        const names = actionable.map((l) => l.name).join(', ');
-        pipeline.ingestEvent({
-          name: 'reputation_listed', device: check.target, target: check.target,
-          severity: reputation.TIER_SEVERITY[meta.worstTier] || 65,
-          description: `reputation_listed ${check.target} listed on ${total} blocklist(s): ${names}`.slice(0, 300),
-        }, 'synthetics', false, check.org_id);
-      }
-    }
-  }
-
-  if (!ok && !listedEvent) {
+  if (!ok) {
     // only raise an event after 2 consecutive failures to avoid flapping
     const recent = lastFails.all(checkId, locationId);
     const consecutiveFails = recent.length >= 2 && recent[0].ok === 0 && recent[1].ok === 0;
@@ -397,9 +299,7 @@ async function tick() {
       const runner = RUNNERS[check.type];
       if (!runner) continue;
       const locId = ensureLocalLocation(check.org_id);
-      // reputation is server-local by design (see /v1/synthetics/checks), so it
-      // ignores location assignment rather than silently never running
-      if (check.type !== 'reputation' && !runsOnLocation(check.id, locId)) continue; // assigned to other agents only
+      if (!runsOnLocation(check.id, locId)) continue; // assigned to other agents only
       runner(check)
         .then((res) => recordResult(check.id, locId, res))
         .catch((e) => recordResult(check.id, locId, { ok: false, latency: null, meta: { error: String(e.message).slice(0, 100) } }));
@@ -410,16 +310,7 @@ async function tick() {
 // Run every enabled check for one org now (or all orgs if orgId omitted).
 async function runAllNow(orgId = null) {
   const results = [];
-  const checks = getChecks.all()
-    .filter((c) => orgId == null || c.org_id === orgId)
-    // Reputation is excluded on purpose. This is reachable by any analyst
-    // (POST /api/synthetics/run, MCP opscat_run_checks) and one reputation asset
-    // is ~93 queries on a cold canary cache against third-party lists that
-    // rate-limit per source IP —
-    // a "run everything" button must not be able to get the host refused by
-    // Spamhaus. Reputation has its own per-asset run at POST
-    // /api/reputation/assets/:id/run (lead role).
-    .filter((c) => c.type !== 'reputation');
+  const checks = getChecks.all().filter((c) => orgId == null || c.org_id === orgId);
   for (const check of checks) {
     lastRun.set(check.id, now());
     const runner = RUNNERS[check.type];
@@ -438,23 +329,10 @@ async function runAllNow(orgId = null) {
   return results;
 }
 
-// Run one check immediately and record it, bypassing the interval. Used by the
-// "check now" buttons; returns the runner result so the caller can respond with
-// the fresh verdict instead of making the client poll for it.
-async function runCheckNow(check) {
-  const runner = RUNNERS[check.type];
-  if (!runner) throw new Error(`unknown check type: ${check.type}`);
-  const locId = ensureLocalLocation(check.org_id);
-  lastRun.set(check.id, now());
-  const res = await runner(check);
-  recordResult(check.id, locId, res);
-  return res;
-}
-
 function start() {
   ensureLocalLocation(1);
   const iv = setInterval(tick, 5000);
   iv.unref();
 }
 
-module.exports = { start, runAllNow, runCheckNow, recordResult, RUNNERS, assertPublicHost };
+module.exports = { start, runAllNow, recordResult, RUNNERS, assertPublicHost };

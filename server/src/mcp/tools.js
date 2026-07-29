@@ -226,7 +226,7 @@ const TOOLS = [
       // state, not reachability) and `lastOk:false` on one means "listed", not
       // "down" — an agent reading this list would report an outage that is not one.
       const rows = db.prepare(
-        "SELECT * FROM synthetic_checks WHERE org_id = ? AND type != 'reputation' ORDER BY id").all(p.orgId);
+        'SELECT * FROM synthetic_checks WHERE org_id = ? ORDER BY id').all(p.orgId);
       const last = db.prepare(`SELECT ok, latency_ms, ts FROM synthetic_results
         WHERE check_id = ? ORDER BY ts DESC LIMIT 1`);
       let checks = rows.map((c) => {
@@ -307,7 +307,7 @@ const TOOLS = [
     handler: (_a, p) => {
       const one = (sql, ...args) => db.prepare(sql).get(p.orgId, ...args).c;
       const t = now();
-      const failing = db.prepare("SELECT c.id FROM synthetic_checks c WHERE c.org_id = ? AND c.enabled = 1 AND c.type != 'reputation'")
+      const failing = db.prepare('SELECT c.id FROM synthetic_checks c WHERE c.org_id = ? AND c.enabled = 1')
         .all(p.orgId)
         .filter((c) => {
           const r = db.prepare('SELECT ok FROM synthetic_results WHERE check_id = ? ORDER BY ts DESC LIMIT 1').get(c.id);

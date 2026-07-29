@@ -244,12 +244,8 @@ function setCheckLocations(req, checkId, locationIds) {
   }
 }
 
-// Reputation assets live on their own page (/api/reputation/assets) — they are a
-// separate feature that merely reuses this table, so they are excluded here
-// rather than cluttering the reachability view with checks that never measure it.
 router.get('/checks', (req, res) => {
-  const checks = db.prepare(
-    "SELECT * FROM synthetic_checks WHERE org_id = ? AND type != 'reputation' ORDER BY id")
+  const checks = db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ? ORDER BY id')
     .all(req.orgId);
   const t = now();
   const locIds = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?');
@@ -268,11 +264,6 @@ router.get('/checks', (req, res) => {
 
 router.post('/checks', sec.requireRole('lead'), (req, res) => {
   const { type, target, intervalS, timeoutMs, assertions, locationIds } = req.body || {};
-  // 'reputation' is a valid row type but belongs to its own feature and endpoint;
-  // accepting it here would create assets this API's own GET then hides.
-  if (type === 'reputation') {
-    return httpError(res, 400, 'reputation assets are managed at /api/reputation/assets');
-  }
   if (!['http', 'icmp', 'dns', 'tcp', 'traceroute'].includes(type)) return httpError(res, 400, 'bad type');
   if (!isStr(target, 300)) return httpError(res, 400, 'target required');
   if (!withinPlan(req, res, 'checks')) return undefined;
@@ -288,8 +279,7 @@ router.post('/checks', sec.requireRole('lead'), (req, res) => {
 });
 
 router.patch('/checks/:id', sec.requireRole('lead'), (req, res) => {
-  const c = db.prepare(
-    "SELECT * FROM synthetic_checks WHERE id = ? AND org_id = ? AND type != 'reputation'")
+  const c = db.prepare('SELECT * FROM synthetic_checks WHERE id = ? AND org_id = ?')
     .get(req.params.id, req.orgId);
   if (!c) return httpError(res, 404, 'check not found');
   const b = req.body || {};
@@ -308,7 +298,7 @@ router.patch('/checks/:id', sec.requireRole('lead'), (req, res) => {
 });
 
 router.delete('/checks/:id', sec.requireRole('lead'), (req, res) => {
-  db.prepare("DELETE FROM synthetic_checks WHERE id = ? AND org_id = ? AND type != 'reputation'")
+  db.prepare('DELETE FROM synthetic_checks WHERE id = ? AND org_id = ?')
     .run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'check_delete', `check ${req.params.id}`, req.orgId);
   res.json({ ok: true });
@@ -326,7 +316,7 @@ router.get('/results', (req, res) => {
     JOIN (SELECT check_id, location_id, MAX(ts) mts FROM synthetic_results
           WHERE ts >= ? GROUP BY check_id, location_id) m
       ON m.check_id = r.check_id AND m.location_id = r.location_id AND m.mts = r.ts
-    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ? AND c.type != 'reputation'
+    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ?
     JOIN synthetic_locations loc ON loc.id = r.location_id AND (loc.org_id = ? OR loc.kind = 'managed')`)
     .all(since, req.orgId, req.orgId)
     .map((r) => ({ checkId: r.check_id, locationId: r.location_id, ts: r.ts, ok: !!r.ok,
@@ -348,7 +338,7 @@ router.get('/history', (req, res) => {
       SUM(r.ok) oks, COUNT(*) total,
       AVG(CASE WHEN r.ok = 1 THEN r.latency_ms END) ms
     FROM synthetic_results r
-    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ? AND c.type != 'reputation'
+    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ?
     WHERE r.ts >= ? GROUP BY r.check_id, b`).all(since, bucketMs, req.orgId, since);
   const byCheck = new Map();
   for (const r of rows) {
@@ -380,7 +370,7 @@ router.get('/results/series', (req, res) => {
   const hours = clampInt(req.query.hours, 1, 168, 24);
   if (!checkId || !locationId) return httpError(res, 400, 'checkId and locationId required');
   const rows = db.prepare(`SELECT r.ts, r.ok, r.latency_ms FROM synthetic_results r
-    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ? AND c.type != 'reputation'
+    JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ?
     JOIN synthetic_locations loc ON loc.id = r.location_id AND (loc.org_id = ? OR loc.kind = 'managed')
     WHERE r.check_id = ? AND r.location_id = ? AND r.ts >= ? ORDER BY r.ts`)
     .all(req.orgId, req.orgId, checkId, locationId, now() - hours * 3600000);

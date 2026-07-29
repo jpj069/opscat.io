@@ -48,6 +48,64 @@ const canaries = (zones, extra = {}) => {
   return t;
 };
 
+
+// Build a v10-shaped database and load db.js against it in a CHILD process —
+// db.js is a singleton, so the migration cannot be re-run in this one. Verifies
+// the part that would silently lose data: an open critical listing must survive
+// the move out of synthetic_results.
+async function migrationCarriesOver() {
+  const { execFileSync } = require('child_process');
+  const Database = require('better-sqlite3');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-mig-'));
+  const d = new Database(path.join(dir, 'opscat.db'));
+  d.exec(fs.readFileSync(path.join(__dirname, 'src', 'schema.sql'), 'utf8'));
+  // v10 had no reputation tables at all
+  d.exec('DROP TABLE reputation_listings; DROP TABLE reputation_runs; DROP TABLE reputation_assets;');
+  d.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+    VALUES (1, 'e2e', 'e2e', 'enterprise', 'active', ?)`).run(Date.now());
+  const cid = d.prepare(`INSERT INTO synthetic_checks
+      (org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at)
+    VALUES (1, 'reputation', '198.51.100.7', 21600, 3000, 1, NULL, ?)`).run(Date.now()).lastInsertRowid;
+  const loc = d.prepare(`INSERT INTO synthetic_locations (org_id, city, cc, kind, created_at)
+    VALUES (1, 'x', 'XX', 'local', ?)`).run(Date.now()).lastInsertRowid;
+  d.prepare(`INSERT INTO synthetic_results (check_id, location_id, ts, ok, latency_ms, meta)
+    VALUES (?, ?, ?, 0, 50, ?)`).run(cid, loc, 1700000000000, JSON.stringify({
+      kind: 'ip', rdns: 'mail.example.net', zonesQueried: 30, worstTier: 'critical',
+      listed: [{ name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org', tier: 'critical',
+        codes: ['127.0.0.2'], url: 'https://check.spamhaus.org/' }],
+    }));
+  d.pragma('user_version = 10');
+  d.close();
+
+  const probe = `
+    const { db } = require(${JSON.stringify(path.join(__dirname, 'src', 'db.js'))});
+    console.log(JSON.stringify({
+      v: db.pragma('user_version', { simple: true }),
+      assets: db.prepare('SELECT * FROM reputation_assets').all(),
+      listings: db.prepare('SELECT * FROM reputation_listings').all(),
+      runs: db.prepare('SELECT * FROM reputation_runs').all(),
+      leftover: db.prepare("SELECT COUNT(*) c FROM synthetic_checks WHERE type = 'reputation'").get().c,
+      orphanResults: db.prepare('SELECT COUNT(*) c FROM synthetic_results WHERE check_id = ' + ${cid}).get().c,
+    }));`;
+  let out;
+  try {
+    out = execFileSync(process.execPath, ['-e', probe], {
+      env: { ...process.env, OPSCAT_DATA_DIR: dir, OPSCAT_SECRET: 'mig' }, encoding: 'utf8',
+    });
+  } catch (e) { return false; }
+  let r;
+  try { r = JSON.parse(String(out).trim().split('\n').pop()); } catch { return false; }
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+
+  return r.v === 11
+    && r.assets.length === 1 && r.assets[0].target === '198.51.100.7'
+    && r.assets[0].kind === 'ip' && r.assets[0].rdns === 'mail.example.net'
+    && r.listings.length === 1 && r.listings[0].zone === 'zen.spamhaus.org'
+    && r.listings[0].resolved_at === null && r.listings[0].first_seen === 1700000000000
+    && r.runs.length === 1 && r.runs[0].status === 'listed'
+    && r.leftover === 0 && r.orphanResults === 0;
+}
+
 async function main() {
   const IP = reputation.IP_ZONES;
   const CRIT = IP.filter((z) => z.tier === 'critical');
@@ -143,120 +201,175 @@ async function main() {
   chk('standard maps to major', reputation.TIER_SEVERITY.standard >= 60 && reputation.TIER_SEVERITY.standard < 80);
   chk('informational stays below the alerting floor', reputation.TIER_SEVERITY.informational < 40);
 
-  // ── 6. schema: the type CHECK accepts reputation ─────────────────────────
+  // ── 6. storage: assets, runs and listings are their own tables ───────────
   const { db } = require('./src/db');
   const org = db.prepare('SELECT id FROM organizations ORDER BY id LIMIT 1').get();
   chk('a bootstrapped org exists', !!org);
-  const ins = db.prepare(`INSERT INTO synthetic_checks
-      (org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at)
-    VALUES (?, 'reputation', ?, 21600, 3000, 1, NULL, ?)`);
-  let repId = null;
-  try { repId = ins.run(org.id, '203.0.113.9', Date.now()).lastInsertRowid; } catch (e) { /* reported below */ }
-  chk('a reputation check row inserts', !!repId);
-  let rejected = false;
-  try {
-    db.prepare(`INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms, enabled, created_at)
-      VALUES (?, 'bogus', 'x', 60, 1000, 1, ?)`).run(org.id, Date.now());
-  } catch { rejected = true; }
-  chk('an unknown check type is still rejected by the CHECK constraint', rejected);
+  chk('the database is at schema v11', db.pragma('user_version', { simple: true }) === 11,
+    String(db.pragma('user_version', { simple: true })));
 
+  const assetId = db.prepare(`INSERT INTO reputation_assets
+      (org_id, target, kind, rdns, interval_s, enabled, created_at)
+    VALUES (?, '203.0.113.9', 'ip', NULL, 21600, 1, ?)`).run(org.id, Date.now()).lastInsertRowid;
+  chk('a reputation asset inserts', !!assetId);
+
+  let badKind = false;
+  try {
+    db.prepare(`INSERT INTO reputation_assets (org_id, target, kind, interval_s, enabled, created_at)
+      VALUES (?, 'x', 'bogus', 3600, 1, ?)`).run(org.id, Date.now());
+  } catch { badKind = true; }
+  chk('kind is constrained to ip|domain', badKind);
+
+  // ── 7. the listing lifecycle ─────────────────────────────────────────────
+  // This is what the model change bought: a listing is an episode with a start
+  // and an end, not a field on the newest sample.
+  const t0 = Date.now();
+  const fZen = { name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org', tier: 'critical', codes: ['127.0.0.2'], url: null };
+
+  let sync = reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org', 'bl.spamcop.net'], t0);
+  chk('a new finding opens a listing', sync.opened.length === 1 && sync.resolved.length === 0);
+  const openNow = () => db.prepare(
+    'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL ORDER BY zone').all(assetId);
+  chk('the listing records when it started', openNow().length === 1 && openNow()[0].first_seen === t0);
+
+  // Same finding again: the episode continues, first_seen must NOT move.
+  sync = reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org', 'bl.spamcop.net'], t0 + 60000);
+  chk('a continuing listing is not reopened', sync.opened.length === 0 && openNow().length === 1);
+  chk('first_seen stays put while last_seen advances',
+    openNow()[0].first_seen === t0 && openNow()[0].last_seen === t0 + 60000);
+
+  // THE load-bearing rule: a zone that did not answer must not clear a listing.
+  // Without this a resolver having a bad day silently erases a live critical
+  // finding — the same failure the RFC 5782 canary exists to prevent, one level up.
+  sync = reputation.syncListings(assetId, [], ['bl.spamcop.net'], t0 + 120000);
+  chk('a SILENT zone never resolves a listing',
+    sync.resolved.length === 0 && openNow().length === 1,
+    `resolved ${sync.resolved.length}, still open ${openNow().length}`);
+
+  // …but a zone that answered and no longer lists it does.
+  sync = reputation.syncListings(assetId, [], ['zen.spamhaus.org', 'bl.spamcop.net'], t0 + 180000);
+  chk('an ANSWERING zone resolves the listing',
+    sync.resolved.length === 1 && openNow().length === 0);
+  const episodes = db.prepare('SELECT * FROM reputation_listings WHERE asset_id = ? ORDER BY id').all(assetId);
+  chk('the resolved episode keeps its full span',
+    episodes.length === 1 && episodes[0].first_seen === t0 && episodes[0].resolved_at === t0 + 180000);
+
+  // A re-listing after a delisting is a NEW episode, not a revived one — so the
+  // history reads as distinct incidents rather than one smear.
+  reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org'], t0 + 240000);
+  const all = db.prepare('SELECT * FROM reputation_listings WHERE asset_id = ? ORDER BY id').all(assetId);
+  chk('a re-listing opens a second episode',
+    all.length === 2 && all[1].first_seen === t0 + 240000 && all[1].resolved_at === null);
+  chk('at most one episode per zone is open at a time',
+    all.filter((l) => l.zone === fZen.zone && l.resolved_at === null).length === 1);
+
+  // The partial unique index enforces that at the storage layer too.
+  let dupOpen = false;
+  try {
+    db.prepare(`INSERT INTO reputation_listings
+      (asset_id, zone, name, tier, codes, url, first_seen, last_seen, resolved_at)
+      VALUES (?, 'zen.spamhaus.org', 'Spamhaus ZEN', 'critical', NULL, NULL, ?, ?, NULL)`)
+      .run(assetId, Date.now(), Date.now());
+  } catch { dupOpen = true; }
+  chk('the schema refuses a second open episode for the same zone', dupOpen);
+  db.prepare('DELETE FROM reputation_listings WHERE asset_id = ?').run(assetId);
+
+  // ── 8. events come from the engine, on evidence it gathered itself ───────
+  const evCount = (name) => db.prepare('SELECT COUNT(*) c FROM events WHERE name = ?').get(name).c;
+  const asset = db.prepare('SELECT * FROM reputation_assets WHERE id = ?').get(assetId);
+
+  reputation.resetCanaryCache();
+  const listedTable = canaries(IP, { [`9.113.0.203.${CRIT[0].zone}`]: ['127.0.0.2'] });
+  // runAsset calls the real lookup; point it at the stub for the duration.
+  const beforeListed = evCount('reputation_listed');
+  await reputation.runAsset(asset, 500, stubResolver(listedTable));
+  chk('a critical listing raises reputation_listed', evCount('reputation_listed') === beforeListed + 1,
+    `${beforeListed} -> ${evCount('reputation_listed')}`);
+  const ev = db.prepare("SELECT * FROM events WHERE name = 'reputation_listed' ORDER BY id DESC LIMIT 1").get();
+  chk('the event carries the critical severity', ev && ev.severity === reputation.TIER_SEVERITY.critical,
+    ev ? String(ev.severity) : 'no event');
+  chk('the event names the asset', ev && ev.device === '203.0.113.9', ev ? ev.device : '');
+  chk('the run is stored as listed',
+    db.prepare('SELECT status FROM reputation_runs WHERE asset_id = ? ORDER BY id DESC LIMIT 1')
+      .get(assetId).status === 'listed');
+  chk('the listing episode was opened by the run',
+    db.prepare('SELECT COUNT(*) c FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL')
+      .get(assetId).c === 1);
+
+  // Delisting is now observable — the sample model could not tell "gone" from
+  // "never there", so this event could not exist before.
+  const beforeCleared = evCount('reputation_cleared');
+  await reputation.runAsset(asset, 500, stubResolver(canaries(IP)));
+  chk('delisting raises reputation_cleared', evCount('reputation_cleared') === beforeCleared + 1,
+    `${beforeCleared} -> ${evCount('reputation_cleared')}`);
+  chk('reputation_cleared stays below the alerting floor',
+    db.prepare("SELECT severity FROM events WHERE name = 'reputation_cleared' ORDER BY id DESC LIMIT 1")
+      .get().severity < 40);
+  chk('the episode is closed with a resolved_at',
+    db.prepare('SELECT COUNT(*) c FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NOT NULL')
+      .get(assetId).c >= 1);
+
+  // Informational-only findings are recorded but never alert.
+  reputation.resetCanaryCache();
+  const infoZ = IP.find((z) => z.tier === 'informational');
+  const beforeInfoEv = evCount('reputation_listed');
+  await reputation.runAsset(asset, 500,
+    stubResolver(canaries(IP, { [`9.113.0.203.${infoZ.zone}`]: ['127.0.0.2'] })));
+  chk('an informational-only listing raises no event', evCount('reputation_listed') === beforeInfoEv);
+  chk('…but is still recorded as an episode',
+    db.prepare('SELECT COUNT(*) c FROM reputation_listings WHERE asset_id = ? AND zone = ?')
+      .get(assetId, infoZ.zone).c === 1);
+  chk('…and the run status is informational, not listed',
+    db.prepare('SELECT status FROM reputation_runs WHERE asset_id = ? ORDER BY id DESC LIMIT 1')
+      .get(assetId).status === 'informational');
+
+  // ── 9. the forged-event path is GONE, not guarded ────────────────────────
+  // v10 gated the event on the check row's type because `meta` arrived from
+  // POST /v1/synthetics/report. The listing decision now lives entirely inside
+  // the engine, so there is no input to gate — which is the point of the rewrite.
+  const srcOf = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
+  const synth = require('./src/engine/synthetics');
+  chk('synthetics no longer knows about reputation at all',
+    !/reputation/i.test(srcOf('engine/synthetics.js')));
+  chk('recordResult cannot raise a listing event',
+    !/reputation_listed/.test(srcOf('engine/synthetics.js')));
+  chk('only the reputation engine writes listing events',
+    /reputation_listed/.test(srcOf('engine/reputation.js')));
+
+  // A probe posting a hand-made "listing" now lands in synthetic_results and is
+  // simply meaningless there — no event, no listing, nothing to gate.
   const httpId = db.prepare(`INSERT INTO synthetic_checks
       (org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at)
     VALUES (?, 'http', 'https://example.com', 60, 3000, 1, NULL, ?)`)
     .run(org.id, Date.now()).lastInsertRowid;
-
-  // ── 7. the trust boundary: probe-supplied meta must not forge an event ───
-  // recordResult reads `meta` that can arrive from POST /v1/synthetics/report.
-  // A listing event may only be raised for a check whose OWN type is reputation.
-  const synth = require('./src/engine/synthetics');
   const loc = db.prepare(
     "INSERT INTO synthetic_locations (org_id, city, cc, kind, created_at) VALUES (?, 'e2e', 'XX', 'local', ?)")
     .run(org.id, Date.now()).lastInsertRowid;
-  const evCount = () => db.prepare("SELECT COUNT(*) c FROM events WHERE name = 'reputation_listed'").get().c;
-
-  const forged = {
-    kind: 'ip', zonesQueried: 32, listedCount: 1, worstTier: 'critical',
+  const beforeForge = evCount('reputation_listed');
+  synth.recordResult(httpId, loc, { ok: true, latency: 12, meta: {
+    kind: 'ip', worstTier: 'critical',
     listed: [{ name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org', tier: 'critical', codes: ['127.0.0.2'] }],
-  };
-  const before = evCount();
-  synth.recordResult(httpId, loc, { ok: true, latency: 12, meta: forged });
-  chk('a forged listing on an http check raises no event', evCount() === before,
-    `events went ${before} -> ${evCount()}`);
+  } });
+  chk('a probe cannot forge a listing event', evCount('reputation_listed') === beforeForge);
+  chk('…nor an episode in the listing history',
+    db.prepare('SELECT COUNT(*) c FROM reputation_listings WHERE zone = ? AND asset_id != ?')
+      .get('zen.spamhaus.org', assetId).c === 0);
 
-  synth.recordResult(repId, loc, { ok: false, latency: 40, meta: forged });
-  chk('a real listing on a reputation check raises the event', evCount() === before + 1,
-    `events went ${before} -> ${evCount()}`);
-  const ev = db.prepare("SELECT * FROM events WHERE name = 'reputation_listed' ORDER BY id DESC LIMIT 1").get();
-  chk('the event carries the critical severity', ev && ev.severity === reputation.TIER_SEVERITY.critical,
-    ev ? String(ev.severity) : 'no event');
-  chk('the event names the asset, not a probe', ev && ev.device === '203.0.113.9', ev ? ev.device : '');
-
-  // informational-only findings are recorded but never alert
-  const infoMeta = {
-    kind: 'ip', zonesQueried: 32, listedCount: 1, worstTier: 'informational',
-    listed: [{ name: 'UCEPROTECT L3', zone: 'dnsbl-3.uceprotect.net', tier: 'informational', codes: ['127.0.0.2'] }],
-  };
-  const beforeInfo = evCount();
-  synth.recordResult(repId, loc, { ok: true, latency: 30, meta: infoMeta });
-  chk('an informational-only listing raises no event', evCount() === beforeInfo);
-
-  // The headline count must be the ACTIONABLE count over the full result, not
-  // something reconstructed from the truncated top-10. The shape that matters is
-  // the ordinary one: `listed` is built in zone order (criticals, standards,
-  // then informationals), so informational entries are exactly what slice(0,10)
-  // drops — 8 actionable + 4 informational, of which only 2 informational are
-  // still visible. Deriving from listedCount here would say 10.
-  const manyMeta = {
-    kind: 'ip', zonesQueried: 31, listedCount: 12, actionableCount: 8, worstTier: 'standard',
-    listed: [
-      ...Array.from({ length: 8 }, (_, i) => ({
-        name: `Std ${i}`, zone: `s${i}.example`, tier: 'standard', codes: ['127.0.0.2'],
-      })),
-      ...Array.from({ length: 2 }, (_, i) => ({
-        name: `Info ${i}`, zone: `i${i}.example`, tier: 'informational', codes: ['127.0.0.2'],
-      })),
-    ],
-  };
-  synth.recordResult(repId, loc, { ok: false, latency: 30, meta: manyMeta });
-  const many = db.prepare("SELECT * FROM events WHERE name = 'reputation_listed' ORDER BY id DESC LIMIT 1").get();
-  chk('the headline count is the actionable count over the FULL result',
-    many && / on 8 blocklist/.test(many.description), many ? many.description : '');
-  chk('informational listings never inflate the headline count',
-    many && !/ on (10|12) blocklist/.test(many.description), many ? many.description : '');
-
-  // …and checkReputation must actually emit it, or the above only proves the
-  // consumer works on a hand-made fixture.
-  const repSrcEngine = fs.readFileSync(path.join(__dirname, 'src', 'engine', 'synthetics.js'), 'utf8');
-  chk('checkReputation emits actionableCount from the full list',
-    /actionableCount: actionable\.length/.test(repSrcEngine));
-
-  // ── 8. reputation never fans out from the "run everything" button ────────
-  const ran = await synth.runAllNow(org.id);
-  chk('runAllNow skips reputation assets', ran.every((r) => r.check_id !== repId),
-    JSON.stringify(ran.map((r) => r.check_id)));
-
-  // ── 9. reputation stays out of the synthetics + MCP surfaces ─────────────
-  // Reads the SQL out of the shipped source rather than re-stating it here: a
-  // hand-written copy of the clause under test asserts only that SQLite can
-  // count rows, and passes even when the fix is reverted.
-  const srcOf = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
-  const synthSrc = srcOf('routes/synthetics.js');
-  const mcpSrc = srcOf('mcp/tools.js');
-  const guard = /type\s*!=\s*'reputation'|c\.type\s*!=\s*'reputation'/g;
-  chk('routes/synthetics.js guards every result surface',
-    (synthSrc.match(guard) || []).length >= 5, `${(synthSrc.match(guard) || []).length} guards`);
-  chk('mcp/tools.js guards list_checks + the dashboard count',
-    (mcpSrc.match(guard) || []).length >= 2, `${(mcpSrc.match(guard) || []).length} guards`);
-
-  // ── 10. the probe cannot submit a reputation result at all ───────────────
-  // The forged-event test above covers recordResult; this covers the OTHER half
-  // of the boundary — /v1/synthetics/report must drop the row before it lands.
-  const ingestSrc = srcOf('routes/ingest.js');
-  chk('the probe work list never hands out reputation',
-    /\.filter\(\(c\) => c\.type !== 'reputation'\)/.test(ingestSrc));
-  chk('the report endpoint refuses reputation results',
-    /chk\.type === 'reputation'\) continue;/.test(ingestSrc)
-    && /SELECT id, org_id, type FROM synthetic_checks/.test(ingestSrc), 'no type-gated skip found');
+  // ── 10. the guards are gone, because the separation is structural now ────
+  const guard = /type\s*!=\s*'reputation'|type\s*!==\s*'reputation'|type\s*===\s*'reputation'/g;
+  for (const f of ['routes/synthetics.js', 'routes/ingest.js', 'mcp/tools.js', 'routes/ops.js']) {
+    chk(`${f} needs no reputation guard`, (srcOf(f).match(guard) || []).length === 0,
+      `${(srcOf(f).match(guard) || []).length} left`);
+  }
+  // v10 needed an explicit filter here: "run all checks" is analyst-reachable
+  // (POST /api/synthetics/run, MCP opscat_run_checks) and one asset is ~40
+  // queries against lists that rate-limit per source IP, so the button was a way
+  // to get the host refused by Spamhaus. Now the assets are not in that table at
+  // all — measured by the only thing that matters, whether a run happened.
+  const runsBefore = db.prepare('SELECT COUNT(*) c FROM reputation_runs').get().c;
+  await synth.runAllNow(org.id);
+  chk('"run all checks" cannot trigger a reputation lookup',
+    db.prepare('SELECT COUNT(*) c FROM reputation_runs').get().c === runsBefore);
 
   // ── 11. the 1h interval floor is the feature's own, not the plan's ───────
   const repSrc = srcOf('routes/reputation.js');
@@ -265,14 +378,19 @@ async function main() {
     /Math\.max\(MIN_INTERVAL_S, plans\.minIntervalFor\(plan\)\)/.test(repSrc)
     && (repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length === 2,
     `${(repSrc.match(/floorFor\(req\.org\.plan\)/g) || []).length} call sites`);
-  chk('the latest-result query breaks ts ties on id',
-    /ORDER BY ts DESC, id DESC/.test(repSrc));
-  chk('coverage is reported per kind', /coverage: \{ ip: ipCov, domain: domainCov \}/.test(repSrc));
+  chk('the latest-run query breaks ts ties on id', /ORDER BY ts DESC, id DESC/.test(repSrc));
+  chk('reputation assets count against the plan check budget',
+    /FROM reputation_assets WHERE org_id/.test(srcOf('plans.js')));
 
-  // ── 12. an incomplete run is never rendered as a listing ────────────────
-  const opsSrc = srcOf('routes/ops.js');
-  chk('/api/assets distinguishes unknown from listed',
-    /status = listed\.length \? 'listed' : 'unknown'/.test(opsSrc));
+  // ── 12. retention keeps the record and drops the samples ────────────────
+  const retSrc = srcOf('engine/retention.js');
+  chk('reputation_runs is pruned', /DELETE FROM reputation_runs WHERE ts </.test(retSrc));
+  chk('reputation_listings is NOT pruned', !/DELETE FROM reputation_listings/.test(retSrc));
+
+  // ── 13. migration v10 -> v11 carries an open listing across ─────────────
+  // db.js is a singleton, so the migration cannot re-run in this process: build
+  // a v10-shaped database and load db.js against it in a child.
+  chk('migration v10 -> v11 preserves the asset and its open listing', await migrationCarriesOver());
 
   console.log(R.join('\n'));
   const failed = R.filter((r) => r.startsWith('FAIL')).length;

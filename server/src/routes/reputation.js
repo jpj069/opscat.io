@@ -1,20 +1,15 @@
 'use strict';
 // Reputation — blocklist monitoring for the org's sending assets.
 //
-// Its own feature and its own top-level page, but deliberately NOT its own
-// storage: an asset is a `synthetic_checks` row of type 'reputation' and its
-// history is `synthetic_results`. That reuse is what buys the scheduler, the
-// result history, the event pipeline, alert rules, cases and the status page
-// without a line of duplicated machinery — see docs/ARCHITECTURE.md.
-//
-// This module exists so the *API* reads like the feature: callers talk about
-// assets and listings, not about check rows they have to join themselves.
+// Its own feature, its own page, its own storage: `reputation_assets` with
+// `reputation_runs` (the time series) and `reputation_listings` (the record of
+// every episode of being listed). See engine/reputation.js for why those are two
+// tables and docs/ARCHITECTURE.md for why they are not synthetic_checks rows.
 const express = require('express');
 const { db } = require('../db');
 const { now, isStr, clampInt, httpError } = require('../util');
 const sec = require('../security');
 const plans = require('../plans');
-const synthEngine = require('../engine/synthetics');
 const reputation = require('../engine/reputation');
 
 const router = express.Router();
@@ -24,87 +19,86 @@ const MAX_INTERVAL_S = 86400;      // 24h — blocklist state moves over hours
 const DEFAULT_INTERVAL_S = 21600;  // 6h
 // A reputation run costs ~93 DNS queries on a cold canary cache (31 zones plus
 // both controls each) and 31 warm, against third-party lists that rate-limit per
-// source IP — and blocklist state does not move in minutes. The
-// floor is therefore this feature's own, NOT the plan's synthetic-check floor
-// (15s/60s) — a plan that allows fast HTTP checks must not turn a handful of
-// assets into a query flood that gets the whole host refused by Spamhaus.
+// source IP — and blocklist state does not move in minutes. The floor is
+// therefore this feature's own, NOT the plan's synthetic-check floor (15s/60s):
+// a plan that allows fast HTTP checks must not turn a handful of assets into a
+// query flood that gets the whole host refused by Spamhaus.
 const MIN_INTERVAL_S = 3600;       // 1h
 
 // The effective floor: this feature's minimum, never below the org's plan floor.
 const floorFor = (plan) => Math.max(MIN_INTERVAL_S, plans.minIntervalFor(plan));
 
-const listChecks = db.prepare(
-  "SELECT * FROM synthetic_checks WHERE org_id = ? AND type = 'reputation' ORDER BY id");
-const getCheck = db.prepare(
-  "SELECT * FROM synthetic_checks WHERE id = ? AND org_id = ? AND type = 'reputation'");
-// Latest result per check. Reputation runs on the server's local probe only —
-// /v1/synthetics/checks never hands the type to an agent and /v1/synthetics/report
-// rejects it — so there is exactly one location in play and no per-location
-// fan-out to collapse. `id DESC` breaks ties because `ts` is millisecond
-// granularity and a manual "run now" right after a scheduled run can land on
-// the same millisecond.
-const latestResult = db.prepare(`SELECT ok, ts, latency_ms, meta FROM synthetic_results
-  WHERE check_id = ? ORDER BY ts DESC, id DESC LIMIT 1`);
+const listAssets = db.prepare('SELECT * FROM reputation_assets WHERE org_id = ? ORDER BY id');
+const getAsset = db.prepare('SELECT * FROM reputation_assets WHERE id = ? AND org_id = ?');
+const latestRun = db.prepare(
+  'SELECT * FROM reputation_runs WHERE asset_id = ? ORDER BY ts DESC, id DESC LIMIT 1');
+const openListings = db.prepare(`SELECT * FROM reputation_listings
+  WHERE asset_id = ? AND resolved_at IS NULL ORDER BY
+    CASE tier WHEN 'critical' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END, name`);
+const listingHistory = db.prepare(`SELECT * FROM reputation_listings
+  WHERE asset_id = ? ORDER BY COALESCE(resolved_at, first_seen) DESC, id DESC LIMIT ?`);
 
-function parseMeta(raw) {
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
+const parseJson = (raw, fallback) => {
+  if (!raw) return fallback;
+  try { return JSON.parse(raw); } catch { return fallback; }
+};
+const nameOf = (z) => (z && typeof z === 'object' ? z.name : z);
+
+// A listing as the API speaks it. `firstSeen` is the whole point of the table:
+// "on Spamhaus since the 3rd" is the first thing anyone asks, and the previous
+// model — verdicts stored as samples — could not answer it.
+const toListing = (l) => ({
+  zone: l.zone,
+  name: l.name,
+  tier: l.tier,
+  codes: parseJson(l.codes, []),
+  url: l.url || null,
+  firstSeen: l.first_seen,
+  lastSeen: l.last_seen,
+  resolvedAt: l.resolved_at,
+});
 
 // One asset as the UI wants it: what it is, whether it is listed, and why.
 // `status` is the single field a table row renders from:
-//   listed        - on a critical/standard list, alerting, check is failing
+//   listed        - on a critical/standard list, alerting
 //   informational - only on range/ASN-wide lists; recorded, never alerted
 //   clean         - queried successfully, nothing found
 //   unknown       - could not be checked (no reachable critical zone / error)
 //   pending       - never run yet
-function toAsset(check) {
-  const last = latestResult.get(check.id);
-  const meta = last ? parseMeta(last.meta) : null;
-  const listed = (meta && Array.isArray(meta.listed)) ? meta.listed : [];
-  const actionable = listed.filter((l) => l.tier !== 'informational');
-
-  let status = 'pending';
-  if (last) {
-    // A finding outranks a partial outage: if some zones answered and one of
-    // them listed the asset, that is a fact, and recordResult has already raised
-    // the event. Reporting 'unknown' here would contradict the alert the on-call
-    // just received. The `error` field still rides along so the UI can say the
-    // run was incomplete.
-    if (actionable.length) status = 'listed';
-    else if (meta && meta.error) status = 'unknown';
-    else if (listed.length) status = 'informational';
-    else status = 'clean';
-  }
-
+function toAsset(asset) {
+  const run = latestRun.get(asset.id);
+  const listings = openListings.all(asset.id).map(toListing);
   return {
-    id: check.id,
-    target: check.target,
-    kind: meta ? meta.kind : null,          // 'ip' | 'domain'
-    rdns: meta ? (meta.rdns || null) : null, // resolved role, e.g. mail4.link11.com
-    enabled: !!check.enabled,
-    intervalS: check.interval_s,
-    status,
-    worstTier: meta ? (meta.worstTier || null) : null,
-    listings: listed,
-    policy: (meta && meta.policy) || [],
-    unavailable: (meta && meta.unavailable) || [],
-    errored: (meta && meta.errored) || [],   // answered with an error, NOT clean
-    zonesQueried: meta ? (meta.zonesQueried ?? null) : null,
-    error: meta ? (meta.error || null) : null,
-    lastCheckedAt: last ? last.ts : null,
-    lastDurationMs: last ? last.latency_ms : null,
+    id: asset.id,
+    target: asset.target,
+    kind: asset.kind,
+    rdns: asset.rdns || null,
+    enabled: !!asset.enabled,
+    intervalS: asset.interval_s,
+    status: run ? run.status : 'pending',
+    worstTier: run ? run.worst_tier : null,
+    listings,
+    // Stored with full per-zone detail, surfaced as names: that is the shape the
+    // page renders, and it diffs them against GET /zones for the breakdown.
+    policy: run ? parseJson(run.policy, []).map(nameOf) : [],
+    unavailable: run ? parseJson(run.unavailable, []).map(nameOf) : [],
+    errored: run ? parseJson(run.errored, []).map(nameOf) : [],
+    zonesQueried: run ? run.zones_queried : null,
+    zonesTotal: run ? run.zones_total : null,
+    error: run ? run.error : null,
+    lastCheckedAt: run ? run.ts : null,
+    lastDurationMs: run ? run.duration_ms : null,
   };
 }
 
 // ---- assets -----------------------------------------------------------------
 
 router.get('/assets', (req, res) => {
-  res.json(listChecks.all(req.orgId).map(toAsset));
+  res.json(listAssets.all(req.orgId).map(toAsset));
 });
 
 router.get('/overview', (req, res) => {
-  const assets = listChecks.all(req.orgId).map(toAsset);
+  const assets = listAssets.all(req.orgId).map(toAsset);
   const count = (s) => assets.filter((a) => a.status === s).length;
   // Coverage is "how many lists actually answered", which is the honest ceiling
   // on what any verdict here is worth — a resolver the lists refuse silently
@@ -120,8 +114,6 @@ router.get('/overview', (req, res) => {
       unavailable: of.reduce((m, a) => Math.max(m, a.unavailable.length), 0),
     };
   };
-  const ipCov = coverageFor('ip');
-  const domainCov = coverageFor('domain');
   return res.json({
     total: assets.length,
     ip: assets.filter((a) => a.kind === 'ip').length,
@@ -131,7 +123,7 @@ router.get('/overview', (req, res) => {
     clean: count('clean'),
     unknown: count('unknown'),
     pending: count('pending'),
-    coverage: { ip: ipCov, domain: domainCov },
+    coverage: { ip: coverageFor('ip'), domain: coverageFor('domain') },
   });
 });
 
@@ -142,58 +134,74 @@ router.post('/assets', sec.requireRole('lead'), (req, res) => {
   if (!normalized) {
     return httpError(res, 400, 'target must be an IP address or a domain name (no scheme or path)');
   }
+  const parsed = reputation.parseTarget(normalized);
   // Compare canonical keys, not raw strings: MAIL.example.com. and
   // mail.example.com are one asset, and so are 2001:0db8::1 and 2001:db8::1.
   const key = reputation.targetKey(normalized);
-  const dup = listChecks.all(req.orgId).find((c) => reputation.targetKey(c.target) === key);
+  const dup = listAssets.all(req.orgId).find((a) => reputation.targetKey(a.target) === key);
   if (dup) return httpError(res, 409, 'this target is already monitored');
-  // shares the org's synthetic-check quota — it is the same underlying resource
+  // Shares the org's check budget — the `checks` counter in plans.js spans both
+  // tables, so assets cannot be used to slip past the plan limit.
   const lim = plans.checkLimit(req.orgId, req.org.plan, 'checks');
   if (!lim.ok) {
     return httpError(res, 402, `plan limit reached (${lim.used}/${lim.limit} checks) — upgrade your plan to add more`);
   }
   const minIv = floorFor(req.org.plan);
-  const info = db.prepare(`INSERT INTO synthetic_checks
-      (org_id, type, target, interval_s, timeout_ms, enabled, assertions, created_at)
-    VALUES (?, 'reputation', ?, ?, ?, 1, NULL, ?)`)
-    .run(req.orgId, normalized,
-      clampInt(intervalS, minIv, MAX_INTERVAL_S, Math.max(DEFAULT_INTERVAL_S, minIv)),
-      reputation.DEFAULT_TIMEOUT_MS, now());
+  const info = db.prepare(`INSERT INTO reputation_assets
+      (org_id, target, kind, rdns, interval_s, enabled, created_at)
+    VALUES (?, ?, ?, NULL, ?, 1, ?)`)
+    .run(req.orgId, normalized, parsed.kind,
+      clampInt(intervalS, minIv, MAX_INTERVAL_S, Math.max(DEFAULT_INTERVAL_S, minIv)), now());
   sec.audit(req.user.id, 'reputation_asset_create', normalized, req.orgId);
   res.json({ id: info.lastInsertRowid });
 });
 
 router.patch('/assets/:id', sec.requireRole('lead'), (req, res) => {
-  const check = getCheck.get(req.params.id, req.orgId);
-  if (!check) return httpError(res, 404, 'asset not found');
+  const asset = getAsset.get(req.params.id, req.orgId);
+  if (!asset) return httpError(res, 404, 'asset not found');
   const b = req.body || {};
   const minIv = floorFor(req.org.plan);
-  db.prepare(`UPDATE synthetic_checks SET enabled = COALESCE(?, enabled),
+  db.prepare(`UPDATE reputation_assets SET enabled = COALESCE(?, enabled),
       interval_s = COALESCE(?, interval_s) WHERE id = ? AND org_id = ?`)
     .run(typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
       Number.isFinite(b.intervalS)
         ? clampInt(b.intervalS, minIv, MAX_INTERVAL_S, Math.max(DEFAULT_INTERVAL_S, minIv)) : null,
-      check.id, req.orgId);
-  sec.audit(req.user.id, 'reputation_asset_update', check.target, req.orgId);
+      asset.id, req.orgId);
+  // A shortened interval should take effect now, not after the old one elapses.
+  reputation.resetSchedule(asset.id);
+  sec.audit(req.user.id, 'reputation_asset_update', asset.target, req.orgId);
   res.json({ ok: true });
 });
 
 router.delete('/assets/:id', sec.requireRole('lead'), (req, res) => {
-  const check = getCheck.get(req.params.id, req.orgId);
-  if (!check) return httpError(res, 404, 'asset not found');
-  db.prepare('DELETE FROM synthetic_checks WHERE id = ? AND org_id = ?').run(check.id, req.orgId);
-  sec.audit(req.user.id, 'reputation_asset_delete', check.target, req.orgId);
+  const asset = getAsset.get(req.params.id, req.orgId);
+  if (!asset) return httpError(res, 404, 'asset not found');
+  // runs + listings cascade
+  db.prepare('DELETE FROM reputation_assets WHERE id = ? AND org_id = ?').run(asset.id, req.orgId);
+  reputation.resetSchedule(asset.id);
+  sec.audit(req.user.id, 'reputation_asset_delete', asset.target, req.orgId);
   res.json({ ok: true });
+});
+
+// Every episode of being listed, newest first — open ones and delisted ones.
+// This is what the new model buys: the answer to "how long were we on Spamhaus
+// in March", which a table of samples cannot give.
+router.get('/assets/:id/history', (req, res) => {
+  const asset = getAsset.get(req.params.id, req.orgId);
+  if (!asset) return httpError(res, 404, 'asset not found');
+  const limit = clampInt(req.query.limit, 1, 500, 100);
+  res.json(listingHistory.all(asset.id, limit).map(toListing));
 });
 
 // Run one asset now. 31 zones at up to 3s each, so this can take a few seconds
 // on a cold canary cache — the client shows a spinner rather than polling.
 router.post('/assets/:id/run', sec.requireRole('lead'), async (req, res) => {
-  const check = getCheck.get(req.params.id, req.orgId);
-  if (!check) return httpError(res, 404, 'asset not found');
+  const asset = getAsset.get(req.params.id, req.orgId);
+  if (!asset) return httpError(res, 404, 'asset not found');
   try {
-    const result = await synthEngine.runCheckNow(check);
-    return res.json({ ok: true, result: toAsset(check), raw: { ok: result.ok } });
+    await reputation.runAsset(asset);
+    // re-read: runAsset may have updated rdns and has written a new run
+    return res.json({ ok: true, result: toAsset(getAsset.get(asset.id, req.orgId)) });
   } catch (e) {
     return httpError(res, 502, `lookup failed: ${String(e.message).slice(0, 200)}`);
   }

@@ -264,6 +264,61 @@ CREATE TABLE IF NOT EXISTS synthetic_results (
 );
 CREATE INDEX IF NOT EXISTS idx_synth_results ON synthetic_results(check_id, location_id, ts);
 
+-- ---- reputation (blocklist monitoring) --------------------------------------
+-- Its own model on purpose. A blocklist listing is a STATE WITH A LIFECYCLE
+-- ("on Spamhaus since the 3rd, delisted on the 14th"), not a measurement — the
+-- first question after a listing is "since when?", and a table of samples cannot
+-- answer it. So: `reputation_runs` is the time series and gets the short
+-- retention every sample table gets; `reputation_listings` is the record and is
+-- kept, because it is the evidence a delisting request or a postmaster
+-- escalation is argued with.
+CREATE TABLE IF NOT EXISTS reputation_assets (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  target        TEXT NOT NULL,               -- IP or domain, stored normalised
+  kind          TEXT NOT NULL CHECK (kind IN ('ip','domain')),
+  rdns          TEXT,                        -- last known PTR — names the asset in operator terms
+  interval_s    INTEGER NOT NULL DEFAULT 21600,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL
+);
+-- targets are stored canonicalised, so uniqueness is enforceable here
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_assets_target ON reputation_assets(org_id, target);
+
+CREATE TABLE IF NOT EXISTS reputation_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id      INTEGER NOT NULL REFERENCES reputation_assets(id) ON DELETE CASCADE,
+  ts            INTEGER NOT NULL,
+  status        TEXT NOT NULL CHECK (status IN ('listed','informational','clean','unknown')),
+  zones_queried INTEGER NOT NULL DEFAULT 0,   -- zones that actually answered
+  zones_total   INTEGER NOT NULL DEFAULT 0,   -- zones we tried for this kind
+  worst_tier    TEXT,
+  duration_ms   REAL,
+  unavailable   TEXT,                         -- JSON [{name,zone,tier}] — refused, NOT clean
+  errored       TEXT,                         -- JSON [{name,zone,tier,error}]
+  policy        TEXT,                         -- JSON [{name,zone,codes}] — PBL-style, no accusation
+  error         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rep_runs ON reputation_runs(asset_id, ts);
+
+CREATE TABLE IF NOT EXISTS reputation_listings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id     INTEGER NOT NULL REFERENCES reputation_assets(id) ON DELETE CASCADE,
+  zone         TEXT NOT NULL,
+  name         TEXT NOT NULL,                 -- display name, e.g. "Spamhaus ZEN"
+  tier         TEXT NOT NULL,                 -- critical | standard | informational
+  codes        TEXT,                          -- JSON [string] — the 127.0.0.x answers
+  url          TEXT,                          -- delisting page, carried into the case
+  first_seen   INTEGER NOT NULL,
+  last_seen    INTEGER NOT NULL,
+  resolved_at  INTEGER                        -- NULL = still listed
+);
+-- At most one OPEN listing per (asset, zone); a re-listing after a delisting is
+-- a new row, so the history reads as distinct episodes rather than one smear.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_listing_open
+  ON reputation_listings(asset_id, zone) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rep_listing_zone ON reputation_listings(zone, resolved_at);
+
 CREATE TABLE IF NOT EXISTS snmp_targets (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        INTEGER NOT NULL DEFAULT 1,
