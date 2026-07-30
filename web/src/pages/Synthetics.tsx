@@ -8,8 +8,7 @@ import { SEV } from '../format';
 import {
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR,
-} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Input,} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import type {
   SynthLocation, SynthCheck, SynthResult, SynthSeriesPoint, SynthHistory, SynthHistoryEntry,
@@ -241,7 +240,7 @@ export default function Synthetics() {
 
           {/* checks table */}
           <div className="card" style={{ padding: 0 }}>
-            <TableScroll minWidth={960}>
+            <TableScroll stickyFirst minWidth={960}>
               <div className="tbl-head" style={{ gridTemplateColumns: CHECK_GRID }}>
                 <span>Target</span><span>Check</span><span>Agents</span>
                 <span>Uptime · {range}</span><span>%</span><span>Latency</span>
@@ -661,17 +660,17 @@ function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded
           </select>
         </Field>
         <Field label="Label">
-          <input required value={label} maxLength={60} placeholder="e.g. prod-sensors"
+          <Input required value={label} maxLength={60} placeholder="e.g. prod-sensors"
             onChange={(e) => setLabel(e.target.value)} />
         </Field>
         {provider === 'aws' ? (
           <>
             <Field label="Access key ID">
-              <input required className="mono" value={awsKeyId} placeholder="AKIA…"
+              <Input required className="mono" value={awsKeyId} placeholder="AKIA…"
                 onChange={(e) => setAwsKeyId(e.target.value)} />
             </Field>
             <Field label="Secret access key">
-              <input required type="password" className="mono" value={awsSecret}
+              <Input required type="password" className="mono" value={awsSecret}
                 onChange={(e) => setAwsSecret(e.target.value)} />
             </Field>
             <div className="mono text-2xs text-text3" style={{ marginBottom: 10 }}>
@@ -740,14 +739,14 @@ function AddCheckModal({ locations, onClose, onAdded }: {
           </select>
         </Field>
         <Field label="Target">
-          <input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
+          <Input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
             placeholder={PLACEHOLDER[type]} />
         </Field>
         <Field label="Interval (seconds)">
-          <input type="number" min={5} value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))} />
+          <Input type="number" min={5} value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))} />
         </Field>
         <Field label="Timeout (ms)">
-          <input type="number" min={100} value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} />
+          <Input type="number" min={100} value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} />
         </Field>
         {type === 'http' && (
           <>
@@ -756,13 +755,13 @@ function AddCheckModal({ locations, onClose, onAdded }: {
             <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
               <div style={{ flex: 1 }}>
                 <Field label="Expected status">
-                  <input inputMode="numeric" value={expectStatus} placeholder="e.g. 200"
+                  <Input inputMode="numeric" value={expectStatus} placeholder="e.g. 200"
                     onChange={(e) => setExpectStatus(e.target.value)} />
                 </Field>
               </div>
               <div style={{ flex: 2 }}>
                 <Field label="Body must contain">
-                  <input value={keyword} placeholder='e.g. "status":"ok"'
+                  <Input value={keyword} placeholder='e.g. "status":"ok"'
                     onChange={(e) => setKeyword(e.target.value)} />
                 </Field>
               </div>
@@ -770,13 +769,13 @@ function AddCheckModal({ locations, onClose, onAdded }: {
             <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
               <div style={{ flex: 1 }}>
                 <Field label="JSON path">
-                  <input className="mono" value={jsonPath} placeholder="$.status"
+                  <Input className="mono" value={jsonPath} placeholder="$.status"
                     onChange={(e) => setJsonPath(e.target.value)} />
                 </Field>
               </div>
               <div style={{ flex: 1 }}>
                 <Field label="equals">
-                  <input className="mono" value={jsonValue} placeholder="ok"
+                  <Input className="mono" value={jsonValue} placeholder="ok"
                     onChange={(e) => setJsonValue(e.target.value)} />
                 </Field>
               </div>
@@ -953,11 +952,11 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
           {prov === 'self' ? (
             <>
               <Field label="City / label">
-                <input required autoFocus value={city} maxLength={80}
+                <Input required autoFocus value={city} maxLength={80}
                   placeholder="e.g. Munich HQ" onChange={(e) => setCity(e.target.value)} />
               </Field>
               <Field label="Country code (ISO2)">
-                <input required value={cc} maxLength={2} placeholder="DE" className="mono"
+                <Input required value={cc} maxLength={2} placeholder="DE" className="mono"
                   onChange={(e) => setCc(e.target.value.toUpperCase())} />
               </Field>
             </>

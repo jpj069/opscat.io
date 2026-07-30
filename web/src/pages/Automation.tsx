@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV } from '../format';
-import { Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader } from '../ui';
+import { Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 
 interface TeamMember { id: number; name: string; role: string; }
@@ -61,7 +61,7 @@ export default function Automation() {
           When an event matches the trigger, the actions run — at most once per event
           and cooldown window. Every run is recorded in the audit trail below.
         </div>
-        <TableScroll minWidth={780}>
+        <TableScroll stickyFirst minWidth={780}>
           <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
             <span>Name</span><span>Trigger</span><span>Actions</span>
             <span>Cooldown</span><span>Enabled</span><span></span>
@@ -174,25 +174,25 @@ function EditModal({ existing, team, onClose, onSaved }: {
     <Modal title={existing ? 'Edit automation' : 'New automation'} onClose={onClose} width={520}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required value={name} onChange={(e) => setName(e.target.value)}
+          <Input required value={name} onChange={(e) => setName(e.target.value)}
             placeholder="bgp lifecycle" />
         </Field>
         <div className="row row-wrap" style={{ gap: 10, alignItems: 'flex-start' }}>
           <div style={{ flex: 2, minWidth: 160 }}>
             <Field label="Trigger event name (* = any)">
-              <input required className="mono" value={triggerEvent}
+              <Input required className="mono" value={triggerEvent}
                 onChange={(e) => setTriggerEvent(e.target.value)} placeholder="bgp.peer_established" />
             </Field>
           </div>
           <div style={{ width: 110 }}>
             <Field label="Min severity">
-              <input className="mono" inputMode="numeric" value={severityMin}
+              <Input className="mono" inputMode="numeric" value={severityMin}
                 onChange={(e) => setSeverityMin(e.target.value)} />
             </Field>
           </div>
           <div style={{ width: 110 }}>
             <Field label="Cooldown (min)">
-              <input className="mono" inputMode="numeric" value={cooldown}
+              <Input className="mono" inputMode="numeric" value={cooldown}
                 onChange={(e) => setCooldown(e.target.value)} />
             </Field>
           </div>
@@ -214,7 +214,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
             {a.type === 'close_event' && (
               <div style={{ marginTop: 8 }}>
                 <Field label="Raise event to close (when this trigger fires)">
-                  <input required className="mono" value={a.raiseEvent || ''}
+                  <Input required className="mono" value={a.raiseEvent || ''}
                     onChange={(e) => setAction(i, { raiseEvent: e.target.value })}
                     placeholder="bgp.peer_down" />
                 </Field>
@@ -238,7 +238,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
             {a.type === 'webhook' && (
               <div style={{ marginTop: 8 }}>
                 <Field label="Webhook URL (POST, JSON payload)">
-                  <input required type="url" className="mono" value={a.url || ''}
+                  <Input required type="url" className="mono" value={a.url || ''}
                     onChange={(e) => setAction(i, { url: e.target.value })}
                     placeholder="https://hooks.example.com/opscat" />
                 </Field>

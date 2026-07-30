@@ -123,6 +123,44 @@ input, select, textarea {
   min-width: 0; max-width: 100%;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--low); }
+
+/* Optically shrunk text controls (ui.tsx <Input>) — phones only.
+   iOS Safari zooms the page on focus when a control's font-size is under 16px and never
+   zooms back, so the value could not simply be made smaller. But `transform: scale()`
+   does NOT count as shrinking for that rule (verified on an iPhone): Safari still reads
+   16px, the pixels are just drawn smaller. That is what lets the value sit at an optical
+   14px next to its 13px label instead of towering over it at 16px.
+   Three compensations, all measured rather than guessed:
+   - height is divided by the scale, so the drawn control lands on --ctl-h exactly;
+   - width likewise, else the control renders at 87.5% and leaves a gap on the right;
+   - the untransformed box DOES count towards page overflow (it pushed the page to 393px
+     at a 390px viewport), so the surplus is pulled back with negative margins.
+   A wrapper element would work too but clips the focus ring — this needs no extra DOM.
+   The width lives HERE and not at the call site: an inline `width` would beat the
+   compensation and reintroduce the gap. Pass `width` to <Input> instead. */
+/* The width belongs to the component at EVERY size, not just where the scale runs:
+   call sites used to carry an inline `width: 100%`, and that inline value is exactly
+   what would beat the phone compensation. Taking it away left desktop fields at their
+   intrinsic ~172px inside a 420px column until this line existed. */
+.ctl { --ctl-s: 0.875; --ctl-h: 34px; width: var(--ctl-w, 100%); }
+@media (max-width: 720px) {
+  .ctl {
+    font-size: 16px;
+    line-height: 1.25;
+    width: calc(var(--ctl-w, 100%) / var(--ctl-s));
+    max-width: none;
+    height: calc(var(--ctl-h) / var(--ctl-s));
+    margin-right: calc((var(--ctl-w, 100%) / var(--ctl-s) - var(--ctl-w, 100%)) * -1);
+    margin-bottom: calc(var(--ctl-h) - var(--ctl-h) / var(--ctl-s));
+    transform: scale(var(--ctl-s));
+    transform-origin: left top;
+  }
+  /* A <select> never triggers the focus zoom at all (measured), so it needs no trick —
+     it can simply be smaller. A <textarea> deliberately stays at 16px: it is a writing
+     surface, and its height is content-driven, so the scale would need a per-instance
+     height compensation for no real gain. */
+  select { font-size: 14px; }
+}
 a { color: var(--low); text-decoration: none; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
@@ -143,7 +181,54 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 /* children of a scrolling flex page must never be squeezed to viewport height */
 .page > * { flex-shrink: 0; }
 /* the ONE sanctioned horizontal scroll container — wraps tables (ui.tsx TableScroll) */
-.tbl-scroll { overflow-x: auto; }
+
+/* The fade width is a REGISTERED property so it can be transitioned. Animating
+   `mask-image` between two gradients does not work: the colour stops differ
+   (`#000` vs transparent), the browser cannot interpolate that and snaps instead —
+   which is exactly what read as a hard cut. With one fixed gradient shape and an
+   animatable length, the fade slides. */
+@property --tbl-fade {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+.tbl-box { position: relative; }
+.tbl-scroll {
+  overflow-x: auto;
+  --tbl-fade: 0px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--tbl-fade)), rgba(0, 0, 0, 0));
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--tbl-fade)), rgba(0, 0, 0, 0));
+  /* coming back is the slower half — an indicator that reappears fast feels like a blink */
+  transition: --tbl-fade 0.42s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.tbl-box[data-more="1"] .tbl-scroll { --tbl-fade: 44px; }
+/* while the finger moves, the OS draws its own bar — one indicator is enough */
+.tbl-box[data-more="1"][data-scrolling="1"] .tbl-scroll {
+  --tbl-fade: 0px; transition-duration: 0.22s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tbl-scroll { transition-duration: 0.01s; }
+}
+
+/* Pinned first column (TableScroll stickyFirst). The negative margin lets the cell
+   grow into the row's 16px padding, so its text still sits 16px from the edge once
+   it sticks — without it the label ends up flush against the card border. */
+.tbl-sticky1 .tbl-head > :first-child,
+.tbl-sticky1 .tbl-row > :first-child {
+  position: sticky; left: 0; z-index: 1;
+  margin-left: -16px; padding-left: 16px;
+  background: var(--bg2);
+  box-shadow: 1px 0 0 var(--bg3);
+}
+.tbl-sticky1 .tbl-head > :first-child { z-index: 2; }
+/* The pinned cell needs an opaque background to hide the columns sliding under it,
+   which means it does NOT inherit the row's translucent hover tint — without this the
+   first column stays dark while the rest of the row lightens. Same 40% of --bg3, but
+   mixed over the card instead of over transparent. */
+.tbl-sticky1 .tbl-row:hover > :first-child {
+  background: color-mix(in srgb, var(--bg3) 40%, var(--bg2));
+}
 .page-title { font-size: var(--t-xl); font-weight: 700; color: var(--text0); margin: 0; }
 .micro {
   font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
@@ -424,8 +509,11 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
 
 /* mobile */
 @media (max-width: 720px) {
-  .lab-row { flex-direction: column; }
+  /* align-items: flex-start sizes children by CONTENT on the cross axis — once the
+     row stacks, that lets a wide demo (a table) set the page width. Stretch instead. */
+  .lab-row { flex-direction: column; align-items: stretch; }
   .lab-name { width: auto; }
+  .lab-demo { min-width: 0; }
   .form-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .form-row-label { width: auto; }
   .form-row-field { max-width: none; }

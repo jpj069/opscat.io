@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
@@ -51,7 +51,7 @@ export default function Rules() {
       </PageHeader>
 
       <div className="card" style={{ padding: 0 }}>
-        <TableScroll minWidth={700}>
+        <TableScroll stickyFirst minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: RULE_COLS }}>
           <span>Rule</span><span>Channel</span><span>Trigger</span><span>Min Sev</span>
           <span>Cooldown</span><span>On</span><span />
@@ -159,7 +159,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
   return (
     <Modal title={rule ? `Edit ${rule.name}` : 'New Rule'} onClose={onClose} width={460}>
       <Field label="Name">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
       </Field>
       <Field label="Channel">
         <select value={channel} onChange={(e) => setChannel(e.target.value as Rule['channel'])}>
@@ -168,7 +168,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
         </select>
       </Field>
       <Field label="Trigger Event (empty = any)">
-        <input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"
+        <Input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"
           placeholder="any" />
         <datalist id="rule-triggers">
           {eventNames.map((n) => <option key={n} value={n} />)}
@@ -177,13 +177,13 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
       <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
           <Field label="Min Severity (0-100)">
-            <input type="number" min={0} max={100} value={sevMin}
+            <Input type="number" min={0} max={100} value={sevMin}
               onChange={(e) => setSevMin(Number(e.target.value))} />
           </Field>
         </div>
         <div style={{ flex: 1 }}>
           <Field label="Cooldown (minutes)">
-            <input type="number" min={0} value={cooldown}
+            <Input type="number" min={0} value={cooldown}
               onChange={(e) => setCooldown(Number(e.target.value))} />
           </Field>
         </div>

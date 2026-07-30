@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
-import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy } from './ui';
+import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
@@ -251,22 +251,22 @@ function Login() {
         </div>
         {mode === 'signup' && (
           <Field label="Name">
-            <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
+            <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
           </Field>
         )}
         <Field label="E-Mail">
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+          <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com" autoFocus />
         </Field>
         {(mode === 'password' || mode === 'signup') && (
           <Field label={mode === 'signup' ? 'Password (min. 12 characters)' : 'Password'}>
-            <input type="password" required minLength={mode === 'signup' ? 12 : undefined}
+            <Input type="password" required minLength={mode === 'signup' ? 12 : undefined}
               value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••••••" />
           </Field>
         )}
         {mode === 'signup' && (
           <Field label="Organization name (optional)">
-            <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Acme Inc." />
+            <Input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Acme Inc." />
           </Field>
         )}
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
@@ -550,13 +550,13 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
         Your password was issued by an administrator — please set your own before continuing.</div>}
       <form onSubmit={submit}>
         {!forced && <Field label="Current password">
-          <input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
+          <Input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
         </Field>}
         <Field label="New password (min. 12 characters)">
-          <input type="password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
+          <Input type="password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>
         <Field label="Repeat new password">
-          <input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+          <Input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
         </Field>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Save</button>
@@ -588,7 +588,7 @@ function Palette({ onClose }: { onClose: () => void }) {
     <>
       <div className="overlay-dim" onClick={onClose} />
       <div className="palette">
-        <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
+        <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search pages, events, cases…"
           style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--bg3)',
             borderRadius: 0, background: 'transparent', padding: '12px 16px', fontSize: 'var(--t-md)' }} />

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { fmtDateTime, logSevColor } from '../format';
-import { TableSkeleton, PageHeader } from '../ui';
+import { TableSkeleton, PageHeader, Input} from '../ui';
 import type { LogRow } from '../types';
 
 const HOURS = [1, 2, 6, 12, 24];
@@ -59,7 +59,7 @@ export default function LogsPage() {
         <select value={hours} onChange={(e) => setHours(Number(e.target.value))}>
           {HOURS.map((h) => <option key={h} value={h}>{h} h</option>)}
         </select>
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
+        <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
           style={{ flex: '1 1 150px', maxWidth: 400 }} />
         <button className="btn btn-sm" onClick={() => setFilter('')}>Clear</button>
         <div style={{ flex: 1 }} />

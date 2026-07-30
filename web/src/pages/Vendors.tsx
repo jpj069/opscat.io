@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll, TableSkeleton } from '../ui';
+import { Modal, StatusPill, Field, TableScroll, TableSkeleton, Input} from '../ui';
 import { RefreshCwIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
 
@@ -70,7 +70,7 @@ export default function Vendors() {
       )}
 
       <div className="card" style={{ padding: 0 }}>
-        <TableScroll minWidth={720}>
+        <TableScroll stickyFirst minWidth={720}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Vendor</span><span>Status</span><span>Incidents</span><span>Feed</span><span>Checked</span><span />
         </div>
@@ -197,7 +197,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
           <div className="row" style={{ gap: 8, marginBottom: 10, background: 'var(--bg2)',
             border: '1px solid var(--bg3)', borderRadius: 6, padding: '6px 10px' }}>
             <SearchIcon className="text-text3" size={13} style={{ flexShrink: 0 }} />
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+            <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
               placeholder={`Search ${catalog.length || ''} vendors — GitHub, AWS, Cloudflare, Stripe…`}
               style={{ border: 'none', background: 'transparent', padding: 0, flex: 1 }} />
           </div>
@@ -226,7 +226,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
         <form onSubmit={addCustom}>
           <Field label="Status page URL — we detect the feed automatically">
             <div className="row" style={{ gap: 6 }}>
-              <input autoFocus value={detectUrl} onChange={(e) => setDetectUrl(e.target.value)}
+              <Input autoFocus value={detectUrl} onChange={(e) => setDetectUrl(e.target.value)}
                 placeholder="https://status.example.com" style={{ flex: 1 }} />
               <button type="button" className="btn btn-sm" onClick={detect}
                 disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</button>
@@ -235,7 +235,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
           {preview && <div className="mono text-xs" style={{ color: SEV.green, marginBottom: 10 }}>
             ✓ {preview}</div>}
           <Field label="Name">
-            <input required value={name} onChange={(e) => setName(e.target.value)}
+            <Input required value={name} onChange={(e) => setName(e.target.value)}
               placeholder="Acme SaaS" />
           </Field>
           <Field label="Feed type">
@@ -244,11 +244,11 @@ function AddVendorModal({ existing, onClose, onAdded }:
             </select>
           </Field>
           <Field label="Feed URL (https)">
-            <input required value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)}
+            <Input required value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)}
               placeholder="https://status.example.com/api/v2/summary.json" />
           </Field>
           <Field label="Status page URL (optional)">
-            <input value={pageUrl} onChange={(e) => setPageUrl(e.target.value)}
+            <Input value={pageUrl} onChange={(e) => setPageUrl(e.target.value)}
               placeholder="https://status.example.com" />
           </Field>
           <div className="text-xs text-text3" style={{ marginBottom: 8 }}>
@@ -317,7 +317,7 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
           </div>
           <div style={{ flex: 1 }}>
             <Field label="Poll interval (seconds)">
-              <input type="number" min={60} max={3600} defaultValue={detail.intervalS}
+              <Input type="number" min={60} max={3600} defaultValue={detail.intervalS}
                 onBlur={(e) => { const v = Number(e.target.value); if (v !== detail.intervalS) patch({ intervalS: v }); }} />
             </Field>
           </div>

@@ -4,8 +4,7 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import {
-  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader,
-} from '../ui';
+  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input,} from '../ui';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
@@ -108,13 +107,13 @@ export default function Settings() {
     opts?: { type?: string; placeholder?: string; mono?: boolean }) => (
     <Row key={k} label={label}>
       {has(k) ? (
-        <input type={opts?.type || 'text'} value={val(k)} placeholder={opts?.placeholder}
-          className={opts?.mono ? 'mono' : undefined} style={{ width: '100%' }}
+        <Input type={opts?.type || 'text'} value={val(k)} placeholder={opts?.placeholder}
+          className={opts?.mono ? 'mono' : undefined}
           onChange={(e) => setVal(k, e.target.value)} />
       ) : (
         <div className="row" style={{ gap: 8 }}>
-          <input disabled value="" placeholder={opts?.placeholder}
-            style={{ width: '100%', opacity: 0.55 }} />
+          <Input disabled value="" placeholder={opts?.placeholder}
+            style={{ opacity: 0.55 }} />
           <span className="text-xs text-text3" style={{ whiteSpace: 'nowrap' }}>admin only</span>
         </div>
       )}
@@ -429,16 +428,16 @@ function AiCard() {
       {status === null ? <FormSkeleton rows={3} /> : (
         <>
           <Row label="Base URL">
-            <input className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
+            <Input className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
               onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
           </Row>
           <Row label="Model">
-            <input className="mono" value={model} placeholder="anthropic/claude-haiku-4.5"
+            <Input className="mono" value={model} placeholder="anthropic/claude-haiku-4.5"
               onChange={(e) => { setModel(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
           </Row>
           <Row label={status.org.hasKey ? 'API key (stored)' : 'API key'}>
             <div className="row" style={{ gap: 8 }}>
-              <input type="password" className="mono" value={apiKey}
+              <Input type="password" className="mono" value={apiKey}
                 placeholder={status.org.hasKey ? '•••••••• (set — enter to replace)' : 'sk-…'}
                 onChange={(e) => { setApiKey(e.target.value); setDirty(true); }} style={{ flex: 1 }} />
               {status.org.hasKey && (
@@ -519,11 +518,11 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
       ))}
       {canEdit && (
         <form onSubmit={add} className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-          <input required value={name} onChange={(e) => setName(e.target.value)}
+          <Input required value={name} onChange={(e) => setName(e.target.value)}
             placeholder="e.g. core switch upgrade" style={{ flex: 2, minWidth: 160 }} />
-          <input required type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)}
+          <Input required type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)}
             style={{ flex: 1, minWidth: 150 }} />
-          <input required type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)}
+          <Input required type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)}
             style={{ flex: 1, minWidth: 150 }} />
           <button className="btn btn-sm">+ Add window</button>
           {err && <span className="text-sm" style={{ color: '#f85149'}}>{err}</span>}
@@ -842,7 +841,7 @@ export function CreateKeyModal({ onClose, onCreated, onSecret }:
     <Modal title="Create API key" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="ingest-prod" />
+          <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="ingest-prod" />
         </Field>
         <div style={{ marginBottom: 10 }}>
           <span className="micro text-2xs">Scopes</span>
@@ -892,10 +891,10 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
     <Modal title="Register agent" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="web-01" />
+          <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="web-01" />
         </Field>
         <Field label="Group">
-          <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="default" />
+          <Input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="default" />
         </Field>
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <Toggle on={autoUpdate} onClick={() => setAutoUpdate(!autoUpdate)} />
@@ -946,13 +945,13 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
     <Modal title="Add SNMP target" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="core-switch-01" />
+          <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="core-switch-01" />
         </Field>
         <Field label="Host">
-          <input required value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.1" />
+          <Input required value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.1" />
         </Field>
         <Field label="Port">
-          <input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
+          <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
         </Field>
         <Field label="SNMP version">
           <select value={version} onChange={(e) => setVersion(e.target.value as '2c' | '3')}>
@@ -962,12 +961,12 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
         </Field>
         {version === '2c' ? (
           <Field label="Community">
-            <input type="password" value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
+            <Input type="password" value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
           </Field>
         ) : (
           <>
             <Field label="Security user">
-              <input required value={v3User} onChange={(e) => setV3User(e.target.value)} placeholder="opscat-ro" />
+              <Input required value={v3User} onChange={(e) => setV3User(e.target.value)} placeholder="opscat-ro" />
             </Field>
             <Field label="Security level">
               <select value={v3Level} onChange={(e) => setV3Level(e.target.value)}>
@@ -988,7 +987,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
                 </div>
                 <div style={{ flex: 1 }}>
                   <Field label="Auth key (min 8 chars)">
-                    <input type="password" required minLength={8} value={v3AuthKey}
+                    <Input type="password" required minLength={8} value={v3AuthKey}
                       onChange={(e) => setV3AuthKey(e.target.value)} />
                   </Field>
                 </div>
@@ -1006,7 +1005,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
                 </div>
                 <div style={{ flex: 1 }}>
                   <Field label="Privacy key (min 8 chars)">
-                    <input type="password" required minLength={8} value={v3PrivKey}
+                    <Input type="password" required minLength={8} value={v3PrivKey}
                       onChange={(e) => setV3PrivKey(e.target.value)} />
                   </Field>
                 </div>
@@ -1015,7 +1014,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
           </>
         )}
         <Field label="Interval (seconds)">
-          <input value={interval} onChange={(e) => setIntervalS(e.target.value)} inputMode="numeric" />
+          <Input value={interval} onChange={(e) => setIntervalS(e.target.value)} inputMode="numeric" />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}

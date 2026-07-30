@@ -200,11 +200,92 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
 // intrinsic height, so it never introduces inner vertical scrolling — cards
 // and pages themselves must never become scroll containers (that lets flex
 // squeeze them to viewport height; see tokens.css).
-export function TableScroll({ minWidth = 620, children }:
-  { minWidth?: number; children: React.ReactNode }) {
+/**
+ * THE horizontal scroll container for tables — and the only sanctioned one.
+ *
+ * On a phone the scrollbar is an OS overlay: iOS shows it only WHILE the finger moves,
+ * so a table that runs past the right edge looks like it simply ends. This adds the
+ * affordance the platform does not:
+ *
+ * - the content fades out at the right edge while there is more to see,
+ * - the fade retracts while the user is actually scrolling (the native bar is visible
+ *   then — two indicators at once read as noise),
+ * - `peek` nudges the table ~30px and back the first time it comes into view.
+ *
+ * `stickyFirst` pins the first column so the row stays identifiable while scrolling.
+ * It is per call site on purpose: it earns its keep when column one is the row's
+ * identity (case id, hostname) and gets in the way when it is not.
+ */
+export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, children }:
+  { minWidth?: number; stickyFirst?: boolean; peek?: boolean; children: React.ReactNode }) {
+  const box = React.useRef<HTMLDivElement>(null);
+  const sc = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const el = sc.current, wrap = box.current;
+    if (!el || !wrap) return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let idle: number | undefined;
+    let nudging = false;
+
+    // `more` drives the fade; it is false at the right end so the fade cannot sit
+    // there suggesting content that does not exist.
+    const sync = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      wrap.dataset.more = max > 1 && el.scrollLeft < max - 4 ? '1' : '0';
+    };
+    const onScroll = () => {
+      sync();
+      if (nudging) return;            // the nudge is not the user scrolling
+      wrap.dataset.scrolling = '1';
+      window.clearTimeout(idle);
+      idle = window.setTimeout(() => { wrap.dataset.scrolling = '0'; }, 500);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    sync();
+
+    let io: IntersectionObserver | undefined;
+    if (peek && !reduced) {
+      io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          io?.unobserve(el);
+          const max = el.scrollWidth - el.clientWidth;
+          if (max < 12) return;
+          const dist = Math.min(30, max);
+          const dur = 820;
+          let t0: number | null = null;
+          nudging = true;
+          const frame = (t: number) => {
+            if (t0 === null) t0 = t;
+            const p = Math.min(1, (t - t0) / dur);
+            const s = Math.sin(p * Math.PI);          // out and back in one motion
+            el.scrollLeft = dist * (s * s * (3 - 2 * s));
+            if (p < 1) requestAnimationFrame(frame);
+            else { el.scrollLeft = 0; window.setTimeout(() => { nudging = false; }, 60); }
+          };
+          requestAnimationFrame(frame);
+        }
+      }, { threshold: 0.55 });
+      io.observe(el);
+    }
+
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      window.clearTimeout(idle);
+      ro.disconnect();
+      io?.disconnect();
+    };
+  }, [peek]);
+
   return (
-    <div className="tbl-scroll">
-      <div style={{ minWidth }}>{children}</div>
+    <div className={`tbl-box${stickyFirst ? ' tbl-sticky1' : ''}`} ref={box} data-more="0">
+      <div className="tbl-scroll" ref={sc}>
+        <div style={{ minWidth }}>{children}</div>
+      </div>
     </div>
   );
 }
@@ -224,6 +305,28 @@ export function PageHeader({ title, children }:
     </div>
   );
 }
+
+/**
+ * THE text input. Use it instead of a bare <input> for every text-like control
+ * (text, password, number, email, url, search, tel) — checkboxes and radios are a
+ * different shape and stay native.
+ *
+ * On a phone it renders its value at an optical 14px while telling Safari 16px, so the
+ * value no longer towers over its own 13px label and the focus zoom still cannot fire.
+ * The how, and the three compensations it needs, are in tokens.css under `.ctl`.
+ *
+ * `width` goes through this prop, NOT through `style`: an inline width would beat the
+ * compensation the scale depends on and leave a gap on the right edge of the control.
+ */
+export const Input = React.forwardRef<HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'width'> & { width?: number | string }>(
+  function Input({ className, width, style, ...rest }, ref) {
+    const w = typeof width === 'number' ? `${width}px` : width;
+    return (
+      <input ref={ref} className={className ? `ctl ${className}` : 'ctl'}
+        style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
+    );
+  });
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

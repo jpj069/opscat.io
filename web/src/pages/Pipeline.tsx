@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, sevColor } from '../format';
-import { KpiCard, LineChart, TableScroll, TableSkeleton } from '../ui';
+import { KpiCard, LineChart, TableScroll, TableSkeleton, Input} from '../ui';
 import type { ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats } from '../types';
 
 type Tab = 'throughput' | 'classifiers';
@@ -171,16 +171,16 @@ function Classifiers() {
           {custom.map((c, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
               padding: '5px 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <input className="mono text-sm" disabled={!isAdmin} value={c.pattern} placeholder="disk (full|usage)"
+              <Input className="mono text-sm" disabled={!isAdmin} value={c.pattern} placeholder="disk (full|usage)"
                  onChange={(e) => edit(i, { pattern: e.target.value })} />
-              <input className="mono text-sm" disabled={!isAdmin} value={c.flags ?? 'i'} placeholder="i"
+              <Input className="mono text-sm" disabled={!isAdmin} value={c.flags ?? 'i'} placeholder="i"
                  onChange={(e) => edit(i, { flags: e.target.value })} />
-              <input className="mono text-sm" disabled={!isAdmin} value={c.name} placeholder="disk_full"
+              <Input className="mono text-sm" disabled={!isAdmin} value={c.name} placeholder="disk_full"
                  onChange={(e) => edit(i, { name: e.target.value })} />
-              <input className="mono text-sm" disabled={!isAdmin} value={String(c.severity)} inputMode="numeric"
+              <Input className="mono text-sm" disabled={!isAdmin} value={String(c.severity)} inputMode="numeric"
                 style={{ color: sevColor(c.severity) }}
                 onChange={(e) => edit(i, { severity: parseInt(e.target.value, 10) || 0 })} />
-              <input className="mono text-sm" disabled={!isAdmin} value={c.targetGroup ?? ''} placeholder="—"
+              <Input className="mono text-sm" disabled={!isAdmin} value={c.targetGroup ?? ''} placeholder="—"
                 inputMode="numeric" 
                 onChange={(e) => edit(i, { targetGroup: e.target.value ? parseInt(e.target.value, 10) : null })} />
               <span>
@@ -261,7 +261,7 @@ function Tester() {
     <div className="card">
       <div className="card-title">Rule tester</div>
       <form onSubmit={run} className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-        <input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
+        <Input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
           placeholder="paste a sample log line, e.g.  kernel: Out of memory: Killed process 1234 (node)"
           style={{ flex: 3, minWidth: 240, fontSize: 'var(--t-sm)' }} />
         <select value={sev} onChange={(e) => setSev(e.target.value)} style={{ width: 150 }}>

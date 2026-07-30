@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -51,7 +51,7 @@ export default function Cases() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
-        <TableScroll minWidth={900}>
+        <TableScroll stickyFirst minWidth={900}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Case</span><span>Sev</span><span>Event</span><span>Server</span>
           <span>Status</span><span>Assignee</span><span>Root Cause</span>
@@ -140,7 +140,7 @@ function CaseEditor({ c, users, onClose, onSaved }:
             ...users.map((u) => ({ value: String(u.id), label: u.name }))]} />
       </Field>
       <Field label="Root Cause">
-        <input value={rootCause} onChange={(e) => setRootCause(e.target.value)}
+        <Input value={rootCause} onChange={(e) => setRootCause(e.target.value)}
           placeholder="e.g. upstream DNS timeout" />
       </Field>
       <Field label="Note">

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import type { UserRow } from '../types';
 
 const ROLES = ['admin', 'cto', 'lead', 'analyst'];
@@ -57,7 +57,7 @@ export default function Users() {
       {err && <div className="card text-base" style={{ color: '#f85149'}}>{err}</div>}
 
       <div className="card" style={{ padding: 0 }}>
-        <TableScroll minWidth={960}>
+        <TableScroll stickyFirst minWidth={960}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span>User</span><span>Email</span><span>Role</span>
           <span>Status</span><span>Last seen</span><span>Actions</span>
@@ -143,7 +143,7 @@ function EditModal({ user, onClose, onSaved }:
     <Modal title={`Edit ${user.name}`} onClose={onClose}>
       <form onSubmit={save}>
         <Field label="Name">
-          <input value={name} onChange={(e) => setName(e.target.value)} required />
+          <Input value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
         <Field label="Role">
           <select value={role} onChange={(e) => setRole(e.target.value)}>
@@ -183,11 +183,11 @@ function InviteModal({ onClose, onSaved, onSecret }:
     <Modal title="Invite user" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="E-Mail">
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+          <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com" />
         </Field>
         <Field label="Name">
-          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
+          <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
         </Field>
         <Field label="Role">
           <select value={role} onChange={(e) => setRole(e.target.value)}>

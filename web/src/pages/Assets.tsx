@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
@@ -78,7 +78,7 @@ export default function Assets() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
-        <TableScroll minWidth={700}>
+        <TableScroll stickyFirst minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
         </div>
@@ -157,19 +157,19 @@ function CreateHeartbeatModal({ onClose, onCreated, onSecret }:
     <Modal title="Add heartbeat" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
+          <Input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
             placeholder="nightly-backup" />
         </Field>
         <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
           <div style={{ flex: 1 }}>
             <Field label="Expected every (seconds)">
-              <input type="number" min={30} value={intervalS}
+              <Input type="number" min={30} value={intervalS}
                 onChange={(e) => setIntervalS(Number(e.target.value))} />
             </Field>
           </div>
           <div style={{ flex: 1 }}>
             <Field label="Grace (seconds)">
-              <input type="number" min={0} value={graceS}
+              <Input type="number" min={0} value={graceS}
                 onChange={(e) => setGraceS(Number(e.target.value))} />
             </Field>
           </div>

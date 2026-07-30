@@ -3,7 +3,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
-import { Avatar, SevBadge, Spark, TableSkeleton } from '../ui';
+import { Avatar, SevBadge, Spark, TableSkeleton, Input} from '../ui';
 import { PanelTopIcon, PanelLeftIcon, SquareIcon } from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
@@ -131,7 +131,7 @@ export default function Monitor() {
         {/* no inline font-size on a form control: an inline style beats the media query
             that lifts inputs to 16px on phones, and below 16px iOS zooms the page on
             focus. Density comes from the padding. */}
-        <input value={logQuery} onChange={(e) => setLogQuery(e.target.value)}
+        <Input value={logQuery} onChange={(e) => setLogQuery(e.target.value)}
           placeholder="filter (regex)…" style={{ flex: 1, maxWidth: 280, padding: '3px 8px' }} />
         <span className="mono text-2xs text-text3">{logs.length}</span>
       </div>

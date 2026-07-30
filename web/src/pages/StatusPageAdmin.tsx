@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha, relTime } from '../format';
-import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader } from '../ui';
+import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
 const GRID = '20px 1fr 110px 150px 260px 70px';
@@ -95,7 +95,7 @@ export default function StatusPageAdmin() {
           <span className="card-title" style={{ margin: 0 }}>Components</span>
           {canEdit && <button className="btn btn-sm" onClick={() => setShowAdd(true)}>+ Add component</button>}
         </div>
-        <TableScroll minWidth={780}>
+        <TableScroll stickyFirst minWidth={780}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span />
           <span>Name</span>
@@ -186,7 +186,7 @@ function UserReports({ isAdmin }: { isAdmin: boolean }) {
             </span>
             <span className="row" style={{ gap: 6 }}>
               <span className="micro text-2xs">Alert at</span>
-              <input className="text-sm" type="number" min={1} max={1000} value={threshold} style={{ width: 60, padding: '3px 6px' }}
+              <Input className="text-sm" type="number" min={1} max={1000} value={threshold} width={60} style={{ padding: '3px 6px' }}
                 onChange={(e) => setThreshold(e.target.value)}
                 onBlur={() => save({ status_reports_threshold: String(Math.max(1, parseInt(threshold, 10) || 5)) })} />
               <span className="micro text-2xs">/ 15 min</span>
@@ -249,11 +249,11 @@ function AddComponentModal({ onClose, onAdded }: { onClose: () => void; onAdded:
     <Modal title="Add component" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
-          <input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
+          <Input required autoFocus value={name} onChange={(e) => setName(e.target.value)}
             placeholder="API Gateway" />
         </Field>
         <Field label="Group">
-          <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Core Services" />
+          <Input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Core Services" />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}

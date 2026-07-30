@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
-import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton } from '../ui';
+import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input} from '../ui';
 import type { Incident } from '../types';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
@@ -222,11 +222,11 @@ function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreat
     <Modal title="New Incident" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Title">
-          <input required autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
+          <Input required autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
             placeholder="Elevated API error rate" />
         </Field>
         <Field label="Severity (0–100)">
-          <input type="number" min={0} max={100} value={severity}
+          <Input type="number" min={0} max={100} value={severity}
             onChange={(e) => setSeverity(Number(e.target.value))} />
         </Field>
         <Field label="Initial message">
