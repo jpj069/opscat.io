@@ -53,6 +53,10 @@ const toListing = (l) => ({
   tier: l.tier,
   codes: parseJson(l.codes, []),
   url: l.url || null,
+  // '' = the asset itself; otherwise the mail server this finding is about,
+  // e.g. "mail4.link11.com [85.131.131.20]". A listed MX and a listed domain are
+  // different problems with different fixes, so the UI must not merge them.
+  subject: l.subject || null,
   firstSeen: l.first_seen,
   lastSeen: l.last_seen,
   resolvedAt: l.resolved_at,
@@ -88,6 +92,9 @@ function toAsset(asset) {
     error: run ? run.error : null,
     lastCheckedAt: run ? run.ts : null,
     lastDurationMs: run ? run.duration_ms : null,
+    // For a domain: the mail servers behind its MX records, each with its own
+    // verdict. Empty for IP assets.
+    mxHosts: run ? parseJson(run.mx_hosts, []) : [],
   };
 }
 

@@ -302,6 +302,27 @@ const MIGRATIONS = [
       DELETE FROM synthetic_checks WHERE id       IN (${ids});
     `);
   },
+  // idx 11 -> version 12: reputation checks the hosts a domain's MX records point
+  // at, so a listing needs to say WHAT is listed. '' keeps meaning "the asset
+  // itself"; an MX finding carries "mail.example.com [1.2.3.4]".
+  //
+  // NOT NULL DEFAULT '' rather than a nullable column: SQLite treats NULLs as
+  // distinct in a UNIQUE index, so nullable `subject` would quietly allow several
+  // open episodes for the asset itself on the same zone — the exact invariant the
+  // index exists to hold.
+  () => {
+    if (!hasColumn('reputation_listings', 'subject')) {
+      db.exec("ALTER TABLE reputation_listings ADD COLUMN subject TEXT NOT NULL DEFAULT ''");
+    }
+    addColumn('reputation_runs', 'mx_hosts', 'TEXT');
+    // The partial unique index has to widen with it. Indexes can be replaced
+    // without touching the table, so this is cheap even on a large history.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_rep_listing_open;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_listing_open
+        ON reputation_listings(asset_id, subject, zone) WHERE resolved_at IS NULL;
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

@@ -139,7 +139,15 @@ export type ReputationStatus = 'listed' | 'informational' | 'clean' | 'unknown' 
 // cannot be recovered from a series of samples. `resolvedAt` non-null = delisted.
 export interface ReputationListing {
   name: string; zone: string; tier: ReputationTier; codes: string[]; url: string | null;
+  // null = the asset itself is listed. Otherwise the mail server behind one of
+  // its MX records, e.g. "mail4.link11.com [85.131.131.20]" — a different problem
+  // with a different fix, so it is never merged with the domain's own verdict.
+  subject: string | null;
   firstSeen: number; lastSeen: number; resolvedAt: number | null;
+}
+// One mail server behind a domain's MX records, with its own blocklist verdict.
+export interface ReputationMxHost {
+  host: string; ip: string; listed: number; covered: boolean;
 }
 export interface ReputationAsset {
   id: number; target: string; kind: 'ip' | 'domain' | null; rdns: string | null;
@@ -149,6 +157,7 @@ export interface ReputationAsset {
   policy: string[]; unavailable: string[]; errored: string[];
   zonesQueried: number | null; zonesTotal: number | null;
   error: string | null; lastCheckedAt: number | null; lastDurationMs: number | null;
+  mxHosts: ReputationMxHost[];   // domain assets only
 }
 export interface ReputationCoverage {
   queried: number | null;   // lists that actually answered

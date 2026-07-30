@@ -25,7 +25,7 @@ const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 
 // one grid string for head, rows and skeleton — never inline it twice
 const GRID = 'minmax(150px,1.4fr) minmax(140px,1.2fr) 150px minmax(150px,1.4fr) 110px 70px';
 // head, rows and skeleton of the history table share this one string
-const HISTORY_GRID = 'minmax(130px,1.5fr) 90px 100px 110px 90px';
+const HISTORY_GRID = 'minmax(120px,1.3fr) minmax(90px,1fr) 80px 90px 100px 80px';
 // same for the SPF discovery picker (checkbox · target · kind · source)
 const SPF_GRID = '24px minmax(120px,1.4fr) 74px minmax(90px,1fr)';
 
@@ -359,6 +359,12 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                     <span className="row row-wrap" style={{ gap: 8, minWidth: 0 }}>
                       <StatusPill text={l.tier} color={TIER_COLOR[l.tier]} />
                       <span className="mono text-sm text-text0">{l.name}</span>
+                      {/* WHAT is listed. Without this a listed mail server reads as
+                          "the domain is listed" and the fix is looked for in the
+                          wrong place entirely. */}
+                      {l.subject && (
+                        <span className="mono text-2xs" style={{ color: SEV.medium }}>{l.subject}</span>
+                      )}
                       {l.codes?.length > 0 && (
                         <span className="mono text-2xs text-text3">{l.codes.join(' ')}</span>
                       )}
@@ -383,6 +389,39 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
               </div>
             )}
           </div>
+
+          {asset.mxHosts.length > 0 && (
+            <div className="card">
+              <div className="card-title">
+                Mail servers
+                <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>
+                  from this domain's MX records
+                </span>
+              </div>
+              <div className="text-2xs text-text2" style={{ marginBottom: 8, lineHeight: 1.6 }}>
+                The domain's own RHSBL verdict says nothing about these — a listed mail
+                server means inbound mail is being refused, which is a separate problem.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {asset.mxHosts.map((m) => (
+                  <div key={`${m.host}-${m.ip}`} className="row row-wrap"
+                    style={{ gap: 8, justifyContent: 'space-between' }}>
+                    <span className="row row-wrap" style={{ gap: 8, minWidth: 0 }}>
+                      <GlowDot color={m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium}
+                        size={7} />
+                      <span className="mono text-2xs text-text0">{m.host}</span>
+                      <span className="mono text-2xs text-text3">{m.ip}</span>
+                    </span>
+                    <span className="mono text-2xs" style={{
+                      color: m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium }}>
+                      {m.listed > 0 ? `${m.listed} listing${m.listed === 1 ? '' : 's'}`
+                        : m.covered ? 'clean' : 'incomplete'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <ZoneBreakdown asset={asset} zones={zones} />
 
@@ -448,12 +487,13 @@ function ListingHistory({ assetId }: { assetId: number }) {
       {rows !== null && rows.length > 0 && (
         <TableScroll minWidth={520}>
           <div className="tbl-head" style={{ gridTemplateColumns: HISTORY_GRID }}>
-            <span>List</span><span>Tier</span><span>From</span><span>Until</span><span>Duration</span>
+            <span>List</span><span>Subject</span><span>Tier</span><span>From</span><span>Until</span><span>For</span>
           </div>
           {rows.map((l) => (
-            <div key={`${l.zone}-${l.firstSeen}`} className="tbl-row"
+            <div key={`${l.zone}-${l.subject ?? ''}-${l.firstSeen}`} className="tbl-row"
               style={{ gridTemplateColumns: HISTORY_GRID }}>
               <span className="mono text-2xs text-text0">{l.name}</span>
+              <span className="mono text-2xs text-text3">{l.subject || 'the asset'}</span>
               <span><StatusPill text={l.tier} color={TIER_COLOR[l.tier]} /></span>
               <span className="mono text-2xs text-text2">{relTime(l.firstSeen)}</span>
               <span className="mono text-2xs text-text2">

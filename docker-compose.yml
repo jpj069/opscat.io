@@ -26,9 +26,12 @@ services:
       - OPSCAT_SECRET=${OPSCAT_SECRET:-}
       - OPSCAT_PROBE_CITY=${OPSCAT_PROBE_CITY:-Local}
       - OPSCAT_PROBE_CC=${OPSCAT_PROBE_CC:-XX}
-      # Resolver for blocklist (DNSBL) lookups. Blank = the host's own resolver,
-      # which is what the lists want; they refuse queries via 1.1.1.1/8.8.8.8.
-      - OPSCAT_REPUTATION_DNS=${OPSCAT_REPUTATION_DNS:-}
+      # Resolver for blocklist (DNSBL) lookups — the `unbound` sidecar below by
+      # default. The lists refuse queries arriving through a large shared
+      # resolver (1.1.1.1, 8.8.8.8, and a hoster's own count as such), so a
+      # recursive resolver of our own is what makes their answers trustworthy.
+      # Override to a comma-separated list, or to empty for the host resolver.
+      - OPSCAT_REPUTATION_DNS=${OPSCAT_REPUTATION_DNS:-unbound}
       - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
       - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
       - OPSCAT_EDITION=community
@@ -39,6 +42,30 @@ services:
     volumes:
       - opscat_data:/data
     restart: always
+
+  # Recursive resolver for blocklist lookups only. Not published to any host
+  # port — an open recursive resolver is a DNS-amplification reflector, and
+  # unbound.conf refuses everything outside the compose network.
+  #
+  # It exists because DNSBLs refuse queries arriving through a large shared
+  # resolver: on this host every Spamhaus zone answered 127.255.255.254 ("use
+  # your own resolver") via systemd-resolved, while a direct query to Spamhaus'
+  # authoritative servers from the same machine answered the canary correctly.
+  # The app does NOT depend_on it: if the resolver is down, Reputation degrades
+  # to "unknown" (which it reports honestly) rather than holding up the app.
+  unbound:
+    build: ./unbound
+    expose:
+      - "53"
+    restart: always
+    healthcheck:
+      # Can it actually recurse? A resolver that answers from an empty cache but
+      # cannot reach the roots would otherwise look healthy.
+      test: ["CMD", "drill", "-Q", "@127.0.0.1", "dbltest.com.dbl.spamhaus.org"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   caddy:
     image: caddy:2-alpine

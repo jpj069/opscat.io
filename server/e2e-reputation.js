@@ -97,7 +97,7 @@ async function migrationCarriesOver() {
   try { r = JSON.parse(String(out).trim().split('\n').pop()); } catch { return false; }
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
 
-  return r.v === 11
+  return r.v === 12
     && r.assets.length === 1 && r.assets[0].target === '198.51.100.7'
     && r.assets[0].kind === 'ip' && r.assets[0].rdns === 'mail.example.net'
     && r.listings.length === 1 && r.listings[0].zone === 'zen.spamhaus.org'
@@ -205,7 +205,7 @@ async function main() {
   const { db } = require('./src/db');
   const org = db.prepare('SELECT id FROM organizations ORDER BY id LIMIT 1').get();
   chk('a bootstrapped org exists', !!org);
-  chk('the database is at schema v11', db.pragma('user_version', { simple: true }) === 11,
+  chk('the database is at schema v12', db.pragma('user_version', { simple: true }) === 12,
     String(db.pragma('user_version', { simple: true })));
 
   const assetId = db.prepare(`INSERT INTO reputation_assets
@@ -225,15 +225,19 @@ async function main() {
   // and an end, not a field on the newest sample.
   const t0 = Date.now();
   const fZen = { name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org', tier: 'critical', codes: ['127.0.0.2'], url: null };
+  // answeredKeys are (subject, zone) pairs — '' subject = the asset itself. The
+  // subject dimension exists because a domain's MX hosts are checked too, and a
+  // listed mail server is a different fact from a listed domain.
+  const K = (zone, subject = '') => `${subject}\u0000${zone}`;
 
-  let sync = reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org', 'bl.spamcop.net'], t0);
+  let sync = reputation.syncListings(assetId, [fZen], [K('zen.spamhaus.org'), K('bl.spamcop.net')], t0);
   chk('a new finding opens a listing', sync.opened.length === 1 && sync.resolved.length === 0);
   const openNow = () => db.prepare(
     'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL ORDER BY zone').all(assetId);
   chk('the listing records when it started', openNow().length === 1 && openNow()[0].first_seen === t0);
 
   // Same finding again: the episode continues, first_seen must NOT move.
-  sync = reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org', 'bl.spamcop.net'], t0 + 60000);
+  sync = reputation.syncListings(assetId, [fZen], [K('zen.spamhaus.org'), K('bl.spamcop.net')], t0 + 60000);
   chk('a continuing listing is not reopened', sync.opened.length === 0 && openNow().length === 1);
   chk('first_seen stays put while last_seen advances',
     openNow()[0].first_seen === t0 && openNow()[0].last_seen === t0 + 60000);
@@ -241,13 +245,13 @@ async function main() {
   // THE load-bearing rule: a zone that did not answer must not clear a listing.
   // Without this a resolver having a bad day silently erases a live critical
   // finding — the same failure the RFC 5782 canary exists to prevent, one level up.
-  sync = reputation.syncListings(assetId, [], ['bl.spamcop.net'], t0 + 120000);
+  sync = reputation.syncListings(assetId, [], [K('bl.spamcop.net')], t0 + 120000);
   chk('a SILENT zone never resolves a listing',
     sync.resolved.length === 0 && openNow().length === 1,
     `resolved ${sync.resolved.length}, still open ${openNow().length}`);
 
   // …but a zone that answered and no longer lists it does.
-  sync = reputation.syncListings(assetId, [], ['zen.spamhaus.org', 'bl.spamcop.net'], t0 + 180000);
+  sync = reputation.syncListings(assetId, [], [K('zen.spamhaus.org'), K('bl.spamcop.net')], t0 + 180000);
   chk('an ANSWERING zone resolves the listing',
     sync.resolved.length === 1 && openNow().length === 0);
   const episodes = db.prepare('SELECT * FROM reputation_listings WHERE asset_id = ? ORDER BY id').all(assetId);
@@ -256,7 +260,7 @@ async function main() {
 
   // A re-listing after a delisting is a NEW episode, not a revived one — so the
   // history reads as distinct incidents rather than one smear.
-  reputation.syncListings(assetId, [fZen], ['zen.spamhaus.org'], t0 + 240000);
+  reputation.syncListings(assetId, [fZen], [K('zen.spamhaus.org')], t0 + 240000);
   const all = db.prepare('SELECT * FROM reputation_listings WHERE asset_id = ? ORDER BY id').all(assetId);
   chk('a re-listing opens a second episode',
     all.length === 2 && all[1].first_seen === t0 + 240000 && all[1].resolved_at === null);
@@ -393,6 +397,85 @@ async function main() {
   chk('reputation_runs is pruned', /DELETE FROM reputation_runs WHERE ts </.test(retSrc));
   chk('reputation_listings is NOT pruned', !/DELETE FROM reputation_listings/.test(retSrc));
 
+  // ── 12b. MX findings ride on the domain asset, keyed by subject ──────────
+  // A domain's RHSBL verdict says nothing about the hosts its MX points at, and a
+  // listed mail server is a different problem with a different fix — so the two
+  // must never merge into one episode.
+  const domAsset = db.prepare(`INSERT INTO reputation_assets
+      (org_id, target, kind, interval_s, enabled, created_at)
+    VALUES (?, 'mx-e2e.example', 'domain', 21600, 1, ?)`).run(org.id, Date.now()).lastInsertRowid;
+  const zenF = { name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org', tier: 'critical', codes: ['127.0.0.2'], url: null };
+  const dblF = { name: 'Spamhaus DBL', zone: 'dbl.spamhaus.org', tier: 'critical', codes: ['127.0.1.2'], url: null };
+  const MX_SUBJ = 'mail.mx-e2e.example [198.51.100.9]';
+  const t1 = Date.now();
+
+  reputation.syncListings(domAsset, [
+    { ...dblF, subject: '' },            // the domain itself
+    { ...zenF, subject: MX_SUBJ },       // its mail server
+  ], [`\u0000dbl.spamhaus.org`, `${MX_SUBJ}\u0000zen.spamhaus.org`], t1);
+  const domOpen = () => db.prepare(
+    'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL ORDER BY id').all(domAsset);
+  chk('domain and MX findings are separate episodes', domOpen().length === 2,
+    JSON.stringify(domOpen().map((l) => [l.zone, l.subject])));
+  chk('the MX episode records which host it is about',
+    domOpen().some((l) => l.subject === MX_SUBJ && l.zone === 'zen.spamhaus.org'));
+  chk('the domain episode carries an empty subject',
+    domOpen().some((l) => l.subject === '' && l.zone === 'dbl.spamhaus.org'));
+
+  // The same zone can list the domain AND its mail server at once — one open
+  // episode each, which a (asset, zone) index would have refused.
+  reputation.syncListings(domAsset, [
+    { ...zenF, subject: '' }, { ...zenF, subject: MX_SUBJ }, { ...dblF, subject: '' },
+  ], [`\u0000zen.spamhaus.org`, `\u0000dbl.spamhaus.org`, `${MX_SUBJ}\u0000zen.spamhaus.org`], t1 + 1000);
+  chk('one zone can list the asset and its MX simultaneously',
+    domOpen().filter((l) => l.zone === 'zen.spamhaus.org').length === 2,
+    JSON.stringify(domOpen().map((l) => [l.zone, l.subject])));
+
+  // Resolving is per (subject, zone): the MX clearing must not clear the domain's.
+  reputation.syncListings(domAsset, [{ ...zenF, subject: '' }, { ...dblF, subject: '' }],
+    [`\u0000zen.spamhaus.org`, `\u0000dbl.spamhaus.org`, `${MX_SUBJ}\u0000zen.spamhaus.org`], t1 + 2000);
+  chk('the MX episode resolves without touching the domain\'s',
+    domOpen().length === 2 && !domOpen().some((l) => l.subject === MX_SUBJ),
+    JSON.stringify(domOpen().map((l) => [l.zone, l.subject])));
+
+  // And the silent-zone rule holds per subject too.
+  reputation.syncListings(domAsset, [{ ...dblF, subject: '' }], [`\u0000dbl.spamhaus.org`], t1 + 3000);
+  chk('a silent zone does not resolve the asset\'s own episode either',
+    domOpen().some((l) => l.zone === 'zen.spamhaus.org' && l.subject === ''));
+
+  // checkMxHosts: MX -> addresses -> a full lookup each, deduplicated and capped.
+  reputation.resetCanaryCache();
+  const mxTable = canaries(IP, { [`9.100.51.198.${CRIT[0].zone}`]: ['127.0.0.2'] });
+  const mxResolver = {
+    ...stubResolver(mxTable),
+    resolveMx: async (n) => (n === 'mx-e2e.example'
+      ? [{ exchange: 'mail.mx-e2e.example', priority: 10 },
+        { exchange: 'mail2.mx-e2e.example', priority: 20 }]
+      : (() => { const e = new Error('NXDOMAIN'); e.code = 'ENOTFOUND'; throw e; })()),
+  };
+  // both MX names resolve to the SAME address — the dedupe must collapse them
+  const withA = {
+    ...mxResolver,
+    resolve4: async (n) => {
+      if (n === 'mail.mx-e2e.example' || n === 'mail2.mx-e2e.example') return ['198.51.100.9'];
+      return stubResolver(mxTable).resolve4(n);
+    },
+  };
+  const mxRes = await reputation.checkMxHosts(
+    { target: 'mx-e2e.example', kind: 'domain' }, 300, withA);
+  chk('checkMxHosts resolves MX names to addresses and checks them',
+    mxRes.hosts.length === 1 && mxRes.hosts[0].ip === '198.51.100.9',
+    JSON.stringify(mxRes.hosts));
+  chk('two MX names on one address are checked once',
+    mxRes.hosts.filter((h) => h.ip === '198.51.100.9').length === 1);
+  chk('an MX listing is tagged with the host it belongs to',
+    mxRes.found.some((f) => f.subject.includes('mail.mx-e2e.example') && f.subject.includes('198.51.100.9')),
+    JSON.stringify(mxRes.found.map((f) => f.subject)));
+  chk('an IP asset gets no MX lookup at all',
+    (await reputation.checkMxHosts({ target: '1.2.3.4', kind: 'ip' }, 300,
+      { ...withA, resolveMx: async () => { const e = new Error('nx'); e.code = 'ENOTFOUND'; throw e; } })
+    ).hosts.length === 0);
+
   // ── 13. SPF discovery ────────────────────────────────────────────────────
   // The real link11.com tree, which is the case the feature exists for: eight
   // senders written directly into the record (one of them the forgotten relay on
@@ -519,7 +602,7 @@ async function main() {
   // ── 13. migration v10 -> v11 carries an open listing across ─────────────
   // db.js is a singleton, so the migration cannot re-run in this process: build
   // a v10-shaped database and load db.js against it in a child.
-  chk('migration v10 -> v11 preserves the asset and its open listing', await migrationCarriesOver());
+  chk('migration v10 -> v12 preserves the asset and its open listing', await migrationCarriesOver());
 
   console.log(R.join('\n'));
   const failed = R.filter((r) => r.startsWith('FAIL')).length;

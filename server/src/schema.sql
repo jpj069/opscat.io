@@ -297,7 +297,10 @@ CREATE TABLE IF NOT EXISTS reputation_runs (
   unavailable   TEXT,                         -- JSON [{name,zone,tier}] — refused, NOT clean
   errored       TEXT,                         -- JSON [{name,zone,tier,error}]
   policy        TEXT,                         -- JSON [{name,zone,codes}] — PBL-style, no accusation
-  error         TEXT
+  error         TEXT,
+  -- JSON [{host,ip,listed,covered}] for a domain asset: the mail servers its MX
+  -- records point at and what each one's own lookup found. Null for IP assets.
+  mx_hosts      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rep_runs ON reputation_runs(asset_id, ts);
 
@@ -309,14 +312,22 @@ CREATE TABLE IF NOT EXISTS reputation_listings (
   tier         TEXT NOT NULL,                 -- critical | standard | informational
   codes        TEXT,                          -- JSON [string] — the 127.0.0.x answers
   url          TEXT,                          -- delisting page, carried into the case
+  -- WHAT is listed. '' = the asset itself. For a domain asset we also check the
+  -- hosts its MX records point at, and those are a different thing being listed:
+  -- "link11.com is on DBL" and "its mail server 1.2.3.4 is on ZEN" are separate
+  -- facts with separate lifecycles. NOT NULL with a '' default on purpose —
+  -- SQLite treats NULLs as distinct in a UNIQUE index, so a nullable column here
+  -- would silently permit several open episodes for the asset itself.
+  subject      TEXT NOT NULL DEFAULT '',
   first_seen   INTEGER NOT NULL,
   last_seen    INTEGER NOT NULL,
   resolved_at  INTEGER                        -- NULL = still listed
 );
--- At most one OPEN listing per (asset, zone); a re-listing after a delisting is
--- a new row, so the history reads as distinct episodes rather than one smear.
+-- At most one OPEN listing per (asset, subject, zone); a re-listing after a
+-- delisting is a new row, so the history reads as distinct episodes rather than
+-- one smear.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_listing_open
-  ON reputation_listings(asset_id, zone) WHERE resolved_at IS NULL;
+  ON reputation_listings(asset_id, subject, zone) WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rep_listing_zone ON reputation_listings(zone, resolved_at);
 
 CREATE TABLE IF NOT EXISTS snmp_targets (

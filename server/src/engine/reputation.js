@@ -444,14 +444,15 @@ function targetKey(raw) {
 
 const insRun = db.prepare(`INSERT INTO reputation_runs
   (asset_id, ts, status, zones_queried, zones_total, worst_tier, duration_ms,
-   unavailable, errored, policy, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+   unavailable, errored, policy, error, mx_hosts)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const openListingsFor = db.prepare(
   'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL');
 const touchListing = db.prepare(`UPDATE reputation_listings
   SET last_seen = ?, codes = ?, url = ?, tier = ?, name = ? WHERE id = ?`);
 const openListing = db.prepare(`INSERT INTO reputation_listings
-  (asset_id, zone, name, tier, codes, url, first_seen, last_seen, resolved_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+  (asset_id, zone, name, tier, codes, url, subject, first_seen, last_seen, resolved_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
 const resolveListing = db.prepare('UPDATE reputation_listings SET resolved_at = ? WHERE id = ?');
 const setRdns = db.prepare('UPDATE reputation_assets SET rdns = ? WHERE id = ?');
 const enabledAssets = db.prepare('SELECT * FROM reputation_assets WHERE enabled = 1');
@@ -469,33 +470,94 @@ const jsonOrNull = (v) => (v && v.length ? JSON.stringify(v) : null);
  *
  * @returns {{opened:Array, resolved:Array}} state transitions, for the events
  */
-function syncListings(assetId, found, answeredZones, ts) {
-  const answered = new Set(answeredZones);
+// Identity of a finding: WHAT is listed, on WHICH list. `subject` is '' for the
+// asset itself and "mail.example.com [1.2.3.4]" for a host its MX points at —
+// those are separate facts with separate lifecycles, so they get separate keys.
+const listingKey = (subject, zone) => `${subject || ''}\u0000${zone}`;
+
+function syncListings(assetId, found, answeredKeys, ts) {
+  const answered = new Set(answeredKeys);
   const open = openListingsFor.all(assetId);
-  const byZone = new Map(open.map((l) => [l.zone, l]));
-  const foundZones = new Set(found.map((f) => f.zone));
+  const byKey = new Map(open.map((l) => [listingKey(l.subject, l.zone), l]));
+  const foundKeys = new Set(found.map((f) => listingKey(f.subject, f.zone)));
   const opened = [];
   const resolved = [];
 
   for (const f of found) {
-    const existing = byZone.get(f.zone);
+    const existing = byKey.get(listingKey(f.subject, f.zone));
     if (existing) {
       // Same episode continuing: extend it, and refresh the fields a list can
       // change under us (a new return code, a moved delisting page).
       touchListing.run(ts, jsonOrNull(f.codes), f.url || null, f.tier, f.name, existing.id);
     } else {
-      openListing.run(assetId, f.zone, f.name, f.tier, jsonOrNull(f.codes), f.url || null, ts, ts);
+      openListing.run(assetId, f.zone, f.name, f.tier, jsonOrNull(f.codes), f.url || null,
+        f.subject || '', ts, ts);
       opened.push(f);
     }
   }
 
   for (const l of open) {
-    if (foundZones.has(l.zone)) continue;
-    if (!answered.has(l.zone)) continue; // silent zone — prove nothing, change nothing
+    const key = listingKey(l.subject, l.zone);
+    if (foundKeys.has(key)) continue;
+    if (!answered.has(key)) continue; // silent zone — prove nothing, change nothing
     resolveListing.run(ts, l.id);
     resolved.push(l);
   }
   return { opened, resolved };
+}
+
+// A domain asset is checked against the RHSBLs, but that only covers the domain
+// NAME. The hosts its MX records point at are separate addresses on separate
+// lists, and for a self-hosted mail server they are the org's own problem — a
+// listed MX means inbound mail is being refused, which the domain's own RHSBL
+// verdict says nothing about.
+//
+// Bounded hard: at most this many DISTINCT addresses. Each one is a full ~31-zone
+// lookup, so an unbounded fan-out over a domain with eight MX records would be
+// ~250 queries against lists that rate-limit per source IP. Microsoft 365 and
+// Google resolve their MX names to the same few addresses anyway, so the cap
+// almost never bites in practice.
+const MX_MAX_ADDRESSES = 3;
+
+async function checkMxHosts(asset, timeoutMs, injectedResolver) {
+  const resolver = injectedResolver || buildResolver(timeoutMs, 2);
+  if (typeof resolver.resolveMx !== 'function') return { found: [], answered: [], hosts: [] };
+
+  let mxs;
+  try {
+    mxs = await withTimeout(resolver.resolveMx(asset.target), timeoutMs);
+  } catch { return { found: [], answered: [], hosts: [] }; }
+  if (!mxs || !mxs.length) return { found: [], answered: [], hosts: [] };
+
+  // Resolve MX names to addresses, deduplicated: several MX names sharing one
+  // address is the norm, and checking it twice would waste the whole budget.
+  const seen = new Set();
+  const targets = [];
+  for (const mx of mxs.sort((a, b) => a.priority - b.priority)) {
+    if (targets.length >= MX_MAX_ADDRESSES) break;
+    let addrs = [];
+    try { addrs = await withTimeout(resolver.resolve4(mx.exchange), timeoutMs) || []; }
+    catch { continue; }
+    for (const ip of addrs) {
+      if (seen.has(ip) || targets.length >= MX_MAX_ADDRESSES) continue;
+      seen.add(ip);
+      targets.push({ host: String(mx.exchange).replace(/\.$/, ''), ip });
+    }
+  }
+
+  const found = [];
+  const answered = [];
+  const hosts = [];
+  for (const t of targets) {
+    let res;
+    // eslint-disable-next-line no-await-in-loop
+    try { res = await lookup(t.ip, timeoutMs, injectedResolver); } catch { continue; }
+    const subject = `${t.host} [${t.ip}]`;
+    hosts.push({ host: t.host, ip: t.ip, listed: res.listed.length, covered: res.criticalCovered });
+    for (const z of res.answered) answered.push(listingKey(subject, z));
+    for (const l of res.listed) found.push({ ...l, subject });
+  }
+  return { found, answered, hosts };
 }
 
 /**
@@ -521,7 +583,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
   if (!res) {
     // An unusable target or a resolver that gave us nothing at all. Recorded as
     // `unknown`, never as clean, and the open listings stay open.
-    insRun.run(asset.id, ts, 'unknown', 0, 0, null, durationMs, null, null, null, failure);
+    insRun.run(asset.id, ts, 'unknown', 0, 0, null, durationMs, null, null, null, failure, null);
     return { status: 'unknown', error: failure, listed: [], opened: [], resolved: [] };
   }
 
@@ -536,31 +598,53 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
     } catch { /* no PTR, or the resolver refused — keep the last known value */ }
   }
 
-  const actionable = res.listed.filter((l) => l.tier !== 'informational');
+  // For a domain, also check the hosts its MX records point at. Their findings
+  // ride along on the same asset, distinguished by `subject`.
+  let mx = { found: [], answered: [], hosts: [] };
+  if (asset.kind === 'domain') {
+    try { mx = await checkMxHosts(asset, timeoutMs, injectedResolver); }
+    catch { /* the domain's own verdict stands on its own */ }
+  }
+
+  const allFound = [...res.listed.map((l) => ({ ...l, subject: '' })), ...mx.found];
+  const actionable = allFound.filter((l) => l.tier !== 'informational');
   // A finding outranks a partial outage: if zones answered and one of them
   // listed the asset, that is a fact, and reporting `unknown` would contradict
   // the alert the on-call just received. The incompleteness still rides along in
   // `error` so the UI can say the run did not cover everything.
+  // Worst tier across the domain AND its mail servers — a critical listing on an
+  // MX outranks a clean domain verdict, because mail stops either way.
+  const worstTier = allFound.some((l) => l.tier === 'critical') ? 'critical'
+    : allFound.some((l) => l.tier === 'standard') ? 'standard'
+      : allFound.length ? 'informational' : null;
+
   let status;
   if (actionable.length) status = 'listed';
   else if (!res.criticalCovered) status = 'unknown';
-  else if (res.listed.length) status = 'informational';
+  else if (allFound.length) status = 'informational';
   else status = 'clean';
 
   const error = res.criticalCovered ? null
     : 'no critical blocklist reachable — check the resolver (OPSCAT_REPUTATION_DNS)';
 
   insRun.run(asset.id, ts, status, res.zonesQueried, res.zonesTotal,
-    res.worstTier || null, durationMs,
-    jsonOrNull(res.unavailable), jsonOrNull(res.errored), jsonOrNull(res.policy), error);
+    worstTier || null, durationMs,
+    jsonOrNull(res.unavailable), jsonOrNull(res.errored), jsonOrNull(res.policy), error,
+    jsonOrNull(mx.hosts));
 
-  const { opened, resolved } = syncListings(asset.id, res.listed, res.answered, ts);
+  const answeredKeys = [
+    ...res.answered.map((z) => listingKey('', z)),
+    ...mx.answered,
+  ];
+  const { opened, resolved } = syncListings(asset.id, allFound, answeredKeys, ts);
 
   if (actionable.length) {
-    const names = actionable.map((l) => l.name).join(', ');
+    // Name the mail server when that is what is listed. "link11.com listed on
+    // Spamhaus ZEN" would send someone looking at the wrong thing entirely.
+    const names = actionable.map((l) => (l.subject ? `${l.name} (${l.subject})` : l.name)).join(', ');
     pipeline.ingestEvent({
       name: 'reputation_listed', device: asset.target, target: asset.target,
-      severity: TIER_SEVERITY[res.worstTier] || TIER_SEVERITY.standard,
+      severity: TIER_SEVERITY[worstTier] || TIER_SEVERITY.standard,
       description: `reputation_listed ${asset.target} listed on ${actionable.length} blocklist(s): ${names}`.slice(0, 300),
     }, 'reputation', false, asset.org_id);
   } else if (resolved.some((l) => l.tier !== 'informational')) {
@@ -576,7 +660,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
     }, 'reputation', false, asset.org_id);
   }
 
-  return { status, error, listed: res.listed, opened, resolved };
+  return { status, error, listed: allFound, mx: mx.hosts, opened, resolved };
 }
 
 // ---- scheduler ---------------------------------------------------------------
@@ -809,7 +893,7 @@ async function discoverSpf(domain, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResol
 module.exports = {
   lookup, parseTarget, classify, reverseIPv4, reverseIPv6, expandIPv6, resetCanaryCache,
   normalizeTarget, targetKey,
-  runAsset, syncListings, tick, start, resetSchedule,
+  runAsset, syncListings, checkMxHosts, tick, start, resetSchedule,
   discoverSpf,
   IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS, SPF_MAX_LOOKUPS,
 };

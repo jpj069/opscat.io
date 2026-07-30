@@ -84,7 +84,7 @@ the split between them carrying the design:
 |---|---|---|
 | `reputation_assets` | the monitored IP or domain | — |
 | `reputation_runs` | one row per lookup (a time series) | pruned like every sample table |
-| `reputation_listings` | one row per **episode** of being listed, with `first_seen` / `resolved_at` | **kept** |
+| `reputation_listings` | one row per **episode** of being listed — `subject` + `zone` + `first_seen` / `resolved_at` | **kept** |
 
 The first version stored an asset as a `synthetic_checks` row of type `reputation` and
 its verdicts in `synthetic_results.meta`, to inherit the scheduler. That reuse was a
@@ -142,9 +142,21 @@ a listing raises its own event (`reputation_listed`) rather than
   the check fails outright rather than reporting a pass it cannot back up.
 - **Spamhaus PBL is a policy statement**, not an accusation — `127.0.0.10/11` mean "this
   range should not send mail directly". Surfaced separately; never alerts.
-- **Resolver**: the host's own by default, which is the point — DNSBLs refuse or
-  rate-limit large public resolvers. Override with `OPSCAT_REPUTATION_DNS`
-  (comma-separated) when the host resolver is unfit.
+- **Resolver**: the `unbound` compose sidecar (`unbound/`), overridable with
+  `OPSCAT_REPUTATION_DNS`. This is not a preference, it is the difference between the
+  feature working and quietly not: DNSBLs refuse queries arriving through a large shared
+  resolver, and *measured on the production host* every Spamhaus zone answered
+  `127.255.255.254` ("use your own resolver") because the container resolves through
+  `systemd-resolved` → the hoster's upstream. Queried **directly** against Spamhaus'
+  authoritative servers from the same machine, the canary answered correctly — so the
+  address was never the problem, only the middleman. A recursive resolver of our own
+  fixes it; a different *public* resolver would not, since Quad9 and friends are refused
+  for the same reason. The sidecar is never published to a host port (an open recursive
+  resolver is a DNS-amplification reflector) and the app deliberately does **not**
+  `depends_on` it: if it dies, Reputation degrades to `unknown`, which it reports
+  honestly, rather than holding up the app. One trap worth knowing: unbound drops answers
+  from private ranges as rebinding protection, and DNSBLs answer from `127.0.0.0/8` — so
+  loopback is deliberately absent from `private-address` in `unbound.conf`.
 - **Cadence**: interval floor **1h**, ceiling 24h, default 6h. The floor is the feature's
   own, not the plan's — one IP asset is ~93 queries on a cold canary cache (31 zones plus
   both controls each) and 31 warm, against lists that rate-limit per source IP, so a plan
@@ -184,6 +196,20 @@ a listing raises its own event (`reputation_listed`) rather than
   alongside the other things that walk turns up — a domain with no SPF at all, two SPF
   records (a PermError in itself), a deprecated `ptr`. Bounded by design: a lookup budget,
   a depth cap and a hard query ceiling, so a looping or hostile record cannot fan out.
+- **A domain's mail servers are checked too.** The RHSBLs only ever answer about the
+  domain NAME; the hosts its MX records point at are separate addresses on separate
+  lists, and for a self-hosted mail server they are the org's own problem — a listed MX
+  means inbound mail is being refused, which the domain's RHSBL verdict says nothing
+  about. Findings ride on the same asset, distinguished by `subject` (`''` = the asset
+  itself, otherwise `mail4.example.com [1.2.3.4]`), so "the domain is on DBL" and "its
+  mail server is on ZEN" stay separate facts with separate lifecycles — including on the
+  same zone at the same time, which is why the unique index spans
+  `(asset_id, subject, zone)`. `subject` is `NOT NULL DEFAULT ''` on purpose: SQLite
+  treats NULLs as distinct in a unique index, so a nullable column would quietly permit
+  several open episodes for the asset itself. Capped at 3 distinct addresses and
+  de-duplicated (several MX names sharing one address is the norm) — each one is a full
+  ~31-zone lookup, so an unbounded fan-out would be ~250 queries against lists that
+  rate-limit per source IP.
 - **Delisting is observable.** Because a listing has a lifecycle, the engine can tell
   "gone" from "never there" and raises `reputation_cleared` (severity 20, below the
   alerting floor) when the last actionable episode closes — a clear event a `close_event`
