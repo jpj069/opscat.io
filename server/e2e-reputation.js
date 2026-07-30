@@ -476,6 +476,52 @@ async function main() {
       { ...withA, resolveMx: async () => { const e = new Error('nx'); e.code = 'ENOTFOUND'; throw e; } })
     ).hosts.length === 0);
 
+  // ── 12c. the configured resolver must actually be used ───────────────────
+  // Shipped once with OPSCAT_REPUTATION_DNS=unbound (a compose service NAME).
+  // Node's setServers() takes addresses only, so every call threw
+  // ERR_INVALID_IP_ADDRESS, a bare catch swallowed it, and every lookup quietly
+  // went back to the host resolver the blocklists refuse. The feature then
+  // reported "Spamhaus unavailable" — correct, for entirely the wrong reason.
+  const savedDns = process.env.OPSCAT_REPUTATION_DNS;
+
+  process.env.OPSCAT_REPUTATION_DNS = '9.9.9.9, 149.112.112.112';
+  chk('plain addresses are passed through',
+    JSON.stringify(await reputation.resolveConfiguredServers()) === '["9.9.9.9","149.112.112.112"]');
+
+  // A NAME has to survive: this is the shape a compose sidecar takes, and its
+  // container IP is not stable enough to hard-code.
+  process.env.OPSCAT_REPUTATION_DNS = 'localhost';
+  const named = await reputation.resolveConfiguredServers();
+  chk('a hostname is resolved to an address, not passed through',
+    named.length === 1 && /^\d+\.\d+\.\d+\.\d+$/.test(named[0]) && named[0] !== 'localhost',
+    JSON.stringify(named));
+
+  // …and a resolvable name must not merely survive — it must reach setServers
+  // without throwing, which is precisely what the shipped bug did not do.
+  let setServersThrew = false;
+  try {
+    const dnsMod = require('dns');
+    const r = new dnsMod.promises.Resolver({ timeout: 200, tries: 1 });
+    r.setServers(named);
+  } catch { setServersThrew = true; }
+  chk('the resolved servers are acceptable to setServers', !setServersThrew,
+    JSON.stringify(named));
+
+  process.env.OPSCAT_REPUTATION_DNS = 'this-host-does-not-exist.invalid';
+  chk('an unresolvable entry is dropped rather than crashing',
+    JSON.stringify(await reputation.resolveConfiguredServers()) === '[]');
+
+  process.env.OPSCAT_REPUTATION_DNS = '';
+  chk('blank means the system resolver',
+    JSON.stringify(await reputation.resolveConfiguredServers()) === '[]');
+
+  const repEngineSrc = fs.readFileSync(path.join(__dirname, 'src', 'engine', 'reputation.js'), 'utf8');
+  chk('setServers failures are no longer swallowed silently',
+    /setServers rejected/.test(repEngineSrc) && !/catch \{ \/\* keep the system resolver \*\/ \}/.test(repEngineSrc));
+
+  if (savedDns === undefined) delete process.env.OPSCAT_REPUTATION_DNS;
+  else process.env.OPSCAT_REPUTATION_DNS = savedDns;
+
   // ── 13. SPF discovery ────────────────────────────────────────────────────
   // The real link11.com tree, which is the case the feature exists for: eight
   // senders written directly into the record (one of them the forgotten relay on

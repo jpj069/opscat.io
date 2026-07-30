@@ -156,7 +156,13 @@ a listing raises its own event (`reputation_listed`) rather than
   `depends_on` it: if it dies, Reputation degrades to `unknown`, which it reports
   honestly, rather than holding up the app. One trap worth knowing: unbound drops answers
   from private ranges as rebinding protection, and DNSBLs answer from `127.0.0.0/8` — so
-  loopback is deliberately absent from `private-address` in `unbound.conf`.
+  loopback is deliberately absent from `private-address` in `unbound.conf`. A second
+  one cost a deploy: Node's `Resolver.setServers()` takes **addresses only**, so
+  `OPSCAT_REPUTATION_DNS=unbound` (a compose service name) threw
+  `ERR_INVALID_IP_ADDRESS` on every call — and a bare `catch` sent every lookup back to
+  the refused host resolver without a word. Names are now resolved through the system
+  resolver, cached with a 10-minute TTL so a sidecar restart onto a new container IP is
+  picked up, and nothing about resolver selection fails quietly any more.
 - **Cadence**: interval floor **1h**, ceiling 24h, default 6h. The floor is the feature's
   own, not the plan's — one IP asset is ~93 queries on a cold canary cache (31 zones plus
   both controls each) and 31 warm, against lists that rate-limit per source IP, so a plan

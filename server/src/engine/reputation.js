@@ -254,12 +254,60 @@ function withTimeout(promise, ms) {
 // `tries` defaults to 1: across 31 zones a retry storm costs more than the one
 // zone it might recover, and the canary reports the gap honestly. SPF discovery
 // passes a higher value — see discoverSpf.
+//
+// SERVER RESOLUTION. Node's Resolver.setServers() accepts ADDRESSES ONLY — hand
+// it a name and it throws ERR_INVALID_IP_ADDRESS. A compose sidecar is reachable
+// by name and its container IP is not stable, so names in
+// OPSCAT_REPUTATION_DNS are resolved here through the system resolver, once,
+// and refreshed periodically in case the sidecar restarts onto a new address.
+//
+// This is not hypothetical: shipping `OPSCAT_REPUTATION_DNS=unbound` threw on
+// every call, a bare `catch` swallowed it, and every lookup quietly went back to
+// the host resolver the lists refuse. The feature reported "Spamhaus
+// unavailable" and was right — for the wrong reason. Hence: no silent catch here.
+let cachedServers = null;
+let cachedServersAt = 0;
+const SERVERS_TTL_MS = 10 * 60 * 1000;
+
+async function resolveConfiguredServers() {
+  const raw = String(process.env.OPSCAT_REPUTATION_DNS || '').trim();
+  const out = [];
+  for (const entry of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    if (net.isIP(entry)) { out.push(entry); continue; }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const { address } = await dns.promises.lookup(entry, { family: 4 });
+      out.push(address);
+    } catch (e) {
+      // Loud on purpose. An unreachable resolver is the difference between real
+      // verdicts and a silent all-clear, so it must not pass unnoticed.
+      console.warn(`[reputation] cannot resolve OPSCAT_REPUTATION_DNS entry "${entry}" `
+        + `(${(e && e.code) || 'lookup failed'}) — that resolver will not be used`);
+    }
+  }
+  cachedServers = out;
+  cachedServersAt = Date.now();
+  return out;
+}
+
+/** Resolve the configured resolvers if that has not happened (or has gone stale). */
+async function ensureServers() {
+  if (cachedServers && Date.now() - cachedServersAt < SERVERS_TTL_MS) return cachedServers;
+  return resolveConfiguredServers();
+}
+
+// Blank OPSCAT_REPUTATION_DNS = the host's own resolver. That is a valid choice
+// for a host whose resolver the lists accept, but on a typical VPS it is not:
+// the hoster's upstream is refused exactly like 1.1.1.1 and 8.8.8.8 are, which is
+// why the compose file ships a recursive resolver of its own.
 function buildResolver(timeoutMs, tries = 1) {
   const resolver = new dns.promises.Resolver({ timeout: timeoutMs, tries });
-  const override = String(process.env.OPSCAT_REPUTATION_DNS || '').trim();
-  if (override) {
-    const servers = override.split(',').map((s) => s.trim()).filter(Boolean);
-    if (servers.length) { try { resolver.setServers(servers); } catch { /* keep system resolver */ } }
+  if (cachedServers && cachedServers.length) {
+    try { resolver.setServers(cachedServers); }
+    catch (e) {
+      console.warn('[reputation] setServers rejected '
+        + `${JSON.stringify(cachedServers)}: ${(e && e.message) || e}`);
+    }
   }
   return resolver;
 }
@@ -569,6 +617,7 @@ async function checkMxHosts(asset, timeoutMs, injectedResolver) {
 // is testable without network access, the same contract lookup() offers. Nothing
 // in the app passes it; see server/e2e-reputation.js.
 async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver = null) {
+  if (!injectedResolver) await ensureServers();
   const started = process.hrtime.bigint();
   const ts = now();
   let res = null;
@@ -681,6 +730,12 @@ async function tick() {
 }
 
 function start() {
+  // Resolve the configured resolvers up front so the first run already uses them
+  // rather than silently falling back for one cycle.
+  resolveConfiguredServers().then((srv) => {
+    if (srv.length) console.log(`[reputation] blocklist resolver: ${srv.join(', ')}`);
+    else console.log('[reputation] blocklist resolver: system default');
+  }).catch(() => {});
   const iv = setInterval(() => { tick().catch(() => {}); }, 30000);
   iv.unref();
 }
@@ -737,6 +792,7 @@ async function discoverSpf(domain, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResol
   // zone out of 31 and the canary reports the gap; here a lost packet costs the
   // whole answer, and a TXT response is big enough to be the one that gets
   // dropped by a middlebox.
+  if (!injectedResolver) await ensureServers();
   const resolver = injectedResolver || buildResolver(timeoutMs, 3);
   const state = {
     lookups: 0, queries: 0, seen: new Set(), warnings: [],
@@ -894,6 +950,7 @@ module.exports = {
   lookup, parseTarget, classify, reverseIPv4, reverseIPv6, expandIPv6, resetCanaryCache,
   normalizeTarget, targetKey,
   runAsset, syncListings, checkMxHosts, tick, start, resetSchedule,
+  resolveConfiguredServers, ensureServers,
   discoverSpf,
   IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS, SPF_MAX_LOOKUPS,
 };
