@@ -145,9 +145,15 @@ export interface ReputationListing {
   subject: string | null;
   firstSeen: number; lastSeen: number; resolvedAt: number | null;
 }
-// One mail server behind a domain's MX records, with its own blocklist verdict.
+// One mail server behind a domain's MX records. `provider` non-null means it is
+// delegated to a mail platform (Microsoft 365, Google Workspace …) and is NOT
+// queried: a DNSBL is consulted by the receiving server against the SENDING
+// address, and a cloud MX only accepts — a listing there is neither actionable
+// nor meaningful for deliverability, and querying it would spend the address
+// budget that the org's own relays need.
 export interface ReputationMxHost {
-  host: string; ip: string; listed: number; covered: boolean;
+  host: string; ip: string | null; provider: string | null;
+  listed: number; covered: boolean;
 }
 export interface ReputationAsset {
   id: number; target: string; kind: 'ip' | 'domain' | null; rdns: string | null;

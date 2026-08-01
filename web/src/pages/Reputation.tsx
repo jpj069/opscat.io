@@ -399,23 +399,28 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                 </span>
               </div>
               <div className="text-2xs text-text2" style={{ marginBottom: 8, lineHeight: 1.6 }}>
-                The domain's own RHSBL verdict says nothing about these — a listed mail
-                server means inbound mail is being refused, which is a separate problem.
+                The domain's own RHSBL verdict says nothing about these. A self-hosted
+                server usually accepts <i>and</i> sends on the same address, so a listing
+                there costs you delivery. Hosts on a mail platform only accept — outbound
+                leaves elsewhere — so they are named, not queried.
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {asset.mxHosts.map((m) => (
-                  <div key={`${m.host}-${m.ip}`} className="row row-wrap"
+                  <div key={`${m.host}-${m.ip ?? m.provider}`} className="row row-wrap"
                     style={{ gap: 8, justifyContent: 'space-between' }}>
                     <span className="row row-wrap" style={{ gap: 8, minWidth: 0 }}>
-                      <GlowDot color={m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium}
+                      <GlowDot color={m.provider ? 'var(--text3)'
+                        : m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium}
                         size={7} />
                       <span className="mono text-2xs text-text0">{m.host}</span>
-                      <span className="mono text-2xs text-text3">{m.ip}</span>
+                      {m.ip && <span className="mono text-2xs text-text3">{m.ip}</span>}
                     </span>
                     <span className="mono text-2xs" style={{
-                      color: m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium }}>
-                      {m.listed > 0 ? `${m.listed} listing${m.listed === 1 ? '' : 's'}`
-                        : m.covered ? 'clean' : 'incomplete'}
+                      color: m.provider ? 'var(--text3)'
+                        : m.listed > 0 ? SEV.critical : m.covered ? SEV.green : SEV.medium }}>
+                      {m.provider ? `delegated · ${m.provider}`
+                        : m.listed > 0 ? `${m.listed} listing${m.listed === 1 ? '' : 's'}`
+                          : m.covered ? 'clean' : 'incomplete'}
                     </span>
                   </div>
                 ))}

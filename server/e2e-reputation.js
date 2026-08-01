@@ -476,6 +476,62 @@ async function main() {
       { ...withA, resolveMx: async () => { const e = new Error('nx'); e.code = 'ENOTFOUND'; throw e; } })
     ).hosts.length === 0);
 
+  // ── 12b-2. a provider's MX is named, not queried ─────────────────────────
+  // The reason is precise and the first version got it wrong: a DNSBL is consulted
+  // by the RECEIVING server against the SENDING address. A cloud MX only accepts —
+  // outbound leaves an entirely different range — so a listing there is neither
+  // actionable nor meaningful, while querying it burns the address budget the
+  // org's own relays need. A self-hosted server usually accepts AND sends on one
+  // address, which is exactly the case worth checking.
+  chk('Microsoft 365 MX is recognised as delegated',
+    reputation.mxProviderOf('link11-com.mail.protection.outlook.com') === 'Microsoft 365');
+  chk('Google Workspace MX is recognised',
+    reputation.mxProviderOf('aspmx.l.google.com') === 'Google Workspace');
+  chk('a trailing root dot does not defeat recognition',
+    reputation.mxProviderOf('ALT1.ASPMX.L.GOOGLE.COM.') === 'Google Workspace');
+  chk('a self-hosted MX is not treated as delegated',
+    reputation.mxProviderOf('mail4.link11.com') === null);
+  // A lookalike must not match on a substring — only on a real suffix boundary.
+  chk('a lookalike hostname is not mistaken for a provider',
+    reputation.mxProviderOf('mail.protection.outlook.com.evil.example') === null,
+    String(reputation.mxProviderOf('mail.protection.outlook.com.evil.example')));
+  // Suffix matching has to respect label boundaries, or a host that very much
+  // wants checking gets waved through as somebody else's problem.
+  chk('a name merely ENDING in a provider string is not delegated',
+    reputation.mxProviderOf('evil-aspmx.l.google.com') === null,
+    String(reputation.mxProviderOf('evil-aspmx.l.google.com')));
+  chk('the bare provider name itself still matches',
+    reputation.mxProviderOf('aspmx.l.google.com') === 'Google Workspace');
+
+  reputation.resetCanaryCache();
+  let queriedProviderAddress = false;
+  const provResolver = {
+    resolve4: async (n) => {
+      // If the provider's MX were resolved, this fires — the budget waste we removed.
+      if (n === 'x.mail.protection.outlook.com') { queriedProviderAddress = true; }
+      const t = canaries(IP, { [`9.100.51.198.${CRIT[0].zone}`]: ['127.0.0.2'] });
+      if (n === 'relay.own.example') return ['198.51.100.9'];
+      const v = t[n];
+      if (!v) { const e = new Error('nx'); e.code = 'ENOTFOUND'; throw e; }
+      return v;
+    },
+    resolveMx: async () => [
+      { exchange: 'x.mail.protection.outlook.com', priority: 5 },
+      { exchange: 'relay.own.example', priority: 10 },
+    ],
+  };
+  const mixed = await reputation.checkMxHosts(
+    { target: 'mixed.example', kind: 'domain' }, 300, provResolver);
+  chk('the provider MX is never resolved to an address', !queriedProviderAddress);
+  chk('…but it is reported, so the delegation is visible',
+    mixed.hosts.some((h) => h.provider === 'Microsoft 365' && h.ip === null),
+    JSON.stringify(mixed.hosts));
+  chk('the org\'s own relay still gets a full check',
+    mixed.hosts.some((h) => h.ip === '198.51.100.9' && h.provider === null && h.listed > 0),
+    JSON.stringify(mixed.hosts));
+  chk('a delegated host contributes no listing findings',
+    mixed.found.every((f) => !f.subject.includes('outlook.com')));
+
   // ── 12c. the configured resolver must actually be used ───────────────────
   // Shipped once with OPSCAT_REPUTATION_DNS=unbound (a compose service NAME).
   // Node's setServers() takes addresses only, so every call threw

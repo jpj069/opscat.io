@@ -567,6 +567,57 @@ function syncListings(assetId, found, answeredKeys, ts) {
 // almost never bites in practice.
 const MX_MAX_ADDRESSES = 3;
 
+// Mail providers whose MX only ACCEPTS mail. Checking these was a mistake in the
+// first version, and the reason is worth stating precisely, because the earlier
+// comment got it wrong:
+//
+// A DNSBL is consulted by the RECEIVING server against the SENDING address. A
+// listed MX therefore does not block your inbox. The MX check is worth having
+// because a self-hosted mail server usually accepts AND sends on the same
+// address — there, the MX address IS the sending address and a listing bites.
+//
+// With Microsoft 365 or Google that is not so: `*.mail.protection.outlook.com`
+// only accepts, and outbound leaves from an entirely different range. A listing
+// there would be neither actionable nor meaningful for deliverability, while
+// still consuming the whole address budget — a domain on M365 spent all three
+// slots on Microsoft's inbound hosts and never got to its own relay. So these are
+// reported as delegated and not queried.
+const MX_PROVIDERS = [
+  { suffix: '.mail.protection.outlook.com', name: 'Microsoft 365' },
+  { suffix: '.olc.protection.outlook.com', name: 'Microsoft 365' },
+  { suffix: '.mail.eo.outlook.com', name: 'Microsoft 365' },
+  { suffix: 'aspmx.l.google.com', name: 'Google Workspace' },
+  { suffix: '.aspmx.l.google.com', name: 'Google Workspace' },
+  { suffix: '.googlemail.com', name: 'Google Workspace' },
+  { suffix: '.pphosted.com', name: 'Proofpoint' },
+  { suffix: '.ppe-hosted.com', name: 'Proofpoint' },
+  { suffix: '.mimecast.com', name: 'Mimecast' },
+  { suffix: '.messagelabs.com', name: 'Broadcom Email Security' },
+  { suffix: '.antispamcloud.com', name: 'SpamExperts' },
+  { suffix: '.hostedemail.com', name: 'Synacor' },
+  { suffix: '.emailsrvr.com', name: 'Rackspace' },
+  { suffix: '.secureserver.net', name: 'GoDaddy' },
+  { suffix: '.zoho.com', name: 'Zoho Mail' },
+  { suffix: '.zoho.eu', name: 'Zoho Mail' },
+  { suffix: '.barracudanetworks.com', name: 'Barracuda' },
+  { suffix: '.mailanyone.net', name: 'Fasthosts' },
+  { suffix: '.mxrecord.io', name: 'MXroute' },
+  { suffix: '.mailgun.org', name: 'Mailgun' },
+];
+
+/** The provider a hostname is delegated to, or null when it looks self-hosted. */
+function mxProviderOf(host) {
+  const h = String(host || '').toLowerCase().replace(/\.$/, '');
+  // Matched on LABEL boundaries, never on a bare substring: `endsWith` alone
+  // would make `evil-aspmx.l.google.com` read as Google and skip a host that
+  // very much wants checking.
+  const hit = MX_PROVIDERS.find((p) => {
+    const suffix = p.suffix.startsWith('.') ? p.suffix.slice(1) : p.suffix;
+    return h === suffix || h.endsWith(`.${suffix}`);
+  });
+  return hit ? hit.name : null;
+}
+
 async function checkMxHosts(asset, timeoutMs, injectedResolver) {
   const resolver = injectedResolver || buildResolver(timeoutMs, 2);
   if (typeof resolver.resolveMx !== 'function') return { found: [], answered: [], hosts: [] };
@@ -580,28 +631,43 @@ async function checkMxHosts(asset, timeoutMs, injectedResolver) {
   // Resolve MX names to addresses, deduplicated: several MX names sharing one
   // address is the norm, and checking it twice would waste the whole budget.
   const seen = new Set();
+  const seenProviders = new Set();
   const targets = [];
+  const delegated = [];
   for (const mx of mxs.sort((a, b) => a.priority - b.priority)) {
-    if (targets.length >= MX_MAX_ADDRESSES) break;
+    const host = String(mx.exchange).replace(/\.$/, '');
+    const provider = mxProviderOf(host);
+    if (provider) {
+      // Reported once per provider, not once per MX name: Google publishes five
+      // names for one service and listing them all says nothing extra.
+      if (!seenProviders.has(provider)) {
+        seenProviders.add(provider);
+        delegated.push({ host, ip: null, provider, listed: 0, covered: true });
+      }
+      continue;
+    }
+    if (targets.length >= MX_MAX_ADDRESSES) continue;
     let addrs = [];
-    try { addrs = await withTimeout(resolver.resolve4(mx.exchange), timeoutMs) || []; }
+    // eslint-disable-next-line no-await-in-loop
+    try { addrs = await withTimeout(resolver.resolve4(host), timeoutMs) || []; }
     catch { continue; }
     for (const ip of addrs) {
       if (seen.has(ip) || targets.length >= MX_MAX_ADDRESSES) continue;
       seen.add(ip);
-      targets.push({ host: String(mx.exchange).replace(/\.$/, ''), ip });
+      targets.push({ host, ip });
     }
   }
 
   const found = [];
   const answered = [];
-  const hosts = [];
+  const hosts = [...delegated];
   for (const t of targets) {
     let res;
     // eslint-disable-next-line no-await-in-loop
     try { res = await lookup(t.ip, timeoutMs, injectedResolver); } catch { continue; }
     const subject = `${t.host} [${t.ip}]`;
-    hosts.push({ host: t.host, ip: t.ip, listed: res.listed.length, covered: res.criticalCovered });
+    hosts.push({ host: t.host, ip: t.ip, provider: null,
+      listed: res.listed.length, covered: res.criticalCovered });
     for (const z of res.answered) answered.push(listingKey(subject, z));
     for (const l of res.listed) found.push({ ...l, subject });
   }
@@ -952,5 +1018,6 @@ module.exports = {
   runAsset, syncListings, checkMxHosts, tick, start, resetSchedule,
   resolveConfiguredServers, ensureServers,
   discoverSpf,
-  IP_ZONES, DOMAIN_ZONES, TIER_SEVERITY, DEFAULT_TIMEOUT_MS, SPF_MAX_LOOKUPS,
+  mxProviderOf,
+  IP_ZONES, DOMAIN_ZONES, MX_PROVIDERS, TIER_SEVERITY, DEFAULT_TIMEOUT_MS, SPF_MAX_LOOKUPS,
 };
