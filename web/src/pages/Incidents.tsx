@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
-import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input} from '../ui';
+import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
 import type { Incident } from '../types';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
@@ -189,7 +189,7 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
         {RCA_FIELDS.map((f) => (
           <label key={f.key} style={{ display: 'block', marginBottom: 12 }}>
             <span className="micro text-2xs" style={{ display: 'block', marginBottom: 4 }}>{f.label}</span>
-            <textarea className="rca" value={draft[f.key]}
+            <Textarea className="rca" value={draft[f.key]}
               onChange={(e) => { setDraft((d) => ({ ...d, [f.key]: e.target.value })); setDirty(true); setSaved(false); }} />
           </label>
         ))}
@@ -230,7 +230,7 @@ function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreat
             onChange={(e) => setSeverity(Number(e.target.value))} />
         </Field>
         <Field label="Initial message">
-          <textarea className="rca" value={message} onChange={(e) => setMessage(e.target.value)}
+          <Textarea className="rca" value={message} onChange={(e) => setMessage(e.target.value)}
             placeholder="We are investigating reports of…" />
         </Field>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}

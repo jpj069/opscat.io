@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, sevColor } from '../format';
-import { KpiCard, LineChart, TableScroll, TableSkeleton, Input} from '../ui';
+import { KpiCard, LineChart, TableScroll, TableSkeleton, Input, NativeSelect} from '../ui';
 import type { ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats } from '../types';
 
 type Tab = 'throughput' | 'classifiers';
@@ -264,11 +264,11 @@ function Tester() {
         <Input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
           placeholder="paste a sample log line, e.g.  kernel: Out of memory: Killed process 1234 (node)"
           style={{ flex: 3, minWidth: 240, fontSize: 'var(--t-sm)' }} />
-        <select value={sev} onChange={(e) => setSev(e.target.value)} style={{ width: 150 }}>
+        <NativeSelect value={sev} onChange={(e) => setSev(e.target.value)} style={{ width: 150 }}>
           {['0 emerg', '1 alert', '2 crit', '3 err', '4 warning', '5 notice', '6 info', '7 debug'].map((s) => (
             <option key={s} value={s.split(' ')[0]}>syslog {s}</option>
           ))}
-        </select>
+        </NativeSelect>
         <button className="btn btn-primary btn-sm" disabled={busy}>{busy ? '…' : 'Test line'}</button>
       </form>
       {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}

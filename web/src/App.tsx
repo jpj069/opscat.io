@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
-import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input} from './ui';
+import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
@@ -694,7 +694,7 @@ function EventSlideOver({ id }: { id: number }) {
         </div>
         {showNote && (
           <div style={{ padding: '0 20px 14px' }}>
-            <textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)}
+            <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)}
               placeholder="Note for the case…" />
             <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }}
               onClick={() => { act('note', { note }); setShowNote(false); setNote(''); }}>Save note</button>

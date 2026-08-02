@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, NativeSelect, Textarea} from '../ui';
 import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
@@ -162,10 +162,10 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
       </Field>
       <Field label="Channel">
-        <select value={channel} onChange={(e) => setChannel(e.target.value as Rule['channel'])}>
+        <NativeSelect value={channel} onChange={(e) => setChannel(e.target.value as Rule['channel'])}>
           {(['email', 'teams', 'slack', 'telegram', 'discord', 'ntfy', 'pushover', 'webhook'] as const)
             .map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        </NativeSelect>
       </Field>
       <Field label="Trigger Event (empty = any)">
         <Input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"
@@ -189,7 +189,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
         </div>
       </div>
       <Field label={RECIPIENTS_UI[channel].label}>
-        <textarea className="rca" value={recipients} onChange={(e) => setRecipients(e.target.value)}
+        <Textarea className="rca" value={recipients} onChange={(e) => setRecipients(e.target.value)}
           placeholder={RECIPIENTS_UI[channel].placeholder} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>

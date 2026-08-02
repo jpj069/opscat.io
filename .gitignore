@@ -143,3 +143,7 @@ server/data/
 server/node_modules/
 web/node_modules/
 web/dist/
+
+# dev-only tooling keeps its own tree (scripts/package.json)
+scripts/node_modules/
+scripts/package-lock.json

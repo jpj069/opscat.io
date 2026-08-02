@@ -328,6 +328,46 @@ export const Input = React.forwardRef<HTMLInputElement,
     );
   });
 
+/**
+ * THE native dropdown. Use it for a short, static, in-form list — a status, a role, a
+ * log level. When the options come from DATA, or the picker needs search or multiple
+ * values, use `Select` / `MultiSelect` from Select.tsx instead: a native select takes
+ * the width of its longest option, so data would dictate the layout width.
+ *
+ * A `<select>` never triggers the iOS focus zoom (verified on an iPhone), so unlike
+ * `Input` it needs no scaling trick — it simply renders smaller on a phone. Give it a
+ * width through `width`, not `style`, so the value stays in one place.
+ */
+export const NativeSelect = React.forwardRef<HTMLSelectElement,
+  Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'width'> & { width?: number | string }>(
+  function NativeSelect({ className, width, style, ...rest }, ref) {
+    const w = typeof width === 'number' ? `${width}px` : width;
+    return (
+      <select ref={ref} className={className ? `ctl-sel ${className}` : 'ctl-sel'}
+        style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
+    );
+  });
+
+/**
+ * THE multi-line text control.
+ *
+ * Unlike `Input` this deliberately does NOT ride the optical scale, and the reason is
+ * measured rather than aesthetic: a textarea has a resize handle, and the handle sits on
+ * the *layout* box while a transform only shrinks what is drawn. At scale 0.875 on a
+ * 3-row box the handle ends up 11px BELOW the visible bottom edge — you grab the corner
+ * you can see and hit nothing. So it keeps 16px, which is defensible on its own terms:
+ * it is a writing surface, not a value to be read at a glance.
+ */
+export const Textarea = React.forwardRef<HTMLTextAreaElement,
+  Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'width'> & { width?: number | string }>(
+  function Textarea({ className, width, style, ...rest }, ref) {
+    const w = typeof width === 'number' ? `${width}px` : width;
+    return (
+      <textarea ref={ref} className={className ? `ctl-ta ${className}` : 'ctl-ta'}
+        style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
+    );
+  });
+
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>

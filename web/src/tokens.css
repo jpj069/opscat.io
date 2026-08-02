@@ -143,6 +143,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--low); }
    what would beat the phone compensation. Taking it away left desktop fields at their
    intrinsic ~172px inside a 420px column until this line existed. */
 .ctl { --ctl-s: 0.875; --ctl-h: 34px; width: var(--ctl-w, 100%); }
+
+/* The other two controls own their width the same way, so a call site never needs an
+   inline one. Neither takes the optical scale, each for its own measured reason:
+   a <select> does not need it (it never triggers the zoom, so it can just be smaller),
+   and a <textarea> must not have it — its resize handle sits on the LAYOUT box, which a
+   transform does not move, so at 0.875 the handle ends up ~11px below the visible edge. */
+.ctl-sel, .ctl-ta { width: var(--ctl-w, 100%); }
 @media (max-width: 720px) {
   .ctl {
     font-size: 16px;
@@ -155,11 +162,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--low); }
     transform: scale(var(--ctl-s));
     transform-origin: left top;
   }
-  /* A <select> never triggers the focus zoom at all (measured), so it needs no trick —
-     it can simply be smaller. A <textarea> deliberately stays at 16px: it is a writing
-     surface, and its height is content-driven, so the scale would need a per-instance
-     height compensation for no real gain. */
-  select { font-size: 14px; }
 }
 a { color: var(--low); text-decoration: none; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -576,5 +578,14 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
    Still stronger than this: an INLINE style. Never put a font-size in `style={{…}}` on
    an input/select/textarea — density belongs in the padding. */
 @media (max-width: 720px) {
-  input, select, textarea { font-size: 16px; }
+  /* The floor covers only what can actually zoom. A <select> was in this list and
+     therefore stayed at 16px even though a separate rule asked for 14px — that rule sat
+     inside `@layer components` and lost to this unlayered one, which is exactly the
+     cascade trap the comment above warns about. Measured on the deployed build before
+     the fix: select reported 16px where 14px was intended.
+     A <textarea> stays at 16px on purpose: it is a writing surface. */
+  input, textarea { font-size: 16px; }
+  /* A <select> never triggers the focus zoom at all (verified on an iPhone), so it needs
+     no trick — it can simply be smaller, matching what <Input> draws optically. */
+  select { font-size: 14px; }
 }

@@ -13,8 +13,7 @@ import { api } from '../api';
 import { SEV, relTime } from '../format';
 import {
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard,
-} from '../ui';
+  Toggle, KpiCard, Input, NativeSelect} from '../ui';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
   ReputationOverview, ReputationStatus, ReputationTier, ReputationZones,
@@ -299,7 +298,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                 {busy ? 'checking…' : 'Check now'}</button>
               <span className="row" style={{ gap: 6 }}>
                 <span className="micro text-2xs">EVERY</span>
-                <select value={asset.intervalS} style={{ maxWidth: 92 }}
+                <NativeSelect value={asset.intervalS} style={{ maxWidth: 92 }}
                   onChange={(e) => onInterval(Number(e.target.value))}>
                   {/* a stored value outside the presets (set via the API) must
                       still show, or changing anything else silently rewrites it */}
@@ -307,7 +306,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                     <option value={asset.intervalS}>{everyLabel(asset.intervalS)}</option>
                   )}
                   {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
-                </select>
+                </NativeSelect>
               </span>
               <span style={{ flex: 1 }} />
               <button className="btn btn-sm" onClick={onDelete} style={{ color: SEV.critical }}>Delete</button>
@@ -627,9 +626,9 @@ function AddAsset({ zones, onClose, onAdded }: {
         ))}
       </div>
       <Field label="Interval">
-        <select value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>
+        <NativeSelect value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>
           {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
-        </select>
+        </NativeSelect>
       </Field>
       {mode === 'spf'
         ? <FromSpf intervalS={intervalS} onAdded={onAdded} />
@@ -658,7 +657,7 @@ function SingleTarget({ zones, intervalS, onAdded }: {
   return (
     <form onSubmit={submit}>
       <Field label="Target">
-        <input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
+        <Input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
           placeholder="198.51.100.25 or example.com" />
       </Field>
       <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
@@ -727,7 +726,7 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
     <div>
       <form onSubmit={scan}>
         <Field label="Sending domain">
-          <input required autoFocus value={domain} onChange={(e) => setDomain(e.target.value)}
+          <Input required autoFocus value={domain} onChange={(e) => setDomain(e.target.value)}
             placeholder="example.com" />
         </Field>
         <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>

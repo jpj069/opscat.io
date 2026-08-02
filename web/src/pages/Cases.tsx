@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, NativeSelect, Textarea} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -125,11 +125,11 @@ function CaseEditor({ c, users, onClose, onSaved }:
         <span className="mono text-text3"> · {c.device}</span>
       </div>
       <Field label="Status">
-        <select value={status} onChange={(e) => setStatus(e.target.value as CaseRow['status'])}>
+        <NativeSelect value={status} onChange={(e) => setStatus(e.target.value as CaseRow['status'])}>
           <option value="open">open</option>
           <option value="assigned">assigned</option>
           <option value="closed">closed</option>
-        </select>
+        </NativeSelect>
       </Field>
       <Field label="Assignee">
         {/* the team list is data — it can grow past the point where scrolling a
@@ -144,7 +144,7 @@ function CaseEditor({ c, users, onClose, onSaved }:
           placeholder="e.g. upstream DNS timeout" />
       </Field>
       <Field label="Note">
-        <textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)} />
+        <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
         <button className="btn" onClick={onClose}>Cancel</button>
