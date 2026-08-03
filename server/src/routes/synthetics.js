@@ -213,7 +213,12 @@ router.delete('/cloud-credentials/:id', sec.requireRole('lead'), (req, res) => {
 
 // Region/city catalog for the wizard (step 2), grouped client-side by `region`.
 router.get('/provider-catalog', (req, res) => {
-  res.json({ catalog: providers.CATALOG, instanceClasses: Object.keys(providers.INSTANCE_TYPES) });
+  res.json({
+    catalog: providers.CATALOG,
+    instanceClasses: Object.keys(providers.INSTANCE_TYPES),
+    instanceTypes: providers.INSTANCE_TYPES,
+    costEstimates: providers.COST_ESTIMATES,
+  });
 });
 
 // ---- checks -------------------------------------------------------------------

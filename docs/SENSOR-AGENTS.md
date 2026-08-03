@@ -147,8 +147,24 @@ für die Managed-Flotte erhalten, tauchen aber im Wizard nicht auf.
 | Hetzner / Vultr | REST | Token-Header | vorhanden — nur intern (Managed-Flotte), nicht im Kunden-Wizard |
 
 Dasselbe cloud-init-Template (`deploy/sensors/cloud-init.yaml.tmpl`) wird überall
-verwendet (EC2 `UserData`, GCE `user-data`). AWS bringt 39 Regionen, GCP 43
-(inkl. dauerhaft kostenlosem `e2-micro` in 3 US-Regionen).
+verwendet (EC2 `UserData`, GCE `user-data`).
+
+**Abdeckung.** `CATALOG` führt die volle kommerzielle Fläche beider Anbieter:
+**AWS 33** (34 laut AWS-Tabelle, minus Bahrain — siehe unten) und **GCP 43**,
+zusammen 76 Einträge auf 55 verschiedene Städte. Gegen die Anbietertabellen
+verifiziert (`aws-regions.md`, GCP `regions-zones`), nicht aus dem Gedächtnis.
+16 der AWS-Regionen sind **Opt-in** und müssen pro Konto freigeschaltet werden,
+bevor ein Launch dort gelingt; sie tragen `optIn: true` und werden im Wizard
+markiert. GCP kennt das nicht — dort genügt hinterlegtes Billing.
+
+**Warum eine Location je Region und nicht je Availability Zone.** AZs innerhalb
+einer Region liegen im selben Ballungsraum an derselben Egress-Strecke, meist
+unter 100 km auseinander. Für einen Messpunkt heißt das: eine zweite AZ in
+`eu-central-1` kostet einen weiteren Node und misst dasselbe. Der Katalog bleibt
+deshalb bewusst regionsgranular — der Adapter landet ohnehin in genau einer Zone
+(GCP fest `<region>-b`, AWS im Default-Subnetz). AZ-Granularität wäre erst
+interessant, wenn wir Ausfälle *einzelner* AZs eines Kunden messen wollten, und
+das ist ein anderes Produkt als geografische Nutzerabdeckung.
 
 **Credential-Handling (BYO):**
 
@@ -195,14 +211,29 @@ Start ab.
 }
 ```
 
-**Opt-in-Regionen.** Sechs Regionen des AWS-Katalogs (`server/src/providers/index.js`)
+**Opt-in-Regionen.** Fünf Regionen des AWS-Katalogs (`server/src/providers/index.js`)
 sind in einem frischen AWS-Account deaktiviert und müssen unter *Account → AWS
 Regions* einzeln aktiviert werden: Zürich (`eu-central-2`), Jakarta
-(`ap-southeast-3`), UAE (`me-central-1`), Bahrain (`me-south-1`), Kapstadt
-(`af-south-1`), Tel Aviv (`il-central-1`). AWS serialisiert das Aktivieren —
-solange eine Region im Status *Enabling* steht, laufen weitere Anfragen in
-"An error occurred while processing your request". Der Wizard sollte einen
-`OptInRequired`-Fehler des Adapters entsprechend übersetzen.
+(`ap-southeast-3`), UAE (`me-central-1`), Kapstadt (`af-south-1`), Tel Aviv
+(`il-central-1`). AWS serialisiert das Aktivieren — solange eine Region im Status
+*Enabling* steht, laufen weitere Anfragen in "An error occurred while processing
+your request". Der Wizard sollte einen `OptInRequired`-Fehler des Adapters
+entsprechend übersetzen.
+
+Beim Aktivieren antwortet die Region übergangsweise mit
+`401 – AWS was not able to validate the provided access credentials`, obwohl der
+Key gültig ist: der regionale Endpoint kennt ihn erst nach der Propagierung. Diese
+Meldung darf im UI nicht als "falscher Key" durchgereicht werden, sonst rotieren
+Nutzer grundlos ihre Credentials.
+
+**Aktivierung ≠ Erreichbarkeit.** `DescribeRegions` kann eine Region als
+`opted-in` melden, während ihr API-Endpoint vom Control-Plane-Host trotzdem nicht
+erreichbar ist. Genau das trat bei Bahrain (`me-south-1`) auf: account-seitig
+aktiviert, aber TCP/443 lief von zwei voneinander unabhängigen Netzen auf beide
+per DNS gelieferten IPs in einen Timeout. Die Region ist deshalb vorerst aus dem
+Katalog genommen. Vor dem Wiederaufnehmen einer Region gehört ein Erreichbarkeits-
+Check vom Control-Plane-Host dazu — eine Managed Location anzubieten, deren
+Provider-API wir nicht erreichen, erzeugt nur garantiert scheiterndes Provisioning.
 
 **Kostenschutz (Launch-Voraussetzung, nicht Nice-to-have):** Bei BYO läuft ein
 geleakter Node auf der *Kundenrechnung*.
@@ -390,8 +421,23 @@ Aufbau der Konsole:
   (`provisioning`/`online`/`draining`/`dead`), Tenants using, Load-Balken,
   **Visible-Toggle** und Aktionen (`scale`, `drain`, `replace node`, `cancel`).
 - **Provision-Modal:** City/CC, Region (Picker-Gruppierung), Backing-Provider +
-  Provider-Region, Instanzklasse (Standard ~12 $/Monat vs. Browser-capable
-  ~25 $/Monat), Premium-Flag, "Visible to tenants immediately".
+  Provider-Region, Instanzklasse, Premium-Flag, "Visible to tenants immediately".
+  Unter der Instanzklasse steht, was ein zusätzlicher Node kostet — gespeist aus
+  `COST_ESTIMATES` in `server/src/providers/index.js` und über
+  `GET /api/synthetics/provider-catalog` (`costEstimates`, `instanceTypes`)
+  ausgeliefert:
+
+  | Klasse | AWS | GCP |
+  |---|---|---|
+  | `standard` | `t3.small` — ~21 $/Monat | `e2-small` — ~15 $/Monat |
+  | `browser` | `t3.medium` — ~37 $/Monat | `e2-medium` — ~28 $/Monat |
+
+  Listenpreis für eine mittelpreisige Region (Frankfurt) über 730 h, **inklusive
+  Boot-Disk und öffentlicher IPv4** — letztere kostet bei AWS allein ~3,65 $/Monat
+  und wird gern vergessen. US-Regionen liegen darunter, São Paulo und Sydney
+  darüber; GCP rechnet Sustained-Use-Rabatte automatisch an. Bewusst eine Zahl je
+  Provider/Klasse statt einer Regionstabelle — mehr Genauigkeit würden die Werte
+  nicht hergeben. Bei Preisänderungen der Provider nachziehen.
 
 **Vorfeld vs. on-demand:** Der Visible-Toggle entkoppelt Provisionierung und
 Sichtbarkeit. Aus = **Pre-Provisioning**: der Node bootet, registriert sich und
