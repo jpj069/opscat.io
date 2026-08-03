@@ -1,6 +1,7 @@
 'use strict';
 const { db, getMembership, anyMembership } = require('./db');
 const config = require('./config');
+const edition = require('./edition');
 const { now, sha256, randHex, RateLimiter, httpError } = require('./util');
 
 const ROLE_RANK = { analyst: 1, lead: 2, cto: 3, admin: 4 };
@@ -245,18 +246,43 @@ function requireApiKey(scope) {
   };
 }
 
+// CSP: the SPA is self-hosted and there is no inline JS; Google Fonts are the
+// only external asset the community core touches.
+//
+// OpsCat Cloud additionally loads the Lynk Testify SDK from lynk.run for armed
+// tester sessions (web/src/testify.ts) and lets it POST its events back, so the
+// cloud policy names that origin in script-src AND connect-src. Both are needed:
+// script-src to load it at all, connect-src for /api/testify/public. Nothing
+// else — the SDK renders its DOM snapshot into a data: URI (already covered by
+// img-src) and uses no worker, blob, WebSocket or eval.
+//
+// script-src used to be absent entirely, which silently falls back to
+// default-src 'self'. That is how the loader shipped in #47 spent months
+// blocked: the browser refused the script and nothing outside the console said
+// so, so the in-app SDK never once ran in production.
+//
+// The community core keeps the strict policy — its loader is stubbed to a no-op
+// at publish time and it contacts no external service (see docs/OPEN-CORE.md).
+const TESTIFY_ORIGIN = 'https://lynk.run';
+const cloudOnly = (origin) => (edition.isCloud() ? ` ${origin}` : '');
+const CSP = [
+  "default-src 'self'",
+  `script-src 'self'${cloudOnly(TESTIFY_ORIGIN)}`,
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  `connect-src 'self'${cloudOnly(TESTIFY_ORIGIN)}`,
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+
 function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  // CSP: the SPA is self-hosted; only Google Fonts are external. No inline JS.
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
-    "img-src 'self' data:; connect-src 'self'; " +
-    "base-uri 'self'; frame-ancestors 'none'; object-src 'none'");
+  res.setHeader('Content-Security-Policy', CSP);
   next();
 }
 
