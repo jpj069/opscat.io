@@ -14,11 +14,17 @@
 //     keyboard the moment you type, because `position: fixed` anchors to the LAYOUT
 //     viewport and iOS does not shrink that for the keyboard. Hence `--kb`, measured
 //     from visualViewport.
-//   desktop — an anchored popover in a portal (fixed positioning, so no clipping
-//     ancestor can cut it off), search at the top where it reads naturally.
+//   desktop — an anchored popover, search at the top where it reads naturally.
+//
+// Both live in the browser's TOP LAYER (Popover API, see toplayer.ts). That is what
+// makes a picker opened from inside a modal paint ABOVE it: the top layer orders by
+// "last opened wins", and the picker is by definition opened later. It also means
+// the panel needs no portal — the top layer escapes every clipping and transformed
+// ancestor by itself, and staying a DOM descendant of the dialog is what keeps the
+// panel out of the inert subtree `showModal()` creates around everything else.
 import React from 'react';
-import { createPortal } from 'react-dom';
 import { Check, ChevronDown, X } from 'lucide-react';
+import { topLayer } from './toplayer';
 
 export type SelectOption = { value: string; label: string; disabled?: boolean };
 
@@ -128,7 +134,20 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
   const [drag, setDrag] = React.useState(0);
   const listRef = React.useRef<HTMLUListElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const layerRef = React.useRef<HTMLDivElement>(null);
   const uid = React.useId();
+
+  // Into the top layer for as long as the panel is mounted. Layout effect, not
+  // effect: after paint would leave one frame in which the sheet is still an
+  // ordinary z-indexed element — under any open dialog.
+  React.useLayoutEffect(() => {
+    const el = layerRef.current;
+    topLayer(el, true);
+    return () => topLayer(el, false);
+    // the wrapper is the same DOM node in both layouts, so this must NOT re-run
+    // when `mobile` flips — hide+show would flash the panel
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const visible = React.useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -216,8 +235,8 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
   ) : null;
 
   if (mobile) {
-    return createPortal(
-      <>
+    return (
+      <div className="top-layer" ref={layerRef}>
         <div className="sel-backdrop open" style={drag ? { opacity: Math.max(0, 1 - drag / 260) } : undefined}
           onClick={onClose} />
         <div className={`sel-sheet open${drag ? ' dragging' : ''}`} role="dialog" aria-modal="true"
@@ -237,13 +256,12 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
             </div>
           )}
         </div>
-      </>,
-      document.body,
+      </div>
     );
   }
 
-  return createPortal(
-    <>
+  return (
+    <div className="top-layer" ref={layerRef}>
       <div className="sel-scrim" onClick={onClose} />
       <div className="sel-pop" role="dialog" aria-label={title} onKeyDown={onKeyDown}
         style={{
@@ -253,8 +271,7 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
         {searchable && <div className="sel-pophead">{search}</div>}
         {list}
       </div>
-    </>,
-    document.body,
+    </div>
   );
 }
 

@@ -273,7 +273,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
       <div className="overlay-dim" onClick={onClose} />
       <div className="slide-over" style={{ width: 560 }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--bg3)',
-          position: 'sticky', top: 0, background: 'var(--bg1)', zIndex: 5 }}>
+          position: 'sticky', top: 0, background: 'var(--bg1)', zIndex: 'var(--z-sticky)' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div className="row" style={{ gap: 8, minWidth: 0 }}>
               <span className="mono text-md font-bold text-text0" style={{

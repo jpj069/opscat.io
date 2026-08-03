@@ -1,10 +1,11 @@
 // App shell: login gate, sidebar, topbar, command palette, event slide-over.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
 import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
+import { topLayer } from './toplayer';
 import {
   ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
@@ -338,7 +339,13 @@ function Shell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault(); setShowPalette((s) => !s);
+        e.preventDefault();
+        // A modal owns the screen while it is open. showModal() makes everything
+        // outside the dialog INERT — and the top layer changes painting, not
+        // inertness — so a palette opened now would be visible and dead. (Before
+        // the dialog it was merely painted underneath, which was no better.)
+        if (document.querySelector('dialog[open]')) return;
+        setShowPalette((s) => !s);
       } else if (e.key === 'Escape') {
         setShowPalette(false); setShowProfile(false); app.setSelectedEvent(null);
       }
@@ -352,7 +359,7 @@ function Shell() {
   return (
     <div className="shell">
       {/* sidebar — on phones a slide-in drawer (.shell-rail in tokens.css) */}
-      {drawer && <div className="overlay-dim" style={{ zIndex: 94 }} onClick={() => setDrawer(false)} />}
+      {drawer && <div className="overlay-dim" onClick={() => setDrawer(false)} />}
       <aside className={`shell-rail ${drawer ? 'open' : ''}`}
         style={{ width: collapsed ? 48 : 196, transition: 'width 0.2s', flexShrink: 0,
         background: 'var(--bg1)', borderRight: '1px solid var(--bg3)', display: 'flex',
@@ -433,7 +440,7 @@ function Shell() {
             {!collapsed && <span className="text-text3"><ChevronUpIcon size={12} /></span>}
           </button>
           {showProfile && (
-            <div style={{ position: 'absolute', left: 6, bottom: 50, width: 200, zIndex: 96,
+            <div style={{ position: 'absolute', left: 6, bottom: 50, width: 200, zIndex: 'var(--z-rail-pop)',
               background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 8,
               boxShadow: '0 8px 24px rgba(0,0,0,0.4)', padding: 6 }}>
               <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--bg3)', marginBottom: 4 }}>
@@ -574,8 +581,17 @@ function Palette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState('');
   const [cases, setCases] = useState<CaseRow[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => { api.get<CaseRow[]>('/api/cases').then(setCases).catch(() => {}); }, []);
+  // Cmd-K works while a Modal is open, and a modal shown with showModal() makes the
+  // whole rest of the document INERT — so a palette left in the page would be visible
+  // and dead. It goes into the top layer with everything else that floats.
+  useLayoutEffect(() => {
+    const el = layerRef.current;
+    topLayer(el, true);
+    return () => topLayer(el, false);
+  }, []);
 
   const ql = q.toLowerCase();
   const navHits = NAV.concat(ADMIN_NAV).filter((n) => !q || n.label.toLowerCase().includes(ql));
@@ -585,7 +601,7 @@ function Palette({ onClose }: { onClose: () => void }) {
     `${c.label} ${c.name} ${c.device}`.toLowerCase().includes(ql)).slice(0, 4) : [];
 
   return (
-    <>
+    <div className="top-layer" ref={layerRef}>
       <div className="overlay-dim" onClick={onClose} />
       <div className="palette">
         <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
@@ -619,7 +635,7 @@ function Palette({ onClose }: { onClose: () => void }) {
           ))}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

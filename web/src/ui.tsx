@@ -1,6 +1,7 @@
 // Shared UI atoms: severity badges, sparklines, avatars, toggles, charts.
 import React from 'react';
 import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
+import { HAS_POPOVER, topLayer } from './toplayer';
 import markLight from './assets/opscat-mark.png';
 import markDark from './assets/opscat-mark-dark.png';
 
@@ -177,21 +178,62 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
   );
 }
 
+/**
+ * THE modal dialog — a real `<dialog>` shown with `showModal()`, i.e. in the
+ * browser's TOP LAYER.
+ *
+ * The top layer paints above every z-index in the document and orders by
+ * "last opened wins" — which IS the rule this app used to spell out by hand
+ * ("a picker sits above the surface that opened it"). `Select` uses the Popover
+ * API for the same reason; the two belong together. Converting only one puts the
+ * picker back underneath, because a top-layer dialog beats any z-index.
+ *
+ * `showModal()` also brings the `::backdrop`, Escape, a focus trap and inertness
+ * of everything behind it — all of which this modal previously did not have.
+ * A browser without `showModal` falls back to a plain `[open]` dialog ordered by
+ * `--z-modal`, i.e. exactly the old behaviour.
+ *
+ * The public API is unchanged, so all call sites stay as they are.
+ */
 export function Modal({ title, onClose, children, width = 420, hideClose = false }:
   { title: string; onClose: () => void; children: React.ReactNode; width?: number; hideClose?: boolean }) {
+  const ref = React.useRef<HTMLDialogElement>(null);
+  const close = React.useRef(onClose);
+  close.current = onClose;
+
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // BOTH or NEITHER. A browser with showModal but without the Popover API
+    // (Safari 16) would put the dialog in the top layer and leave the picker on
+    // z-index 130 — i.e. exactly the bug this replaces, in a browser nobody tests.
+    if (HAS_POPOVER && typeof el.showModal === 'function') el.showModal();
+    // no top layer here: [open] alone, ordered by --z-modal, and drawing its own
+    // dim because ::backdrop only exists for a MODAL dialog
+    else { el.setAttribute('open', ''); el.dataset.flat = '1'; }
+    // Escape fires `cancel` BEFORE the browser closes the dialog. Let the owner's
+    // state do the closing (it unmounts us), or the DOM and React disagree.
+    const onCancel = (e: Event) => { e.preventDefault(); if (!hideClose) close.current(); };
+    el.addEventListener('cancel', onCancel);
+    return () => {
+      el.removeEventListener('cancel', onCancel);
+      if (el.open) el.close();
+    };
+  }, [hideClose]);
+
   return (
-    <>
-      <div className="overlay-dim" onClick={hideClose ? undefined : onClose} />
-      <div style={{ position: 'fixed', top: '15%', left: '50%', transform: 'translateX(-50%)',
-        width, maxWidth: '94vw', background: 'var(--bg1)', border: '1px solid var(--border)',
-        borderRadius: 10, zIndex: 120, padding: 18, boxShadow: '0 16px 48px rgba(0,0,0,0.45)' }}>
+    <dialog ref={ref} className="modal-dialog" aria-label={title}
+      // a click that lands on the dialog itself is a click on the dim area —
+      // the panel is the only thing inside it
+      onClick={(e) => { if (e.target === ref.current && !hideClose) onClose(); }}>
+      <div className="modal-panel" style={{ width }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
           <span className="text-md font-bold text-text0">{title}</span>
           {!hideClose && <button className="text-text2 text-xl" onClick={onClose}>×</button>}
         </div>
         {children}
       </div>
-    </>
+    </dialog>
   );
 }
 
@@ -396,13 +438,22 @@ let setTipState: ((s: { x: number; y: number; node: React.ReactNode } | null) =>
 export function TipHost() {
   const [s, setS] = React.useState<{ x: number; y: number; node: React.ReactNode } | null>(null);
   React.useEffect(() => { setTipState = setS; return () => { setTipState = null; }; }, []);
+  return <Tip s={s} />;
+}
+
+// Its own component so the popover effect has a mount to hang on: TipHost is
+// mounted once in the shell and would otherwise never remount.
+function Tip({ s }: { s: { x: number; y: number; node: React.ReactNode } | null }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  // A tooltip must sit above a modal too, and a <dialog> in the top layer beats
+  // every z-index — so the tooltip goes into the top layer as well. TipHost lives
+  // in the shell, OUTSIDE any dialog, so nothing else would lift it.
+  React.useLayoutEffect(() => { topLayer(ref.current, !!s); }, [s]);
   if (!s) return null;
   const x = Math.min(s.x + 14, (window.innerWidth || 800) - 200);
   const y = Math.min(s.y + 14, (window.innerHeight || 600) - 96);
   return (
-    <div style={{ position: 'fixed', left: x, top: y, zIndex: 200, pointerEvents: 'none',
-      background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 6,
-      padding: '8px 11px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 150, maxWidth: 260 }}>
+    <div ref={ref} className="tip-pop" style={{ left: x, top: y }}>
       {s.node}
     </div>
   );

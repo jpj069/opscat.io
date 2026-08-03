@@ -161,7 +161,7 @@ export default function Classic() {
       position: full ? 'fixed' : 'relative', inset: full ? 0 : undefined,
       // full-screen: fixed + height 100% = the viewport. Otherwise the height comes
       // from .page-console, which phones override to a svh window (tokens.css).
-      zIndex: full ? 9999 : undefined, height: full ? '100%' : undefined,
+      zIndex: full ? 'var(--z-full)' : undefined, height: full ? '100%' : undefined,
       width: full ? '100%' : undefined,
       background: pal.bg, color: pal.text, fontFamily: MONO, fontSize: 12,
       display: 'flex', flexDirection: 'column',

@@ -469,9 +469,10 @@ the only real input, the search box, is a full 16px inside the panel.
   the keyboard animation. Verified on a real iPhone before the component was written.
   Option rows are 44px; swiping the sheet down closes it (the grab handle promises that
   gesture, so it has to work).
-- **Desktop: an anchored popover in a portal** — `position: fixed` from the trigger's
-  rect, so no clipping ancestor (`.tbl-scroll`, a card) can cut it off; flips upward when
-  there is no room below.
+- **Desktop: an anchored popover** — `position: fixed` from the trigger's rect, so no
+  clipping ancestor (`.tbl-scroll`, a card) can cut it off; flips upward when there is no
+  room below. It needs no portal: the panel lives in the **top layer** (below), which
+  escapes every clipping and transformed ancestor by itself.
 - **Search appears at ≥13 options** (`searchable="auto"`). 13, not 10, so a month or
   hour picker does not get a search box it does not need. Override with
   `searchable={true|false}`.
@@ -484,6 +485,61 @@ the only real input, the search box, is a full 16px inside the panel.
   `aria-selected` / `aria-activedescendant`; arrows move the highlight, Enter picks,
   Escape closes (handler on `document` — after a drag the focus is outside the panel),
   and focus returns to the trigger on close.
+
+## Frontend stacking (the top layer, and the --z-* scale under it)
+
+The app used to order every floating surface by a number. It carried **19 z-index
+values** (1, 2, 5, 30, 80, 90, 94, 95, 96, 100, 110, 111, 120, 200, 300, 9999) spread
+across `tokens.css` and seven components, with nothing stating how they related — and
+that is how a bottom sheet opened from inside a modal ended up **behind** it. Nothing
+about that bug was visible in the markup: the sheet was in the DOM, at the right size,
+at the right position. It was simply painted underneath, because `Select` portals to
+`<body>` and is therefore a *sibling* of the modal, so JSX nesting bought it nothing and
+only the number decided.
+
+Two answers, layered:
+
+**1. The named scale (`--z-sticky` … `--z-full` in `tokens.css`).** Every layer is a
+token with a comment saying what it sits above; never a literal `z-index` at a call site.
+It still governs the surfaces that stay in the page: the sticky table head, the shell
+bar, the phone nav rail, the slide-over, the command palette.
+
+**2. The browser's TOP LAYER, for anything that floats over a surface.** `Modal` is a
+real `<dialog>` shown with `showModal()`; the `Select` panel and the hover tooltip use
+the **Popover API** (`popover="manual"`, driven by `web/src/toplayer.ts`). The top layer
+paints above every z-index in the document and orders by **"last opened wins"**.
+
+That ordering *is* the rule the scale had to state by hand — "a picker sits above the
+surface that opened it" — except a picker is by definition opened *later*, so the
+platform enforces it and there is no number left to get wrong. It also removes the
+portal: a top-layer element escapes every clipping and transformed ancestor on its own,
+and staying a DOM descendant of the dialog is what keeps the panel **out of the inert
+subtree** `showModal()` creates around everything else. `showModal()` additionally brings
+`::backdrop`, Escape and a focus trap, none of which the old modal had.
+
+Three constraints that are easy to get wrong:
+
+- **Both surfaces convert together, or neither.** A browser with `showModal` but without
+  the Popover API (Safari 16) would put the dialog in the top layer and leave the picker
+  on `z-index: 130` — i.e. the original bug, in a browser nobody tests. `Modal` therefore
+  gates `showModal()` on `HAS_POPOVER` and otherwise falls back to a flat `[open]` dialog
+  ordered by `--z-modal`, drawing its own dim (`::backdrop` exists only for a *modal*
+  dialog). `scripts/probe-overlays.mjs` checks that fallback with the Popover API deleted
+  before load.
+- **`popover="manual"`, not `"auto"`.** Auto brings light dismiss, which hides the
+  popover on pointerdown; the trigger's own click handler then runs against state that
+  already flipped and re-opens it. These panels bring their own scrim, Escape handler and
+  React state — the only thing wanted from the platform is the layer.
+- **The scrim rides up with the panel.** Both live inside one `.sel-layer` wrapper that
+  is the popover. A scrim left behind in the page would dim everything *except* the modal
+  it was opened from.
+- **No transform on the way down to a modal's contents.** A transformed ancestor becomes
+  the containing block for `position: fixed` inside it, which is what the picker's
+  fallback path uses. `.modal-dialog` centres its panel with flex, not
+  `translateX(-50%)`.
+
+The `--z-modal` / `--z-picker` / `--z-tip` tokens stay in the scale as exactly that
+fallback, and as the order those surfaces would take if they ever left the top layer.
 
 ## Frontend loading states (skeletons)
 

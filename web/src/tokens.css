@@ -72,6 +72,35 @@
   }
 }
 
+/* Stacking order, named once. Before this the app carried 19 z-index values spread
+   across tokens.css and seven components (1, 2, 5, 30, 80, 90, 94, 95, 96, 100, 110,
+   111, 120, 200, 300, 9999) with no stated order — which is how a Select opened inside
+   a Modal ended up BEHIND it: the sheet sat at 111, the modal at 120, and nothing made
+   that relationship visible.
+
+   Three surfaces no longer rely on these numbers at all: Modal (<dialog> +
+   showModal()), the Select panel and the tooltip (Popover API) live in the browser's
+   TOP LAYER, which paints above every z-index in the document and orders by "LAST
+   OPENED WINS". A picker is opened FROM some surface, so it is opened later, so it is
+   on top — the rule enforced by the platform instead of by remembering a number
+   (see toplayer.ts). Their tokens below stay as the fallback for a browser without
+   the Popover API, and as the order they would take if they ever left the top layer.
+
+   Add a layer here, never a literal at the call site. */
+:root {
+  --z-sticky: 5;      /* sticky header inside a scrolling card */
+  --z-shellbar: 30;   /* app top bar */
+  --z-inline-pop: 80; /* popover anchored in page flow (org switcher) */
+  --z-dim: 90;        /* backdrop behind drawer / slide-over */
+  --z-rail: 95;       /* phone nav drawer */
+  --z-rail-pop: 96;   /* menu opened from inside the rail */
+  --z-panel: 100;     /* slide-over, command palette */
+  --z-modal: 120;     /* modal dialog — top layer; number is the fallback */
+  --z-picker: 130;    /* Select / MultiSelect — top layer; ABOVE whatever opened it */
+  --z-tip: 200;       /* hover tooltip — top layer */
+  --z-full: 300;      /* fullscreen takeover (onboarding, classic) */
+}
+
 :root { color-scheme: dark; }
 
 body[data-theme="dark"] {
@@ -310,16 +339,44 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .nav-item.sub { padding-left: 30px; font-size: var(--t-sm); }
 
 /* overlays */
-.overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 90; }
+.overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: var(--z-dim); }
+
+/* Modal (ui.tsx) — a real <dialog> in the TOP LAYER. The element itself is the full
+   viewport and doubles as the click-to-dismiss surface; .modal-panel is the card.
+   No transform anywhere on the way down: a transformed ancestor would become the
+   containing block for any `position: fixed` inside the modal, which is what the
+   picker's fallback path uses. */
+.modal-dialog {
+  position: fixed; inset: 0; width: 100%; max-width: 100%; height: 100%; max-height: 100%;
+  margin: 0; padding: 15vh 12px 24px; border: 0; background: transparent; color: inherit;
+  overflow: auto; overscroll-behavior: contain;
+  z-index: var(--z-modal);   /* fallback only — the top layer ignores z-index */
+}
+.modal-dialog[open] { display: flex; justify-content: center; align-items: flex-start; }
+.modal-dialog::backdrop { background: rgba(0,0,0,0.4); }
+.modal-dialog[data-flat] { background: rgba(0,0,0,0.4); }
+.modal-panel {
+  max-width: 100%; flex-shrink: 0; background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px; box-shadow: 0 16px 48px rgba(0,0,0,0.45);
+}
+@media (max-width: 720px) { .modal-dialog { padding: 8vh 10px 24px; } }
+
+/* hover tooltip (TipHost) — top layer too, or it would paint under an open modal */
+.tip-pop {
+  position: fixed; margin: 0; inset: auto; z-index: var(--z-tip); pointer-events: none;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 11px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); min-width: 150px; max-width: 260px;
+  width: auto; height: auto; color: inherit; overflow: visible;
+}
 @keyframes slideIn { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
 .slide-over {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; z-index: 100;
+  position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; z-index: var(--z-panel);
   background: var(--bg1); border-left: 1px solid var(--border);
   animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); overflow-y: auto;
 }
 .palette {
   position: fixed; top: 90px; left: 50%; transform: translateX(-50%); width: 560px; max-width: 92vw;
-  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; z-index: 110;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; z-index: var(--z-panel);
   box-shadow: 0 16px 48px rgba(0,0,0,0.45); overflow: hidden;
 }
 
@@ -387,10 +444,22 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 }
 .sel-search:focus { border-color: var(--low); }
 
+/* The panel's top-layer wrapper — holds scrim + panel so BOTH ride up together.
+   A scrim left behind in the page would dim everything except the modal it was
+   opened from. It is also why the panel needs no portal any more: the top layer
+   escapes every clipping and transformed ancestor by itself, and staying inside the
+   dialog keeps it out of the inert subtree showModal() creates. All of the UA's
+   [popover] geometry is reset here — it defaults to a centred fit-content box. */
+.top-layer {
+  position: fixed; inset: 0; width: auto; height: auto; margin: 0; padding: 0;
+  border: 0; background: transparent; color: inherit; overflow: visible;
+  z-index: var(--z-picker);   /* fallback only — the top layer ignores z-index */
+}
+
 /* desktop popover */
-.sel-scrim { position: fixed; inset: 0; z-index: 110; }
+.sel-scrim { position: fixed; inset: 0; z-index: var(--z-picker); }
 .sel-pop {
-  position: fixed; z-index: 111; display: flex; flex-direction: column;
+  position: fixed; z-index: var(--z-picker); display: flex; flex-direction: column;
   background: var(--bg1); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0,0,0,0.45); overflow: hidden;
 }
@@ -399,7 +468,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 
 /* phone bottom sheet */
 .sel-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 110;
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: var(--z-picker);
   opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
 }
 .sel-backdrop.open { opacity: 1; pointer-events: auto; }
@@ -407,7 +476,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   /* --kb = keyboard height. `position: fixed` anchors to the LAYOUT viewport and
      iOS does not shrink that for the keyboard — without this offset the sheet
      sits behind it. Value comes from visualViewport (Select.tsx). */
-  position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 111;
+  position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: var(--z-picker);
   display: flex; flex-direction: column; max-height: 72vh;
   background: var(--bg1); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0;
   box-shadow: 0 -10px 40px rgba(0,0,0,0.45);
@@ -524,7 +593,7 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
   .btn { padding: 9px 14px; }
   .btn-sm { padding: 6px 10px; }
   .shell-burger { display: inline-flex; align-items: center; color: var(--text1); padding: 4px; }
-  .shell-rail { position: fixed; top: 0; bottom: 0; left: 0; z-index: 95;
+  .shell-rail { position: fixed; top: 0; bottom: 0; left: 0; z-index: var(--z-rail);
     width: 250px !important; transform: translateX(-100%);
     transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
     box-shadow: 0 0 48px rgba(0, 0, 0, 0.55); }
@@ -542,7 +611,7 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
      prevented structurally instead (TableScroll, wrapping toolbars). */
   html, body, #root { height: auto; }
   .shell { height: auto; overflow: visible; }
-  .shell-top { position: sticky; top: 0; z-index: 30; }
+  .shell-top { position: sticky; top: 0; z-index: var(--z-shellbar); }
   .page { overflow-y: visible; height: auto; }
   .page-fill { height: auto; }
   .page-fill .fill-scroll { flex: none; min-height: 0; overflow-y: visible; }
