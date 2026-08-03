@@ -66,7 +66,7 @@ deployments.
 
 | Repo | Visibility | Contents |
 |---|---|---|
-| `jpj069/opscat` | **private** | Source of truth: core **+** EE **+** deploy/ops (marketing site, sensor provisioning, CI deploy, internal docs) |
+| `jpj069/opscat` | **private** | Source of truth: core **+** EE **+** deploy/ops (marketing site, sensor provisioning, CI deploy, internal docs, agent tooling in `.claude/`) |
 | `jpj069/opscat.io` | **public** | The Apache-2.0 community core — a filtered snapshot of the private repo |
 
 All development happens in the private repo. `scripts/publish-community.sh`
