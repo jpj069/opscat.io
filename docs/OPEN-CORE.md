@@ -24,7 +24,7 @@ powers the hosted **OpsCat Cloud** SaaS.
 | Tenancy | Single organization | Multi-tenant (many organizations) |
 | Users in multiple orgs + switcher | — (one org) | Yes (self-service new org, invite existing account) |
 | First-run onboarding flow | — | Yes (full-screen setup for each new org) |
-| Monitoring features | **All** (logs, OTLP, Sentry, events, cases, synthetics, SNMP, agents, alerts, incidents, status page) | All |
+| Monitoring features | **All** (logs, OTLP, Sentry, events, cases, synthetics, SNMP, agents, alerts, incidents, status page, OpsCat Bridge (war room) incl. AI layer — BYO voice/LLM keys) | All |
 | Plan limits | None — unlimited | Enforced per org (Free / Pro / Business / Enterprise) |
 | Billing (Stripe) | — | Yes |
 | Super-admin console | — | Yes |
@@ -43,7 +43,11 @@ deployments.
 
 - **Apache-2.0 core** — the whole platform: `server/src` (except `server/src/ee/**`
   and files headed as EE), `web/`, `sdk/`, `agent/`. Self-host it, fork it, run it
-  commercially internally — the Apache license permits it.
+  commercially internally — the Apache license permits it. The **OpsCat Bridge**
+  (the incident situation room, `docs/BRIDGE.md`) is core in full — rooms, breakouts,
+  monitor wall AND the transcription/insight pipeline; self-hosters bring their own
+  voice/LLM provider keys. The hosted Cloud gates it by plan (`bridge`,
+  Business+); its concept docs stay private, the code does not.
 - **Enterprise Edition** — `server/src/ee/**`, the super-admin / billing / oauth /
   self-service-org (`routes/orgs.js`) routes, and the managed sensor fleet (superadmin
   fleet console + platform credentials). BYO-cloud provisioning (`server/src/providers/`,

@@ -39,6 +39,12 @@ services:
       # callback <OPSCAT_BASE_URL>/api/auth/github/callback
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      # --- OpsCat Bridge — LiveKit sidecar (see the livekit service below).
+      # The feature stays hidden until all of URL/key/secret are set.
+      - OPSCAT_LIVEKIT_URL=${OPSCAT_LIVEKIT_URL:-}
+      - OPSCAT_LIVEKIT_INTERNAL_URL=${OPSCAT_LIVEKIT_INTERNAL_URL:-http://livekit:7880}
+      - OPSCAT_LIVEKIT_API_KEY=${OPSCAT_LIVEKIT_API_KEY:-}
+      - OPSCAT_LIVEKIT_API_SECRET=${OPSCAT_LIVEKIT_API_SECRET:-}
     volumes:
       - opscat_data:/data
     restart: always
@@ -66,6 +72,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  # OpsCat Bridge media plane: the LiveKit SFU. Opt-in via compose profile so
+  # a plain `docker compose up` stays unchanged:
+  #   docker compose --profile bridge up -d
+  # Set in .env: OPSCAT_LIVEKIT_URL=wss://bridge.<your-domain>,
+  # OPSCAT_LIVEKIT_API_KEY=opscat, OPSCAT_LIVEKIT_API_SECRET=<random>, and add
+  # a DNS record for bridge.<your-domain> (the Caddyfile already proxies it). Edit
+  # the webhook URL in livekit.yaml. Open UDP 50100-50200 + TCP 7881 in your
+  # firewall. Full walkthrough: docs/BRIDGE.md.
+  livekit:
+    image: livekit/livekit-server:v1.9.0
+    profiles: ["bridge"]
+    command: --config /etc/livekit.yaml
+    environment:
+      - LIVEKIT_KEYS=${OPSCAT_LIVEKIT_API_KEY:-opscat}: ${OPSCAT_LIVEKIT_API_SECRET:-}
+    volumes:
+      # livekit.community.yaml is published as livekit.yaml in the public repo
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    expose:
+      - "7880"
+    ports:
+      - "7881:7881"
+      - "50100-50200:50100-50200/udp"
+    restart: always
 
   caddy:
     image: caddy:2-alpine

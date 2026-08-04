@@ -16,6 +16,8 @@ app.use(securityHeaders);
 // Stripe webhook needs the raw body for signature verification — must run
 // before the JSON parser consumes the stream.
 app.use('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }));
+// same story for the LiveKit webhook (OpsCat Bridge)
+app.use('/api/hooks/livekit', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '1mb' }));
 // the public status page's "report a problem" form posts urlencoded
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
@@ -58,6 +60,10 @@ app.get('/api/plans', (req, res) => res.json({
 try { app.use('/api/billing', require('./routes/billing')); } catch (e) { /* EE module absent */ }
 try { app.use('/api/superadmin', require('./routes/superadmin')); } catch (e) { /* EE module absent */ }
 try { app.use('/api/orgs', require('./routes/orgs')); } catch (e) { /* EE module absent */ }
+
+// OpsCat Bridge (community core; the hosted cloud gates by plan): mounts
+// specific /api paths, everything else falls through to ops below.
+app.use('/api', require('./routes/bridge'));
 
 // session-authenticated app APIs — ops is the catch-all for the remaining
 // /api/* routes, so it MUST be mounted last.

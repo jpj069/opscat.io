@@ -30,14 +30,15 @@ const PLANS = {
     limits: { users: 30, retentionDays: 90, checks: 100, managedLocations: 25, minIntervalS: 15, snmpTargets: -1,
       agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
-      'sentry', 'priority_support', 'sensor_autoprovision', 'multi_org'],
+      'sentry', 'priority_support', 'sensor_autoprovision', 'bridge', 'multi_org'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
     limits: { users: -1, retentionDays: 365, checks: -1, managedLocations: -1, minIntervalS: 15, snmpTargets: -1,
       agents: -1, apiKeys: -1, ingestLinesPerDay: -1 },
     features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
-      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla', 'multi_org'],
+      'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla',
+      'bridge', 'multi_org'],
   },
 };
 

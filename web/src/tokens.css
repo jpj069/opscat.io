@@ -658,3 +658,28 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
      no trick — it can simply be smaller, matching what <Input> draws optically. */
   select { font-size: 14px; }
 }
+
+/* ── OpsCat Bridge (web/src/pages/Bridge.tsx) ───────────────────────────────
+   Layout a phone must restack lives here as classes (a media query cannot
+   beat an inline style). Desktop: wall + right feed rail; phones: stacked. */
+@layer components {
+  .br-shell { display: flex; height: 100%; min-height: 0; }
+  .br-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .br-stage { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px 16px; }
+  .br-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+  .br-rail { width: 300px; flex-shrink: 0; background: var(--bg1); border-left: 1px solid var(--bg3);
+             display: flex; flex-direction: column; min-height: 0; }
+  .br-rail.closed { width: 36px; }
+  .br-scr { position: relative; aspect-ratio: 16 / 9; background: #080b10; border: 1px solid var(--bg3);
+            border-radius: 4px; overflow: hidden; }
+  .br-scr video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .br-focus { position: relative; flex: 1; min-height: 0; background: #080b10;
+              border: 1px solid var(--bg3); border-radius: 6px; overflow: hidden; }
+  .br-focus video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+}
+@media (max-width: 900px) {
+  .br-shell { flex-direction: column; height: auto; overflow-y: auto; }
+  .br-stage { overflow-y: visible; }
+  .br-rail, .br-rail.closed { width: auto; border-left: none; border-top: 1px solid var(--bg3); }
+  .br-rail .br-feed { max-height: 320px; }
+}

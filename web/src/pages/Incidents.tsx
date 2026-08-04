@@ -1,6 +1,7 @@
 // Incidents — master-detail: incident list + status timeline + RCA editor.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { useApp } from '../state';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
 import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
 import type { Incident } from '../types';
@@ -104,6 +105,7 @@ export default function Incidents() {
 // ------------------------------------------------------------------ detail
 
 function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?: number) => Promise<void> }) {
+  const app = useApp();
   const [draft, setDraft] = useState(() => ({
     summary: incident.rca?.summary ?? '',
     impact: incident.rca?.impact ?? '',
@@ -143,6 +145,11 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
         <SevBadge score={incident.severity} />
         <StatusPill text={incident.status} color={STATUS_COLOR[incident.status]} />
         <div style={{ flex: 1 }} />
+        <button className="pill" onClick={() => { app.setBridgeIncident(incident.id); app.setNav('bridge'); }}
+          style={{ cursor: 'pointer', color: SEV.cyan, background: alpha(SEV.cyan, 0.1),
+            border: `1px solid ${alpha(SEV.cyan, 0.3)}` }}>
+          Open the Bridge
+        </button>
         <button className="pill" onClick={togglePublish} style={{ cursor: 'pointer', ...(incident.published
           ? { color: SEV.green, background: alpha(SEV.green, 0.12), border: `1px solid ${alpha(SEV.green, 0.3)}` }
           : { color: 'var(--text3)', background: 'var(--bg3)', border: '1px solid var(--border)' }) }}>

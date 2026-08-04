@@ -307,3 +307,32 @@ export interface AuditRow {
   ts: number; org_id: number; action: string; detail: string;
   email: string | null; org_name: string | null;
 }
+
+// -------------------------------------------- OpsCat Bridge (docs/BRIDGE.md)
+// groups/participants/feed mirror the server's SQLite rows — snake_case.
+
+export interface BridgeRoom {
+  id: number; incidentId: number; status: 'open' | 'closed';
+  transcription: boolean; createdAt: number; closedAt: number | null;
+}
+export interface BridgeGroup {
+  id: number; room_id: number; name: string; color: string; sort: number;
+  created_by: number | null; created_at: number; closed_at: number | null;
+}
+export interface BridgeParticipant {
+  user_id: number; group_id: number | null; connected: number;
+  joined_at: number; last_seen: number;
+  name: string | null; email: string; color: string | null;
+}
+export interface BridgeFeedItem {
+  id: number; room_id: number; group_id: number | null; user_id: number | null;
+  kind: 'system' | 'transcript' | 'insight';
+  severity: 'info' | 'notable' | 'critical';
+  body: string; meta: Record<string, unknown>; created_at: number;
+}
+export interface BridgeState {
+  room: BridgeRoom | null;
+  groups?: BridgeGroup[];
+  participants?: BridgeParticipant[];
+  livekit?: { url: string; room: string };
+}

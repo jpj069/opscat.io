@@ -39,6 +39,15 @@ module.exports = {
     priceBusiness: process.env.STRIPE_PRICE_BUSINESS || null,
     priceBusinessYearly: process.env.STRIPE_PRICE_BUSINESS_YEARLY || null,
   },
+  // OpsCat Bridge: LiveKit sidecar — the feature is off (routes 503,
+  // UI hidden) until all three are set. apiKey is the key NAME inside the
+  // sidecar's LIVEKIT_KEYS; apiSecret signs access tokens and webhooks.
+  livekit: {
+    url: process.env.OPSCAT_LIVEKIT_URL || null,             // public wss:// for browsers
+    internalUrl: process.env.OPSCAT_LIVEKIT_INTERNAL_URL || process.env.OPSCAT_LIVEKIT_URL || null,
+    apiKey: process.env.OPSCAT_LIVEKIT_API_KEY || null,
+    apiSecret: process.env.OPSCAT_LIVEKIT_API_SECRET || null,
+  },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || null,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || null,

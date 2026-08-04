@@ -29,8 +29,12 @@ export const api = {
   del: <T>(path: string) => request<T>('DELETE', path),
 };
 
-// SSE live stream with auto-reconnect.
-export function openStream(handlers: { onLog?: (l: any) => void; onEvent?: (e: any) => void }): () => void {
+// SSE live stream with auto-reconnect. `onBridge` receives the OpsCat Bridge
+// event family (bridge.feed / bridge.presence / bridge.groups) with its type.
+export function openStream(handlers: {
+  onLog?: (l: any) => void; onEvent?: (e: any) => void;
+  onBridge?: (type: string, data: any) => void;
+}): () => void {
   let es: EventSource | null = null;
   let closed = false;
   let retry = 1000;
@@ -39,6 +43,11 @@ export function openStream(handlers: { onLog?: (l: any) => void; onEvent?: (e: a
     es = new EventSource('/api/stream');
     es.addEventListener('log', (m) => { retry = 1000; handlers.onLog?.(JSON.parse((m as MessageEvent).data)); });
     es.addEventListener('event', (m) => { retry = 1000; handlers.onEvent?.(JSON.parse((m as MessageEvent).data)); });
+    if (handlers.onBridge) {
+      for (const t of ['bridge.feed', 'bridge.presence', 'bridge.groups']) {
+        es.addEventListener(t, (m) => { retry = 1000; handlers.onBridge?.(t, JSON.parse((m as MessageEvent).data)); });
+      }
+    }
     es.onerror = () => {
       es?.close();
       if (!closed) setTimeout(connect, retry = Math.min(retry * 2, 15000));

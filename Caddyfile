@@ -17,3 +17,11 @@
 	}
 	reverse_proxy app:3000
 }
+
+# OpsCat Bridge: LiveKit signal endpoint (WebSocket). Only used once the
+# livekit sidecar runs (docker compose --profile bridge up -d) and a
+# DNS record for bridge.<your-domain> exists; RTC media flows directly over
+# UDP 50100-50200 / TCP 7881, never through Caddy.
+bridge.{$OPSCAT_DOMAIN:localhost} {
+	reverse_proxy livekit:7880
+}

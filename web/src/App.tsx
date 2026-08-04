@@ -11,6 +11,7 @@ import {
   GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
   SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
   ChevronUpIcon, LayoutGridIcon, FilterIcon, Building2Icon, ZapIcon, ShieldAlertIcon,
+  RadioIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -44,6 +45,7 @@ const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
   { id: 'assets', label: 'Assets', icon: BoxesIcon },
   { id: 'cases', label: 'Cases', icon: InboxIcon },
   { id: 'incidents', label: 'Incidents', icon: TriangleAlertIcon },
+  { id: 'bridge', label: 'Bridge', icon: RadioIcon, sub: true },
   { id: 'statuspage', label: 'Status Page', icon: GlobeIcon },
   { id: 'synthetics', label: 'Synthetics', icon: RadarIcon },
   { id: 'reputation', label: 'Reputation', icon: ShieldAlertIcon },
@@ -62,13 +64,30 @@ const PLATFORM_NAV: { id: string; label: string; icon: LucideIcon }[] = [
   { id: 'platform', label: 'Platform', icon: GemIcon },
   { id: 'components', label: 'Component Lab', icon: LayoutGridIcon },
 ];
-const PAGES: Record<string, React.ComponentType> = {
+// Bridge is the one lazy page: it carries livekit-client (~large) into its own
+// chunk, so the common bundle stays untouched for everyone who never opens it.
+const Bridge = React.lazy(() => import('./pages/Bridge'));
+
+const PAGES: Record<string, React.ElementType> = {
   monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
-  incidents: Incidents, statuspage: StatusPageAdmin, synthetics: Synthetics,
+  incidents: Incidents, bridge: Bridge, statuspage: StatusPageAdmin, synthetics: Synthetics,
   reputation: Reputation, vendors: Vendors,
   logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, pipeline: Pipeline,
   automation: Automation, settings: Settings, platform: SuperAdmin, components: ComponentLab,
 };
+
+// Suspense fallback while a lazy page chunk loads — skeleton, per the rules.
+function PageLoading() {
+  return (
+    <div className="page">
+      <Busy>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} h={180} />)}
+        </div>
+      </Busy>
+    </div>
+  );
+}
 
 function planPillColor(plan: string): string {
   if (plan === 'pro') return SEV.purple;
@@ -520,7 +539,9 @@ function Shell() {
         </header>
 
         <main className="shell-body">
-          <Page />
+          <React.Suspense fallback={<PageLoading />}>
+            <Page />
+          </React.Suspense>
         </main>
       </div>
 

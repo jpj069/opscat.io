@@ -661,3 +661,59 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id, org_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_client ON oauth_tokens(client_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
+
+-- ── OpsCat Bridge ────────────────────────────────────────────────────────────
+-- Incident war room / situation room on the LiveKit API (docs/BRIDGE.md). ONE
+-- LiveKit room per bridge; a breakout is a server-side subscription group,
+-- never a separate media room. This file runs on every boot (IF NOT EXISTS),
+-- so pure new tables need no migration entry.
+CREATE TABLE IF NOT EXISTS bridges (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  incident_id   INTEGER NOT NULL UNIQUE REFERENCES incidents(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+  -- default ON (docs §7.2); org opts out via org setting bridge_transcription='0',
+  -- the incident commander per room. Always visibly indicated in the UI.
+  transcription INTEGER NOT NULL DEFAULT 1,
+  created_by    INTEGER REFERENCES users(id),
+  created_at    INTEGER NOT NULL,
+  closed_at     INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS bridge_groups (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id       INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  color         TEXT NOT NULL DEFAULT '',
+  sort          INTEGER NOT NULL DEFAULT 0,
+  created_by    INTEGER REFERENCES users(id),
+  created_at    INTEGER NOT NULL,
+  closed_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_groups ON bridge_groups(room_id, closed_at);
+
+-- presence mirror; source of truth is the LiveKit webhook stream.
+-- group_id NULL = the lobby.
+CREATE TABLE IF NOT EXISTS bridge_participants (
+  room_id       INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_id      INTEGER REFERENCES bridge_groups(id) ON DELETE SET NULL,
+  connected     INTEGER NOT NULL DEFAULT 0,
+  joined_at     INTEGER NOT NULL,
+  last_seen     INTEGER NOT NULL,
+  left_at       INTEGER,
+  PRIMARY KEY (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS bridge_feed (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id       INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
+  group_id      INTEGER REFERENCES bridge_groups(id) ON DELETE SET NULL,
+  user_id       INTEGER REFERENCES users(id),    -- speaker/actor; NULL = AI or system
+  kind          TEXT NOT NULL CHECK (kind IN ('system','transcript','insight')),
+  severity      TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info','notable','critical')),
+  body          TEXT NOT NULL,
+  meta          TEXT NOT NULL DEFAULT '{}',      -- JSON: refs, stt confidence, …
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_feed ON bridge_feed(room_id, id);

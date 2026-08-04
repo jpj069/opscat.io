@@ -27,6 +27,9 @@ export interface AppState {
   refreshEvents: () => void;
   connected: boolean;
   selectedEvent: number | null; setSelectedEvent: (id: number | null) => void;
+  // OpsCat Bridge: which incident's war room the Bridge page shows (set from
+  // Incidents, same cross-page channel as selectedEvent).
+  bridgeIncident: number | null; setBridgeIncident: (id: number | null) => void;
   users: UserRow[];
   settings: Record<string, string>;
   logout: () => void;
@@ -38,7 +41,7 @@ export const useApp = () => useContext(Ctx);
 // Every id in App.tsx's NAV must be listed here, or a reload / deep link on that
 // page silently drops the user back to Monitor (nav clicks still work, because
 // setNav pushes the URL itself — which is why this is easy to miss).
-const PAGES = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'statuspage',
+const PAGES = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'bridge', 'statuspage',
   'synthetics', 'reputation', 'vendors', 'logs', 'rules', 'analytics', 'users', 'pipeline',
   'automation',
   'settings', 'platform', 'components'];
@@ -62,6 +65,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [logsLoading, setLogsLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<number | null>(null);
+  const [bridgeIncident, setBridgeIncident] = useState<number | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const streamStop = useRef<(() => void) | null>(null);
@@ -157,9 +161,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition,
     theme, setTheme: setThemeState, density, setDensity: setDensityState,
     nav, setNav, events, logs, eventsLoading, logsLoading, refreshEvents, connected,
-    selectedEvent, setSelectedEvent, users, settings, logout,
+    selectedEvent, setSelectedEvent, bridgeIncident, setBridgeIncident, users, settings, logout,
   }), [user, orgs, activeOrgId, edition, theme, density, nav, events, logs, eventsLoading,
-    logsLoading, connected, selectedEvent, users, settings]);
+    logsLoading, connected, selectedEvent, bridgeIncident, users, settings]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

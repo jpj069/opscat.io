@@ -1,0 +1,23 @@
+# LiveKit config for the OpsCat Bridge sidecar.
+# In the public opscat.io repo this file is published as `livekit.yaml` and is
+# mounted read-only by the `livekit` compose service (profile: bridge).
+# Secrets do NOT live here: the compose service injects LIVEKIT_KEYS from .env
+# (OPSCAT_LIVEKIT_API_KEY / OPSCAT_LIVEKIT_API_SECRET).
+port: 7880          # signal/API — internal only; Caddy proxies wss://bridge.<your-domain>
+rtc:
+  tcp_port: 7881    # RTC-over-TCP fallback for UDP-hostile networks
+  port_range_start: 50100
+  port_range_end: 50200
+  # The container runs behind your host's NAT — advertise the host's public IP
+  # in ICE candidates instead of the compose-network address.
+  use_external_ip: true
+webhook:
+  # api_key must NAME a key from LIVEKIT_KEYS (default name: opscat — keep
+  # OPSCAT_LIVEKIT_API_KEY=opscat in .env, or change both places together).
+  api_key: opscat
+  urls:
+    # EDIT: your OpsCat base URL. Without a reachable webhook the room still
+    # works, but presence (connect/disconnect feed lines) stays empty.
+    - https://opscat.example.com/api/hooks/livekit
+logging:
+  level: info
