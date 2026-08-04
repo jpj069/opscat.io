@@ -86,7 +86,7 @@ services:
     profiles: ["bridge"]
     command: --config /etc/livekit.yaml
     environment:
-      - LIVEKIT_KEYS=${OPSCAT_LIVEKIT_API_KEY:-opscat}: ${OPSCAT_LIVEKIT_API_SECRET:-}
+      - 'LIVEKIT_KEYS=${OPSCAT_LIVEKIT_API_KEY:-opscat}: ${OPSCAT_LIVEKIT_API_SECRET:-}'
     volumes:
       # livekit.community.yaml is published as livekit.yaml in the public repo
       - ./livekit.yaml:/etc/livekit.yaml:ro
