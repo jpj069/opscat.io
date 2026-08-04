@@ -56,7 +56,7 @@ const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
 ];
 const ADMIN_NAV: { id: string; label: string; icon: LucideIcon }[] = [
   { id: 'users', label: 'Users', icon: UsersIcon },
-  { id: 'pipeline', label: 'Pipeline', icon: FilterIcon },
+  { id: 'pipeline', label: 'Log Pipeline', icon: FilterIcon },
   { id: 'automation', label: 'Automation', icon: ZapIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];

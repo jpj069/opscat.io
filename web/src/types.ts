@@ -252,6 +252,12 @@ export interface ClassifierRule {
   pattern: string; flags?: string; name: string; severity: number; targetGroup?: number | null;
 }
 export interface ClassifiersResponse { builtin: ClassifierRule[]; custom: ClassifierRule[]; }
+export interface ScoutTemplate {
+  id: number; template: string; count: number; sample: string | null;
+  status: 'pending' | 'approved' | 'dismissed';
+  suggestion: { name: string; severity: number; skip: boolean; reason: string } | null;
+  firstSeen: number; lastSeen: number;
+}
 export interface ClassifyTestResult {
   match: { name: string; severity: number; target: string | null;
     source: 'custom' | 'builtin' | 'syslog'; pattern: string | null } | null;

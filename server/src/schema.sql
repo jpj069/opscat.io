@@ -582,6 +582,24 @@ CREATE TABLE IF NOT EXISTS org_settings (
   PRIMARY KEY (org_id, key)
 ) WITHOUT ROWID;
 
+-- Scout: templates mined from unclassified log lines (masking + grouping).
+-- pending -> (AI suggestion stored on the row) -> approved (became a
+-- classifier rule) or dismissed (kept so it is never suggested again).
+CREATE TABLE IF NOT EXISTS scout_templates (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  template      TEXT NOT NULL,               -- masked line, variable parts as <TAG>/<*>
+  count         INTEGER NOT NULL DEFAULT 1,
+  sample        TEXT,                        -- one raw example line
+  status        TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','approved','dismissed')),
+  suggestion    TEXT,                        -- JSON from the LLM: {name, severity, skip, reason}
+  first_seen    INTEGER NOT NULL,
+  last_seen     INTEGER NOT NULL,
+  UNIQUE (org_id, template)
+);
+CREATE INDEX IF NOT EXISTS idx_scout_org_status ON scout_templates(org_id, status, count DESC);
+
 -- Automation: trigger (matched against pipeline events) -> actions. First
 -- action family: lifecycle auto-close (a clear event finishes its raise
 -- event), case auto-assign, outbound webhook. Every run is written to

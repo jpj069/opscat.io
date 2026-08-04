@@ -117,6 +117,7 @@ app.use((err, req, res, next) => {
 seed();
 require('./engine/alerts').start();
 require('./engine/automations').start();
+require('./engine/scout').start();
 require('./engine/synthetics').start();
 require('./engine/reputation').start();
 require('./engine/snmp').start();

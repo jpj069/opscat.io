@@ -3,20 +3,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
-import { SEV, alpha, fmtBytes, sevColor } from '../format';
-import { KpiCard, LineChart, TableScroll, TableSkeleton, Input, NativeSelect} from '../ui';
-import type { ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats } from '../types';
+import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
+import {
+  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, NativeSelect,
+} from '../ui';
+import type {
+  ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats, ScoutTemplate,
+} from '../types';
 
-type Tab = 'throughput' | 'classifiers';
+type Tab = 'throughput' | 'classifiers' | 'scout';
 type Range = '24h' | '7d' | '30d';
 
 export default function Pipeline() {
   const [tab, setTab] = useState<Tab>('throughput');
   return (
     <div className="page">
-      <h1 className="page-title">Pipeline</h1>
+      <h1 className="page-title">Log Pipeline</h1>
       <div className="row" style={{ gap: 0, marginBottom: 14, borderBottom: '1px solid var(--bg3)' }}>
-        {([['throughput', 'Throughput'], ['classifiers', 'Classifiers']] as const).map(([id, label]) => (
+        {([['throughput', 'Throughput'], ['classifiers', 'Classifiers'], ['scout', 'Scout']] as const)
+          .map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ padding: '6px 14px', fontSize: 'var(--t-sm)', fontWeight: 600,
               color: tab === id ? 'var(--text0)' : 'var(--text2)',
@@ -25,7 +30,7 @@ export default function Pipeline() {
           </button>
         ))}
       </div>
-      {tab === 'throughput' ? <Throughput /> : <Classifiers />}
+      {tab === 'throughput' ? <Throughput /> : tab === 'classifiers' ? <Classifiers /> : <Scout />}
     </div>
   );
 }
@@ -295,5 +300,174 @@ function Tester() {
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- scout
+
+const SCOUT_GRID = '70px minmax(280px,3fr) 110px minmax(200px,2fr) 170px';
+
+// OpsCat Scout: templates mined from unclassified lines, ordered by frequency.
+// Admins ask the org's LLM for a name/severity, approve into a classifier
+// rule, or dismiss (remembered — never suggested again).
+function Scout() {
+  const app = useApp();
+  const isAdmin = app.user?.role === 'admin';
+  const [rows, setRows] = useState<ScoutTemplate[] | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [err, setErr] = useState('');
+  const [approving, setApproving] = useState<ScoutTemplate | null>(null);
+
+  const load = () => api.get<ScoutTemplate[]>('/api/admin/scout')
+    .then(setRows).catch((e) => setErr(e instanceof ApiError ? e.message : 'network error'));
+  useEffect(() => { load(); }, []);
+
+  const suggest = async (t: ScoutTemplate) => {
+    setBusyId(t.id); setErr('');
+    try {
+      const r = await api.post<{ suggestion: ScoutTemplate['suggestion'] }>(
+        `/api/admin/scout/${t.id}/suggest`, {});
+      setRows((cur) => cur?.map((x) => (x.id === t.id ? { ...x, suggestion: r.suggestion } : x)) ?? cur);
+    } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'network error'); }
+    finally { setBusyId(null); }
+  };
+  const dismiss = async (t: ScoutTemplate) => {
+    setBusyId(t.id);
+    try { await api.post(`/api/admin/scout/${t.id}/dismiss`, {}); load(); }
+    catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'network error'); }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <>
+      <div className="card">
+        <div className="card-title">Scout · suggested rules from unmatched lines</div>
+        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+          Scout watches log lines no classifier matched, masks the variable parts
+          (<span className="mono">&lt;IP&gt;, &lt;NUM&gt;, &lt;*&gt;</span>) and groups them into templates.
+          Frequent templates are rule candidates: let the AI suggest a name and severity, then
+          approve into a real classifier rule — or dismiss noise for good.
+        </div>
+        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        <TableScroll minWidth={880}>
+          <div className="tbl-head" style={{ gridTemplateColumns: SCOUT_GRID, padding: '8px 0' }}>
+            <span>Seen</span><span>Template</span><span>Last seen</span><span>AI suggestion</span><span></span>
+          </div>
+          {rows === null && <TableSkeleton cols={SCOUT_GRID} rows={4} flush />}
+          {rows?.length === 0 && (
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
+              Nothing pending — every recent log line matched a rule, or no unmatched lines arrived yet.
+            </div>
+          )}
+          {rows?.map((t) => (
+            <div key={t.id} style={{ display: 'grid', gridTemplateColumns: SCOUT_GRID, gap: 8,
+              padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text0)' }}>
+                {t.count >= 1000 ? `${(t.count / 1000).toFixed(1)}k` : t.count}×</span>
+              <span className="mono" title={t.sample || undefined}
+                style={{ fontSize: 10, color: 'var(--text1)', overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.template}</span>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--text2)' }}>{relTime(t.lastSeen)}</span>
+              <span style={{ fontSize: 10, overflow: 'hidden' }}>
+                {t.suggestion ? (
+                  t.suggestion.skip ? (
+                    <span style={{ color: 'var(--text3)' }} title={t.suggestion.reason}>
+                      noise — {t.suggestion.reason.slice(0, 60)}</span>
+                  ) : (
+                    <span className="mono" title={t.suggestion.reason}>
+                      <b style={{ color: 'var(--text0)' }}>{t.suggestion.name}</b>
+                      <b style={{ color: sevColor(t.suggestion.severity), marginLeft: 6 }}>
+                        {t.suggestion.severity}</b>
+                      <span style={{ color: 'var(--text3)', marginLeft: 6 }}>
+                        {t.suggestion.reason.slice(0, 50)}</span>
+                    </span>
+                  )
+                ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+              </span>
+              <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                {isAdmin && <>
+                  <button className="btn btn-sm" disabled={busyId === t.id} onClick={() => suggest(t)}
+                    title="Ask the org's LLM for a name + severity">
+                    {busyId === t.id ? '…' : t.suggestion ? 'Re-suggest' : 'AI suggest'}
+                  </button>
+                  <button className="btn btn-sm" style={{ color: SEV.green }}
+                    onClick={() => setApproving(t)}>Approve</button>
+                  <button className="btn btn-sm" style={{ color: 'var(--text3)' }} disabled={busyId === t.id}
+                    onClick={() => dismiss(t)} title="Never suggest this template again">Dismiss</button>
+                </>}
+              </span>
+            </div>
+          ))}
+        </TableScroll>
+        {!isAdmin && (
+          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>
+            Only administrators can approve or dismiss suggestions.
+          </div>
+        )}
+      </div>
+      {approving && (
+        <ApproveModal template={approving} onClose={() => setApproving(null)}
+          onDone={() => { setApproving(null); load(); }} />
+      )}
+    </>
+  );
+}
+
+function ApproveModal({ template, onClose, onDone }: {
+  template: ScoutTemplate; onClose: () => void; onDone: () => void;
+}) {
+  const placeholders = template.template.match(/<[A-Z*]+>/g) || [];
+  const [name, setName] = useState(template.suggestion?.name || '');
+  const [severity, setSeverity] = useState(String(template.suggestion?.severity ?? 40));
+  const [targetIndex, setTargetIndex] = useState('0');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr('');
+    try {
+      await api.post(`/api/admin/scout/${template.id}/approve`, {
+        name, severity: parseInt(severity, 10), targetIndex: parseInt(targetIndex, 10) || 0,
+      });
+      onDone();
+    } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'network error'); setBusy(false); }
+  };
+
+  return (
+    <Modal title="Approve as classifier rule" onClose={onClose} width={480}>
+      <div className="mono" style={{ fontSize: 10, color: 'var(--text2)', background: 'var(--bg2)',
+        border: '1px solid var(--bg3)', borderRadius: 6, padding: '8px 10px', marginBottom: 12,
+        wordBreak: 'break-all' }}>{template.template}</div>
+      <form onSubmit={submit}>
+        <Field label="Event name">
+          <input required className="mono" value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="billing.sync_slow" />
+        </Field>
+        <div className="row row-wrap" style={{ gap: 10, alignItems: 'flex-start' }}>
+          <div style={{ width: 120 }}>
+            <Field label="Severity (0-100)">
+              <input required className="mono" inputMode="numeric" value={severity}
+                onChange={(e) => setSeverity(e.target.value)} />
+            </Field>
+          </div>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <Field label="Target (dedupe entity)">
+              <select value={targetIndex} onChange={(e) => setTargetIndex(e.target.value)}>
+                <option value="0">none — dedupe per device only</option>
+                {placeholders.map((p, i) => (
+                  <option key={i} value={String(i + 1)}>{`placeholder ${i + 1}: ${p}`}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
+          Severity ≥ 60 auto-opens a case. The rule appears under Classifiers and applies immediately.
+        </div>
+        {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
+        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+          disabled={busy}>{busy ? '…' : 'Approve rule'}</button>
+      </form>
+    </Modal>
   );
 }

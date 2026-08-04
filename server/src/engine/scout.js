@@ -1,0 +1,178 @@
+'use strict';
+// OpsCat Scout — mines rule suggestions from log lines no classifier matched.
+//
+// 1. Masking: variable parts (IPs, timestamps, numbers, …) become <TAG>
+//    placeholders, so similar lines collapse into one string (the masking
+//    library follows syslogfilterv2's drain3.ini, trimmed to the essentials).
+// 2. Grouping: identical masked lines aggregate; a near-match against an
+//    existing template of the same shape merges into it, differing tokens
+//    become <*> (a lightweight take on the Drain algorithm).
+// 3. Curation: the Pipeline → Scout tab lists templates by frequency; an
+//    admin can ask the org's LLM (llm.js) for a suggested name/severity,
+//    approve into a real classifier rule, or dismiss.
+//
+// Hot-path cost: masking regexes only run for UNMATCHED lines, counts are
+// buffered in memory and flushed to scout_templates every few seconds.
+const { db } = require('../db');
+const { now } = require('../util');
+const pipeline = require('./pipeline');
+
+// Masking rules, applied in order. Tags must stay in sync with MASK_VALUE
+// below (regex generation on approve).
+const MASKS = [
+  { tag: 'TS', re: /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g },
+  { tag: 'DATE', re: /\b\d{4}[-/]\d{2}[-/]\d{2}\b/g },
+  { tag: 'TIME', re: /\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g },
+  { tag: 'MAC', re: /\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b/g },
+  { tag: 'IP6', re: /\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\b/g },
+  { tag: 'IP', re: /\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?(?:\/\d{1,2})?\b/g },
+  { tag: 'UUID', re: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g },
+  { tag: 'EMAIL', re: /[\w.+-]+@[\w.-]+\.\w+/g },
+  { tag: 'URL', re: /https?:\/\/\S+/g },
+  { tag: 'PATH', re: /(?<![\w.])\/(?:[\w.@+-]+\/)+[\w.@+-]+/g },
+  { tag: 'HEX', re: /\b0x[0-9a-fA-F]+\b/g },
+  { tag: 'HID', re: /\b(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,}\b/g },
+  { tag: 'VER', re: /\b\d+(?:\.\d+){2,}\b/g },
+  { tag: 'NUM', re: /\b\d+(?:\.\d+)?(?=[A-Za-z%]{1,3}\b)/g }, // number with unit: 320ms, 87%, 4GB
+  { tag: 'NUM', re: /(?<![\w.])[+-]?\d+(?:\.\d+)?(?![\w.])/g },
+];
+
+// value pattern per tag for turning an approved template back into a regex
+const MASK_VALUE = {
+  TS: '\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?',
+  DATE: '\\d{4}[-/]\\d{2}[-/]\\d{2}',
+  TIME: '\\d{1,2}:\\d{2}:\\d{2}(?:[.,]\\d+)?',
+  MAC: '[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}',
+  IP6: '(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}',
+  IP: '\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d{1,5})?(?:\\/\\d{1,2})?',
+  UUID: '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+  EMAIL: '[\\w.+-]+@[\\w.-]+\\.\\w+',
+  URL: 'https?:\\/\\/\\S+',
+  PATH: '\\/(?:[\\w.@+-]+\\/)+[\\w.@+-]+',
+  HEX: '0x[0-9a-fA-F]+',
+  HID: '[0-9a-fA-F]{7,}',
+  VER: '\\d+(?:\\.\\d+){2,}',
+  NUM: '[+-]?\\d+(?:\\.\\d+)?',
+  '*': '\\S+',
+};
+
+function mask(line) {
+  let out = line;
+  for (const m of MASKS) out = out.replace(m.re, `<${m.tag}>`);
+  // collapse repeated placeholders and whitespace so shapes stay stable
+  return out.replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+
+// similarity merge: same token count + same first token, ≥60% identical
+// tokens -> same template family; differing tokens become <*>
+const SIM_THRESHOLD = 0.6;
+function tryMerge(tokens, existingTemplate) {
+  const et = existingTemplate.split(' ');
+  if (et.length !== tokens.length || et[0] !== tokens[0]) return null;
+  let same = 0;
+  const merged = new Array(tokens.length);
+  for (let i = 0; i < tokens.length; i++) {
+    if (et[i] === tokens[i]) { same++; merged[i] = et[i]; } else merged[i] = '<*>';
+  }
+  return same / tokens.length >= SIM_THRESHOLD ? merged.join(' ') : null;
+}
+
+// escape regex specials in the literal parts of a template
+function escapeLiteral(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Turn an approved template into an anchored-ish regex. `targetIndex` (1-based
+// over the template's placeholders) makes that placeholder a capture group.
+function templateToPattern(template, targetIndex = 0) {
+  let idx = 0;
+  const pattern = template.split(/(<[A-Z*]+>)/).map((part) => {
+    const m = /^<([A-Z*]+)>$/.exec(part);
+    if (!m) return escapeLiteral(part);
+    const value = MASK_VALUE[m[1]] || MASK_VALUE['*'];
+    idx++;
+    return idx === targetIndex ? `(${value})` : `(?:${value})`;
+  }).join('');
+  return { pattern, captureGroup: targetIndex >= 1 && targetIndex <= idx ? 1 : null };
+}
+
+// ---- mining buffer ----
+
+const MAX_TEMPLATES_PER_ORG = 500;
+const FLUSH_MS = 5000;
+const buffer = new Map(); // orgId -> Map<maskedLine, {count, sample, lastSeen}>
+let flushTimer = null;
+
+const findByTemplate = db.prepare('SELECT id, count FROM scout_templates WHERE org_id = ? AND template = ?');
+const findCandidates = db.prepare(`SELECT id, template FROM scout_templates
+  WHERE org_id = ? AND status = 'pending' ORDER BY count DESC LIMIT 500`);
+const insTemplate = db.prepare(`INSERT INTO scout_templates
+  (org_id, template, count, sample, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)`);
+const bumpTemplate = db.prepare(
+  'UPDATE scout_templates SET count = count + ?, last_seen = ? WHERE id = ?');
+const renameTemplate = db.prepare(
+  'UPDATE scout_templates SET template = ?, count = count + ?, last_seen = ? WHERE id = ?');
+const orgTemplateCount = db.prepare(
+  "SELECT COUNT(*) c FROM scout_templates WHERE org_id = ? AND status = 'pending'");
+const evictSmallest = db.prepare(`DELETE FROM scout_templates WHERE id IN (
+  SELECT id FROM scout_templates WHERE org_id = ? AND status = 'pending'
+  ORDER BY count ASC, last_seen ASC LIMIT ?)`);
+
+function onLog(l) {
+  if (l.matched) return;
+  const masked = mask(l.line);
+  if (!masked || masked.length < 4) return;
+  let orgBuf = buffer.get(l.orgId);
+  if (!orgBuf) { orgBuf = new Map(); buffer.set(l.orgId, orgBuf); }
+  const e = orgBuf.get(masked);
+  if (e) { e.count++; e.lastSeen = l.ts; }
+  else if (orgBuf.size < 5000) orgBuf.set(masked, { count: 1, sample: l.line.slice(0, 400), lastSeen: l.ts });
+}
+
+function flush() {
+  for (const [orgId, orgBuf] of buffer) {
+    db.transaction(() => {
+      let candidates = null; // lazy: only load when an exact match misses
+      for (const [masked, e] of orgBuf) {
+        const exact = findByTemplate.get(orgId, masked);
+        if (exact) { bumpTemplate.run(e.count, e.lastSeen, exact.id); continue; }
+        if (candidates === null) candidates = findCandidates.all(orgId);
+        const tokens = masked.split(' ');
+        let merged = false;
+        for (const c of candidates) {
+          const mergedTemplate = tryMerge(tokens, c.template);
+          if (!mergedTemplate) continue;
+          if (mergedTemplate !== c.template) {
+            // merged shape may collide with a third row: fold into it instead
+            const clash = findByTemplate.get(orgId, mergedTemplate);
+            if (clash && clash.id !== c.id) {
+              bumpTemplate.run(e.count, e.lastSeen, clash.id);
+            } else {
+              renameTemplate.run(mergedTemplate, e.count, e.lastSeen, c.id);
+              c.template = mergedTemplate;
+            }
+          } else {
+            bumpTemplate.run(e.count, e.lastSeen, c.id);
+          }
+          merged = true;
+          break;
+        }
+        if (!merged) {
+          const info = insTemplate.run(orgId, masked, e.count, e.sample, e.lastSeen, e.lastSeen);
+          candidates.push({ id: info.lastInsertRowid, template: masked });
+        }
+      }
+      const over = orgTemplateCount.get(orgId).c - MAX_TEMPLATES_PER_ORG;
+      if (over > 0) evictSmallest.run(orgId, over);
+    })();
+  }
+  buffer.clear();
+}
+
+function start() {
+  pipeline.on('log', onLog);
+  flushTimer = setInterval(() => {
+    try { flush(); } catch (e) { console.error('scout flush error:', e.message); }
+  }, FLUSH_MS);
+  flushTimer.unref();
+}
+
+module.exports = { start, flush, mask, templateToPattern, MASK_VALUE };

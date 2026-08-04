@@ -61,6 +61,13 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    webhooks. One run per event dedupe key and cooldown; every run is written to
    `audit_log` (`automation_run`, system actor) so automated decisions stay auditable.
 
+**Scout** (`engine/scout.js`, Pipeline → Scout tab) mines rule suggestions from
+lines no classifier matched: variable parts are masked (`<IP>`, `<NUM>`, …),
+identical/similar masked lines group into templates (a lightweight Drain), and
+frequent templates surface for curation — AI-suggest a name/severity, approve
+into a real classifier rule, or dismiss. Masking runs only for unmatched lines
+and counts are buffered (5 s flush), so the ingest hot path stays cheap.
+
 AI features call the org's LLM through `server/src/llm.js` (OpenAI-compatible
 chat completions): org override (Settings → AI) → platform default (super-admin
 console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by any API.

@@ -151,9 +151,9 @@ function ingestLogs(entries, source, orgId = 1) {
       insLog.run(orgId, ts, device, line, sev, source, e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null);
       accepted++;
       bytes += Buffer.byteLength(line);
-      emittedLogs.push({ orgId, ts, device, line, sev });
-
       const cls = classify(line, sev, orgId);
+      // `matched` lets Scout mine only lines no classifier knows
+      emittedLogs.push({ orgId, ts, device, line, sev, matched: !!cls });
       if (!cls) continue;
       const ip = e.meta && typeof e.meta.ip === 'string' ? e.meta.ip.slice(0, 45) : null;
       const dedupe = `${cls.name}|${device}|${cls.target || ''}`;

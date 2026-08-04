@@ -10,6 +10,7 @@ const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, 
 const sec = require('../security');
 const pipelineEngine = require('../engine/pipeline');
 const automationEngine = require('../engine/automations');
+const scoutEngine = require('../engine/scout');
 const llm = require('../llm');
 
 const plans = require('../plans');
@@ -280,6 +281,96 @@ router.post('/pipeline/test', (req, res) => {
       source: match.source, pattern: match.pattern } : null,
     caseThreshold: pipelineEngine.CASE_THRESHOLD,
   });
+});
+
+// ---- Scout: rule suggestions mined from unclassified lines ----
+
+const getScoutRow = db.prepare('SELECT * FROM scout_templates WHERE id = ? AND org_id = ?');
+
+router.get('/scout', (req, res) => {
+  const status = ['pending', 'approved', 'dismissed'].includes(req.query.status)
+    ? req.query.status : 'pending';
+  const rows = db.prepare(`SELECT id, template, count, sample, status, suggestion, first_seen, last_seen
+    FROM scout_templates WHERE org_id = ? AND status = ? ORDER BY count DESC LIMIT 200`)
+    .all(req.orgId, status);
+  res.json(rows.map((r) => {
+    let suggestion = null;
+    try { suggestion = r.suggestion ? JSON.parse(r.suggestion) : null; } catch { /* noop */ }
+    return { id: r.id, template: r.template, count: r.count, sample: r.sample,
+      status: r.status, suggestion, firstSeen: r.first_seen, lastSeen: r.last_seen };
+  }));
+});
+
+const SCOUT_SYSTEM_PROMPT =
+  'You classify masked syslog templates for a NOC monitoring system. Placeholders ' +
+  'like <IP>, <NUM>, <*> stand for variable parts. Reply with a single JSON object, ' +
+  'no prose: {"name": "<theme.meaning>", "severity": <0-100>, "skip": <true|false>, ' +
+  '"reason": "<short justification>"}. The name is lowercase [a-z0-9._-], themed by ' +
+  'the affected system, e.g. bgp.peer_down, disk.io_error, ssh.auth_fail. Severity ' +
+  'bands: 80-100 critical (outage, corruption, security incident), 60-79 high, ' +
+  '40-59 medium (degradation, suspicious), 20-39 low, 0-19 info. Set skip=true only ' +
+  'for routine chatter with no operational subject.';
+
+// Ask the org's LLM for a name/severity suggestion; stored on the row so the
+// call happens once per template (admins can re-run it after model changes).
+router.post('/scout/:id/suggest', sec.requireRole('admin'), async (req, res) => {
+  const row = getScoutRow.get(req.params.id, req.orgId);
+  if (!row) return httpError(res, 404, 'template not found');
+  try {
+    const reply = await llm.chat(req.orgId, [
+      { role: 'system', content: SCOUT_SYSTEM_PROMPT },
+      { role: 'user', content: `Template (seen ${row.count} times):\n${row.template}\n\nExample line:\n${row.sample || '-'}` },
+    ], { maxTokens: 200, timeoutMs: 25000 });
+    const jsonMatch = /\{[\s\S]*\}/.exec(reply);
+    if (!jsonMatch) throw new Error('LLM reply carried no JSON object');
+    const s = JSON.parse(jsonMatch[0]);
+    const suggestion = {
+      name: String(s.name || '').toLowerCase().replace(/[^a-z0-9._-]/g, '_').slice(0, 50),
+      severity: clampInt(s.severity, 0, 100, 30),
+      skip: !!s.skip,
+      reason: String(s.reason || '').slice(0, 300),
+    };
+    db.prepare('UPDATE scout_templates SET suggestion = ? WHERE id = ?')
+      .run(JSON.stringify(suggestion), row.id);
+    res.json({ ok: true, suggestion });
+  } catch (e) {
+    httpError(res, 502, String(e.message).slice(0, 300));
+  }
+});
+
+// Approve: template becomes a real custom classifier rule (appended to the
+// org's rule list, live reload). targetIndex picks which placeholder (1-based)
+// is captured into the event target.
+router.post('/scout/:id/approve', sec.requireRole('admin'), (req, res) => {
+  const row = getScoutRow.get(req.params.id, req.orgId);
+  if (!row) return httpError(res, 404, 'template not found');
+  const name = req.body?.name;
+  if (!isStr(name, 50) || !CLASSIFIER_NAME_RE.test(name)) {
+    return httpError(res, 400, 'name required (letters, digits, . : _ -)');
+  }
+  const severity = clampInt(req.body?.severity, 0, 100, -1);
+  if (severity < 0) return httpError(res, 400, 'severity 0-100 required');
+  const targetIndex = clampInt(req.body?.targetIndex, 0, 9, 0);
+  const { pattern, captureGroup } = scoutEngine.templateToPattern(row.template, targetIndex);
+  if (pattern.length > 300) {
+    return httpError(res, 400, 'generated pattern exceeds 300 chars — this template is too long for a rule');
+  }
+  const custom = pipelineEngine.listClassifiers(req.orgId).custom;
+  if (custom.length >= 100) return httpError(res, 400, 'rule limit reached (100) — remove rules first');
+  custom.push({ pattern, flags: 'i', name, severity, ...(captureGroup ? { targetGroup: captureGroup } : {}) });
+  setOrgSetting(req.orgId, 'classifiers', JSON.stringify(custom));
+  pipelineEngine.loadClassifiers(req.orgId);
+  db.prepare("UPDATE scout_templates SET status = 'approved' WHERE id = ?").run(row.id);
+  sec.audit(req.user.id, 'scout_approve', `${name} (sev ${severity}) ← ${row.template.slice(0, 120)}`, req.orgId);
+  res.json({ ok: true, pattern, name, severity });
+});
+
+router.post('/scout/:id/dismiss', sec.requireRole('admin'), (req, res) => {
+  const row = getScoutRow.get(req.params.id, req.orgId);
+  if (!row) return httpError(res, 404, 'template not found');
+  db.prepare("UPDATE scout_templates SET status = 'dismissed' WHERE id = ?").run(row.id);
+  sec.audit(req.user.id, 'scout_dismiss', row.template.slice(0, 120), req.orgId);
+  res.json({ ok: true });
 });
 
 // ---- automations (lead+ to modify) ----

@@ -83,6 +83,10 @@ function prune() {
   db.prepare('DELETE FROM notifications WHERE ts < ?').run(t - 90 * 86400000);
   db.prepare('DELETE FROM rule_fires WHERE fired_at < ?').run(t - 7 * 86400000);
   db.prepare('DELETE FROM automation_fires WHERE fired_at < ?').run(t - 7 * 86400000);
+  // Scout: stale pending templates age out; dismissed ones are kept longer so
+  // recurring noise stays remembered (and never re-suggested)
+  db.prepare("DELETE FROM scout_templates WHERE status = 'pending' AND last_seen < ?").run(t - 14 * 86400000);
+  db.prepare("DELETE FROM scout_templates WHERE status = 'dismissed' AND last_seen < ?").run(t - 90 * 86400000);
   db.prepare('DELETE FROM vendor_incidents WHERE resolved_at IS NOT NULL AND resolved_at < ?')
     .run(t - 90 * 86400000);
   db.prepare('DELETE FROM status_reports WHERE ts < ?').run(t - 30 * 86400000);
