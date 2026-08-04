@@ -273,6 +273,17 @@ async function main() {
     !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = 1 AND user_id = ? AND action = 'bridge_close'`)
       .get(lead.id));
 
+  // ── browser-side headers: CSP + Permissions-Policy must carry the Bridge ──
+  // The class of bug nothing else catches: server green, browser refuses the
+  // signal WebSocket (connect-src) or the microphone (Permissions-Policy).
+  const hdr = await fetch(`${BASE}/api/health`);
+  const csp = hdr.headers.get('content-security-policy') || '';
+  const perm = hdr.headers.get('permissions-policy') || '';
+  chk('CSP connect-src names the LiveKit origin (wss + https twin)',
+    /connect-src [^;]*wss:\/\/rt\.e2e\.test/.test(csp) && /connect-src [^;]*https:\/\/rt\.e2e\.test/.test(csp), csp);
+  chk('Permissions-Policy allows the microphone for self',
+    perm.includes('microphone=(self)'), perm);
+
   // ── SSE stream answers with the right content type ────────────────────────
   const ac = new AbortController();
   const sse = await fetch(`${BASE}/api/stream`, { headers: { cookie: M.cookie }, signal: ac.signal });

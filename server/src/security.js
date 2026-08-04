@@ -265,23 +265,49 @@ function requireApiKey(scope) {
 // at publish time and it contacts no external service (see docs/OPEN-CORE.md).
 const TESTIFY_ORIGIN = 'https://lynk.run';
 const cloudOnly = (origin) => (edition.isCloud() ? ` ${origin}` : '');
+
+// OpsCat Bridge (docs/BRIDGE.md): the LiveKit signal endpoint is a sibling
+// origin (wss://bridge.<domain>) — connect-src governs WebSockets too, so the
+// browser needs it there, plus its https twin for livekit-client's
+// /rtc/validate error probe. Config-driven, not edition-gated (the Bridge is
+// community core): a deployment without OPSCAT_LIVEKIT_URL keeps the tight
+// default. This shipped missing at first and died in the browser as "could
+// not establish signal connection" while every server-side check was green —
+// the exact #47 symptom class described above. e2e-bridge.js now asserts it.
+const livekitOrigins = (() => {
+  if (!config.livekit.url) return '';
+  try {
+    const { protocol, host } = new URL(config.livekit.url);
+    const ws = protocol === 'ws:' ? 'ws' : 'wss';
+    const http = protocol === 'ws:' ? 'http' : 'https';
+    return ` ${ws}://${host} ${http}://${host}`;
+  } catch { return ''; }
+})();
+
 const CSP = [
   "default-src 'self'",
   `script-src 'self'${cloudOnly(TESTIFY_ORIGIN)}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:",
-  `connect-src 'self'${cloudOnly(TESTIFY_ORIGIN)}`,
+  `connect-src 'self'${cloudOnly(TESTIFY_ORIGIN)}${livekitOrigins}`,
   "base-uri 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
 ].join('; ');
 
+// The Bridge captures mic + screen on the SAME origin, so microphone must be
+// (self) once LiveKit is configured — `microphone=()` is an empty allowlist
+// that hard-disables getUserMedia even for ourselves. display-capture is not
+// named on purpose: its default allowlist already is 'self'. Camera stays
+// blocked until a Bridge phase actually ships video.
+const PERMISSIONS_POLICY = `camera=(), microphone=(${config.livekit.url ? 'self' : ''}), geolocation=()`;
+
 function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Permissions-Policy', PERMISSIONS_POLICY);
   res.setHeader('Content-Security-Policy', CSP);
   next();
 }
