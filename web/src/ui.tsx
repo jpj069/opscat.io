@@ -370,25 +370,14 @@ export const Input = React.forwardRef<HTMLInputElement,
     );
   });
 
-/**
- * THE native dropdown. Use it for a short, static, in-form list — a status, a role, a
- * log level. When the options come from DATA, or the picker needs search or multiple
- * values, use `Select` / `MultiSelect` from Select.tsx instead: a native select takes
- * the width of its longest option, so data would dictate the layout width.
- *
- * A `<select>` never triggers the iOS focus zoom (verified on an iPhone), so unlike
- * `Input` it needs no scaling trick — it simply renders smaller on a phone. Give it a
- * width through `width`, not `style`, so the value stays in one place.
- */
-export const NativeSelect = React.forwardRef<HTMLSelectElement,
-  Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'width'> & { width?: number | string }>(
-  function NativeSelect({ className, width, style, ...rest }, ref) {
-    const w = typeof width === 'number' ? `${width}px` : width;
-    return (
-      <select ref={ref} className={className ? `ctl-sel ${className}` : 'ctl-sel'}
-        style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
-    );
-  });
+/* There is deliberately no NativeSelect any more. `Select` (Select.tsx) is THE
+   dropdown for every list, short or long: one look, one keyboard model, one panel
+   that the design system owns. The native control's remaining advantages were real
+   but narrow — no iOS focus zoom (a button has none either) and the platform wheel
+   on a phone (which ignores the app's design and cannot be searched) — and they did
+   not pay for a second dropdown that behaved differently in every respect.
+   A `<select>` is also sized by its LONGEST OPTION, i.e. by data, which is what
+   pushed toolbars past the viewport in the first place. */
 
 /**
  * THE multi-line text control.

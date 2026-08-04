@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha, relTime } from '../format';
-import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, NativeSelect} from '../ui';
+import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Select } from '../Select';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
 const GRID = '20px 1fr 110px 150px 260px 70px';
@@ -115,11 +116,9 @@ export default function StatusPageAdmin() {
               <GlowDot color={COMP_COLOR[c.status]} />
               <span className="text-base font-semibold text-text0">{c.name}</span>
               <span className="mono text-xs text-text2">{c.group}</span>
-              <NativeSelect value={c.status} disabled={isAnalyst}
-                onChange={(e) => setStatus(c.id, e.target.value as CompStatus)}
-                style={{ padding: '3px 6px' }}>
-                {COMP_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-              </NativeSelect>
+              <Select title="Component status" value={c.status} disabled={isAnalyst}
+                onChange={(v) => setStatus(c.id, v as CompStatus)}
+                options={COMP_STATUSES.map((s) => ({ value: s, label: s }))} />
               <UptimeStrip days={c.days} />
               <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <span className="mono text-sm text-text1">{pct}%</span>

@@ -13,7 +13,8 @@ import { api } from '../api';
 import { SEV, relTime } from '../format';
 import {
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard, Input, NativeSelect} from '../ui';
+  Toggle, KpiCard, Input} from '../ui';
+import { Select } from '../Select';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
   ReputationOverview, ReputationStatus, ReputationTier, ReputationZones,
@@ -298,15 +299,15 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                 {busy ? 'checking…' : 'Check now'}</button>
               <span className="row" style={{ gap: 6 }}>
                 <span className="micro text-2xs">EVERY</span>
-                <NativeSelect value={asset.intervalS} style={{ maxWidth: 92 }}
-                  onChange={(e) => onInterval(Number(e.target.value))}>
-                  {/* a stored value outside the presets (set via the API) must
-                      still show, or changing anything else silently rewrites it */}
-                  {!HOURS.some((h) => h.v === asset.intervalS) && (
-                    <option value={asset.intervalS}>{everyLabel(asset.intervalS)}</option>
-                  )}
-                  {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
-                </NativeSelect>
+                <Select title="Interval" value={String(asset.intervalS)} style={{ maxWidth: 92 }}
+                  onChange={(v) => onInterval(Number(v))}
+                  // a stored value outside the presets (set via the API) must still
+                  // show, or changing anything else silently rewrites it
+                  options={[
+                    ...(HOURS.some((h) => h.v === asset.intervalS) ? [] : [
+                      { value: String(asset.intervalS), label: everyLabel(asset.intervalS) }]),
+                    ...HOURS.map((h) => ({ value: String(h.v), label: h.l })),
+                  ]} />
               </span>
               <span style={{ flex: 1 }} />
               <button className="btn btn-sm" onClick={onDelete} style={{ color: SEV.critical }}>Delete</button>
@@ -626,9 +627,8 @@ function AddAsset({ zones, onClose, onAdded }: {
         ))}
       </div>
       <Field label="Interval">
-        <NativeSelect value={intervalS} onChange={(e) => setIntervalS(Number(e.target.value))}>
-          {HOURS.map((h) => <option key={h.v} value={h.v}>{h.l}</option>)}
-        </NativeSelect>
+        <Select title="Interval" value={String(intervalS)} onChange={(v) => setIntervalS(Number(v))}
+          options={HOURS.map((h) => ({ value: String(h.v), label: h.l }))} />
       </Field>
       {mode === 'spf'
         ? <FromSpf intervalS={intervalS} onAdded={onAdded} />

@@ -4,7 +4,8 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import {
-  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input, NativeSelect} from '../ui';
+  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input} from '../ui';
+import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
@@ -1044,10 +1045,9 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
           <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
         </Field>
         <Field label="SNMP version">
-          <NativeSelect value={version} onChange={(e) => setVersion(e.target.value as '2c' | '3')}>
-            <option value="2c">v2c (community)</option>
-            <option value="3">v3 (user-based security)</option>
-          </NativeSelect>
+          <Select title="SNMP version" value={version} onChange={(v) => setVersion(v as '2c' | '3')}
+            options={[{ value: '2c', label: 'v2c (community)' },
+              { value: '3', label: 'v3 (user-based security)' }]} />
         </Field>
         {version === '2c' ? (
           <Field label="Community">
@@ -1059,20 +1059,15 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
               <Input required value={v3User} onChange={(e) => setV3User(e.target.value)} placeholder="opscat-ro" />
             </Field>
             <Field label="Security level">
-              <NativeSelect value={v3Level} onChange={(e) => setV3Level(e.target.value)}>
-                <option value="noAuthNoPriv">noAuthNoPriv</option>
-                <option value="authNoPriv">authNoPriv</option>
-                <option value="authPriv">authPriv</option>
-              </NativeSelect>
+              <Select title="Security level" value={v3Level} onChange={setV3Level}
+                options={['noAuthNoPriv', 'authNoPriv', 'authPriv'].map((l) => ({ value: l, label: l }))} />
             </Field>
             {v3Level !== 'noAuthNoPriv' && (
               <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
                 <div style={{ width: 90 }}>
                   <Field label="Auth">
-                    <NativeSelect value={v3AuthProtocol} onChange={(e) => setV3AuthProtocol(e.target.value)}>
-                      <option value="sha">SHA</option>
-                      <option value="md5">MD5</option>
-                    </NativeSelect>
+                    <Select title="Auth protocol" value={v3AuthProtocol} onChange={setV3AuthProtocol}
+                      options={[{ value: 'sha', label: 'SHA' }, { value: 'md5', label: 'MD5' }]} />
                   </Field>
                 </div>
                 <div style={{ flex: 1 }}>
@@ -1087,10 +1082,8 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
               <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
                 <div style={{ width: 90 }}>
                   <Field label="Privacy">
-                    <NativeSelect value={v3PrivProtocol} onChange={(e) => setV3PrivProtocol(e.target.value)}>
-                      <option value="aes">AES</option>
-                      <option value="des">DES</option>
-                    </NativeSelect>
+                    <Select title="Privacy protocol" value={v3PrivProtocol} onChange={setV3PrivProtocol}
+                      options={[{ value: 'aes', label: 'AES' }, { value: 'des', label: 'DES' }]} />
                   </Field>
                 </div>
                 <div style={{ flex: 1 }}>

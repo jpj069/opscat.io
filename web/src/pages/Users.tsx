@@ -3,7 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, NativeSelect} from '../ui';
+import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Select } from '../Select';
 import type { UserRow } from '../types';
 
 const ROLES = ['admin', 'cto', 'lead', 'analyst'];
@@ -146,9 +147,8 @@ function EditModal({ user, onClose, onSaved }:
           <Input value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
         <Field label="Role">
-          <NativeSelect value={role} onChange={(e) => setRole(e.target.value)}>
-            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-          </NativeSelect>
+          <Select title="Role" value={role} onChange={setRole}
+            options={ROLES.map((r) => ({ value: r, label: r }))} />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
@@ -190,9 +190,8 @@ function InviteModal({ onClose, onSaved, onSecret }:
           <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
         </Field>
         <Field label="Role">
-          <NativeSelect value={role} onChange={(e) => setRole(e.target.value)}>
-            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-          </NativeSelect>
+          <Select title="Role" value={role} onChange={setRole}
+            options={ROLES.map((r) => ({ value: r, label: r }))} />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}

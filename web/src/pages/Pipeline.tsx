@@ -5,8 +5,9 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
 import {
-  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, NativeSelect,
+  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input,
 } from '../ui';
+import { Select } from '../Select';
 import type {
   ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats, ScoutTemplate,
 } from '../types';
@@ -269,11 +270,9 @@ function Tester() {
         <Input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
           placeholder="paste a sample log line, e.g.  kernel: Out of memory: Killed process 1234 (node)"
           style={{ flex: 3, minWidth: 240, fontSize: 'var(--t-sm)' }} />
-        <NativeSelect value={sev} onChange={(e) => setSev(e.target.value)} style={{ width: 150 }}>
-          {['0 emerg', '1 alert', '2 crit', '3 err', '4 warning', '5 notice', '6 info', '7 debug'].map((s) => (
-            <option key={s} value={s.split(' ')[0]}>syslog {s}</option>
-          ))}
-        </NativeSelect>
+        <Select title="Severity" value={sev} onChange={setSev} style={{ width: 150 }}
+          options={['0 emerg', '1 alert', '2 crit', '3 err', '4 warning', '5 notice', '6 info', '7 debug']
+            .map((s) => ({ value: s.split(' ')[0], label: `syslog ${s}` }))} />
         <button className="btn btn-primary btn-sm" disabled={busy}>{busy ? '…' : 'Test line'}</button>
       </form>
       {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
@@ -446,18 +445,17 @@ function ApproveModal({ template, onClose, onDone }: {
         <div className="row row-wrap" style={{ gap: 10, alignItems: 'flex-start' }}>
           <div style={{ width: 120 }}>
             <Field label="Severity (0-100)">
-              <input required className="mono" inputMode="numeric" value={severity}
+              <Input required className="mono" inputMode="numeric" value={severity}
                 onChange={(e) => setSeverity(e.target.value)} />
             </Field>
           </div>
           <div style={{ flex: 1, minWidth: 180 }}>
             <Field label="Target (dedupe entity)">
-              <select value={targetIndex} onChange={(e) => setTargetIndex(e.target.value)}>
-                <option value="0">none — dedupe per device only</option>
-                {placeholders.map((p, i) => (
-                  <option key={i} value={String(i + 1)}>{`placeholder ${i + 1}: ${p}`}</option>
-                ))}
-              </select>
+              <Select title="Target" value={targetIndex} onChange={setTargetIndex}
+                options={[{ value: '0', label: 'none — dedupe per device only' },
+                  ...placeholders.map((p, i) => ({
+                    value: String(i + 1), label: `placeholder ${i + 1}: ${p}`,
+                  }))]} />
             </Field>
           </div>
         </div>

@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, NativeSelect} from '../ui';
+import { Modal, StatusPill, Field, TableScroll, TableSkeleton, Input} from '../ui';
 import { Select } from '../Select';
 import { RefreshCwIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
@@ -240,9 +240,8 @@ function AddVendorModal({ existing, onClose, onAdded }:
               placeholder="Acme SaaS" />
           </Field>
           <Field label="Feed type">
-            <NativeSelect value={feedType} onChange={(e) => setFeedType(e.target.value as VendorFeedType)}>
-              {FEED_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </NativeSelect>
+            <Select title="Feed type" value={feedType} onChange={(v) => setFeedType(v as VendorFeedType)}
+              options={FEED_TYPES.map((t) => ({ value: t, label: t }))} />
           </Field>
           <Field label="Feed URL (https)">
             <Input required value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)}
@@ -309,11 +308,10 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
         <div className="row" style={{ gap: 10, marginBottom: 12, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <Field label="Mirror onto own status-page component">
-              <NativeSelect value={detail.componentId ?? ''} onChange={(e) =>
-                patch({ componentId: e.target.value === '' ? null : Number(e.target.value) })}>
-                <option value="">— not mirrored —</option>
-                {components.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </NativeSelect>
+              <Select title="Mirrored component" value={detail.componentId != null ? String(detail.componentId) : ''}
+                onChange={(v) => patch({ componentId: v === '' ? null : Number(v) })}
+                options={[{ value: '', label: '— not mirrored —' },
+                  ...components.map((c) => ({ value: String(c.id), label: c.name }))]} />
             </Field>
           </div>
           <div style={{ flex: 1 }}>

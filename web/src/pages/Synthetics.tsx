@@ -8,7 +8,7 @@ import { SEV } from '../format';
 import {
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Input, NativeSelect, Textarea} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Input, Textarea} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -656,9 +656,8 @@ function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded
     <Modal title="Add cloud credential" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Provider">
-          <NativeSelect value={provider} onChange={(e) => setProvider(e.target.value as 'aws' | 'gcp')}>
-            <option value="aws">AWS</option><option value="gcp">GCP</option>
-          </NativeSelect>
+          <Select title="Provider" value={provider} onChange={(v) => setProvider(v as 'aws' | 'gcp')}
+            options={[{ value: 'aws', label: 'AWS' }, { value: 'gcp', label: 'GCP' }]} />
         </Field>
         <Field label="Label">
           <Input required value={label} maxLength={60} placeholder="e.g. prod-sensors"
@@ -735,9 +734,8 @@ function AddCheckModal({ locations, onClose, onAdded }: {
     <Modal title="New check" onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Type">
-          <NativeSelect value={type} onChange={(e) => setType(e.target.value as SynthCheck['type'])}>
-            {CHECK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </NativeSelect>
+          <Select title="Check type" value={type} onChange={(v) => setType(v as SynthCheck['type'])}
+            options={CHECK_TYPES.map((t) => ({ value: t, label: t }))} />
         </Field>
         <Field label="Target">
           <Input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
@@ -997,15 +995,15 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
               {(prov === 'aws' || prov === 'gcp') && (
                 <>
                   <Field label="Credential">
-                    <NativeSelect value={credId ?? ''} onChange={(e) => setCredId(Number(e.target.value))}>
-                      {credFor(prov).map((c) => <option key={c.id} value={c.id}>{c.label} ({c.hint})</option>)}
-                    </NativeSelect>
+                    <Select title="Credential" value={credId != null ? String(credId) : ''}
+                      onChange={(v) => setCredId(Number(v))}
+                      options={credFor(prov).map((c) => ({ value: String(c.id), label: `${c.label} (${c.hint})` }))} />
                   </Field>
                   <Field label="Instance class">
-                    <NativeSelect value={cls} onChange={(e) => setCls(e.target.value as 'standard' | 'browser')}>
-                      <option value="standard">standard — http · icmp · dns · tcp · traceroute</option>
-                      <option value="browser">browser-capable — + browser checks later (more RAM)</option>
-                    </NativeSelect>
+                    <Select title="Instance class" value={cls}
+                      onChange={(v) => setCls(v as 'standard' | 'browser')} options={[
+                        { value: 'standard', label: 'standard — http · icmp · dns · tcp · traceroute' },
+                        { value: 'browser', label: 'browser-capable — + browser checks later (more RAM)' }]} />
                   </Field>
                   <div className="mono text-2xs" style={{ color: SEV.medium, marginBottom: 10 }}>
                     Runs in your cloud account, on your bill. OpsCat tags the instance opscat-sensor

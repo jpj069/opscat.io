@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, NativeSelect, Textarea} from '../ui';
+import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
+import { Select } from '../Select';
 import type { Rule, NotificationRow } from '../types';
 
 const CHAN_COLORS: Record<string, string> = {
@@ -162,10 +163,9 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
       </Field>
       <Field label="Channel">
-        <NativeSelect value={channel} onChange={(e) => setChannel(e.target.value as Rule['channel'])}>
-          {(['email', 'teams', 'slack', 'telegram', 'discord', 'ntfy', 'pushover', 'webhook'] as const)
-            .map((c) => <option key={c} value={c}>{c}</option>)}
-        </NativeSelect>
+        <Select title="Channel" value={channel} onChange={(v) => setChannel(v as Rule['channel'])}
+          options={(['email', 'teams', 'slack', 'telegram', 'discord', 'ntfy', 'pushover', 'webhook'] as const)
+            .map((c) => ({ value: c, label: c }))} />
       </Field>
       <Field label="Trigger Event (empty = any)">
         <Input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"

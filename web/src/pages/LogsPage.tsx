@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { fmtDateTime, logSevColor } from '../format';
-import { TableSkeleton, PageHeader, Input, NativeSelect} from '../ui';
+import { TableSkeleton, PageHeader, Input} from '../ui';
+import { Select } from '../Select';
 import type { LogRow } from '../types';
 
 const HOURS = [1, 2, 6, 12, 24];
@@ -56,9 +57,8 @@ export default function LogsPage() {
       <PageHeader title="Logs" />
 
       <div className="row row-wrap" style={{ gap: 10 }}>
-        <NativeSelect value={hours} onChange={(e) => setHours(Number(e.target.value))}>
-          {HOURS.map((h) => <option key={h} value={h}>{h} h</option>)}
-        </NativeSelect>
+        <Select title="Time range" value={String(hours)} onChange={(v) => setHours(Number(v))}
+          options={HOURS.map((h) => ({ value: String(h), label: `${h} h` }))} />
         <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
           style={{ flex: '1 1 150px', maxWidth: 400 }} />
         <button className="btn btn-sm" onClick={() => setFilter('')}>Clear</button>

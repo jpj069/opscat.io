@@ -459,15 +459,27 @@ contrast — a shadow cannot substitute in dark mode. Left as is deliberately.
 
 ## Frontend dropdowns (Select / MultiSelect)
 
-`web/src/Select.tsx` is THE dropdown; the native `<select>` stays only where the option
-list is short, static and part of a plain form. Three problems drove it: a native select
-is sized by its **longest option** (data dictates layout width), it cannot be searched or
-hold multiple values, and on a phone iOS replaces it with its own wheel.
+`web/src/Select.tsx` is THE dropdown, for **every** list. Three problems drove it: a
+native select is sized by its **longest option** (data dictates layout width), it cannot
+be searched or hold multiple values, and on a phone iOS replaces it with its own wheel.
 
-What it must not lose is the one thing the native control does well: it never triggers
-the iOS focus-zoom. The component keeps that by never putting a sub-16px text field on
-screen — the trigger is a button (buttons cannot be typed into, so iOS never zooms) and
-the only real input, the search box, is a full 16px inside the panel.
+It began as the answer for *data-fed* lists only, with a `NativeSelect` primitive kept
+for short static ones (status, role, log level). **That split is gone** — the native
+control's remaining advantages were narrow (no iOS focus zoom, the platform wheel) and
+did not pay for a second dropdown with a different look, a different keyboard model and
+a different panel. There is now no `NativeSelect` and no bare `<select>` in the app;
+26 call sites were converted at once.
+
+Two things that conversion has to preserve, both easy to lose:
+
+- **The iOS focus-zoom immunity.** A `<select>` never triggers it. `Select` keeps that
+  by never putting a sub-16px text field on screen — the trigger is a button (buttons
+  cannot be typed into, so iOS never zooms) and the only real input, the search box, is
+  a full 16px inside the panel.
+- **Form validation.** A `<select required>` made the browser refuse the submit.
+  `Select` is a button and takes part in no constraint validation, so every converted
+  `required` needs its guard re-created in the submit handler — see the region picker
+  in `SuperAdmin.tsx`, where dropping it would have posted an empty `providerRegion`.
 
 - **Phone (≤720px): bottom sheet, search in the FOOTER**, options above it. Search at the
   top vanishes behind the keyboard the instant you type: `position: fixed` anchors to the

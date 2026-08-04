@@ -154,9 +154,15 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
     return q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
   }, [options, query]);
 
+  // Focus the SEARCH FIELD on desktop, the LIST on a phone. Autofocusing the search
+  // on a phone opens the software keyboard immediately, which covers most of the
+  // sheet before a single option has been seen — and the overwhelming case is
+  // "tap the one you want", not "type". The keyboard now appears only when the
+  // user taps the search field, which is also when --kb lifts the sheet clear of it.
   React.useEffect(() => {
-    (searchable ? searchRef.current : listRef.current)?.focus({ preventScroll: true });
-  }, [searchable]);
+    const target = searchable && !mobile ? searchRef.current : listRef.current;
+    target?.focus({ preventScroll: true });
+  }, [searchable, mobile]);
 
   React.useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`#${CSS.escape(`${uid}-o${active}`)}`);
