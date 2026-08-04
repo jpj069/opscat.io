@@ -179,6 +179,34 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
 }
 
 /**
+ * THE tab bar for a page's sub-views.
+ *
+ * Pair it with `useTab` (state.tsx), which keeps the active tab in the URL as
+ * `/app/<page>/<tab>`. That pairing is the point: a tab held only in useState
+ * cannot be linked, bookmarked or reached with the back button, and a reload drops
+ * the reader back onto the first one.
+ *
+ * `row-wrap`, because six tabs do not fit a 390px phone in one line and a tab bar
+ * that pushes the page sideways is worse than one that wraps.
+ */
+export function Tabs<T extends string>({ tabs, value, onChange }: {
+  tabs: readonly (readonly [T, string])[];
+  value: T;
+  onChange: (t: T) => void;
+}) {
+  return (
+    <div className="row row-wrap tabs" role="tablist">
+      {tabs.map(([id, label]) => (
+        <button key={id} role="tab" aria-selected={value === id}
+          className={`tab${value === id ? ' active' : ''}`} onClick={() => onChange(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
  * THE modal dialog — a real `<dialog>` shown with `showModal()`, i.e. in the
  * browser's TOP LAYER.
  *
@@ -362,10 +390,16 @@ export function PageHeader({ title, children }:
  */
 export const Input = React.forwardRef<HTMLInputElement,
   Omit<React.InputHTMLAttributes<HTMLInputElement>, 'width'> & { width?: number | string }>(
-  function Input({ className, width, style, ...rest }, ref) {
+  function Input({ className, width, style, inputMode, type, ...rest }, ref) {
     const w = typeof width === 'number' ? `${width}px` : width;
+    // A field that only takes digits should raise the KEYPAD on a phone, not the
+    // full alphabetic keyboard. iOS keys that off `inputmode`, not off `type`, and
+    // `type="number"` alone still opens the wide numbers-and-punctuation layout.
+    // Derived here rather than at the call site: nine fields would have to remember
+    // it, and the tenth would not. A decimal field passes inputMode explicitly.
+    const mode = inputMode ?? (type === 'number' ? 'numeric' : undefined);
     return (
-      <input ref={ref} className={className ? `ctl ${className}` : 'ctl'}
+      <input ref={ref} className={className ? `ctl ${className}` : 'ctl'} type={type} inputMode={mode}
         style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
     );
   });

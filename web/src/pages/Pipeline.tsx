@@ -5,9 +5,10 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
 import {
-  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input,
+  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs,
 } from '../ui';
 import { Select } from '../Select';
+import { useTab } from '../state';
 import type {
   ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats, ScoutTemplate,
 } from '../types';
@@ -15,22 +16,16 @@ import type {
 type Tab = 'throughput' | 'classifiers' | 'scout';
 type Range = '24h' | '7d' | '30d';
 
+const PIPELINE_TABS = [
+  ['throughput', 'Throughput'], ['classifiers', 'Classifiers'], ['scout', 'Scout'],
+] as const;
+
 export default function Pipeline() {
-  const [tab, setTab] = useState<Tab>('throughput');
+  const [tab, setTab] = useTab(PIPELINE_TABS.map((t) => t[0]));
   return (
     <div className="page">
       <h1 className="page-title">Log Pipeline</h1>
-      <div className="row" style={{ gap: 0, marginBottom: 14, borderBottom: '1px solid var(--bg3)' }}>
-        {([['throughput', 'Throughput'], ['classifiers', 'Classifiers'], ['scout', 'Scout']] as const)
-          .map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)}
-            style={{ padding: '6px 14px', fontSize: 'var(--t-sm)', fontWeight: 600,
-              color: tab === id ? 'var(--text0)' : 'var(--text2)',
-              borderBottom: tab === id ? '2px solid #388bfd' : '2px solid transparent' }}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={PIPELINE_TABS} value={tab} onChange={setTab} />
       {tab === 'throughput' ? <Throughput /> : tab === 'classifiers' ? <Classifiers /> : <Scout />}
     </div>
   );
@@ -217,14 +212,18 @@ function Classifiers() {
           Shipped with OpsCat, evaluated after your custom rules. Lines matching no rule fall
           back to their syslog severity (crit and above still become events).
         </div>
-        {builtin === null && <TableSkeleton cols={GRID} rows={5} />}
-        {builtin && (
-          <TableScroll minWidth={640}>
-            <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
-              <span>Pattern (regex)</span><span>Flags</span><span>Event name</span>
-              <span>Severity</span><span>Target</span><span></span>
-            </div>
-            {builtin.map((c) => (
+        {/* The skeleton belongs INSIDE the scroller, like the rows it stands in for.
+            Outside it, a 620px-wide grid on a 390px phone pushes the whole page
+            sideways for as long as the fetch takes — which reads as the page
+            "jumping" when you switch to this tab, and disappears before you can
+            look at it. */}
+        <TableScroll minWidth={640}>
+          <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
+            <span>Pattern (regex)</span><span>Flags</span><span>Event name</span>
+            <span>Severity</span><span>Target</span><span></span>
+          </div>
+          {builtin === null && <TableSkeleton cols={GRID} rows={5} flush />}
+          {builtin?.map((c) => (
               <div key={c.name + c.pattern} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
                 padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
                 <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
@@ -237,8 +236,7 @@ function Classifiers() {
                 <span />
               </div>
             ))}
-          </TableScroll>
-        )}
+        </TableScroll>
       </div>
     </>
   );

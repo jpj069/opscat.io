@@ -481,20 +481,22 @@ function ListingHistory({ assetId }: { assetId: number }) {
         )}
       </div>
 
-      {rows === null && <TableSkeleton cols={HISTORY_GRID} rows={3} />}
-
       {rows !== null && rows.length === 0 && (
         <div className="mono text-2xs text-text3">
           Never listed on any blocklist we track.
         </div>
       )}
 
-      {rows !== null && rows.length > 0 && (
+      {/* Same rule as everywhere: the skeleton goes INSIDE the scroller. This grid
+          is ~560px at its minimum, so outside it the slide-over pushed the page
+          sideways for as long as the history was loading. */}
+      {(rows === null || rows.length > 0) && (
         <TableScroll minWidth={520}>
           <div className="tbl-head" style={{ gridTemplateColumns: HISTORY_GRID }}>
             <span>List</span><span>Subject</span><span>Tier</span><span>From</span><span>Until</span><span>For</span>
           </div>
-          {rows.map((l) => (
+          {rows === null && <TableSkeleton cols={HISTORY_GRID} rows={3} flush />}
+          {rows?.map((l) => (
             <div key={`${l.zone}-${l.subject ?? ''}-${l.firstSeen}`} className="tbl-row"
               style={{ gridTemplateColumns: HISTORY_GRID }}>
               <span className="mono text-2xs text-text0">{l.name}</span>
@@ -741,6 +743,7 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
         </button>
       </form>
 
+      {/* skeleton-exempt: SPF_GRID is ~330px at its minimum and fits a phone. */}
       {scanning && <div style={{ marginTop: 14 }}><TableSkeleton cols={SPF_GRID} rows={4} /></div>}
 
       {result && !scanning && (

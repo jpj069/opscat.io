@@ -39,16 +39,28 @@ export default function Monitor() {
     }
   }, [app.logs, logQuery]);
 
-  const startDrag = (e: React.MouseEvent) => {
+  // POINTER events, not mouse: with mousedown/mousemove the divider cannot be dragged
+  // on a phone at all, so the split is frozen at whatever it was and the smaller pane
+  // stays unusably short with no way to grow it. setPointerCapture keeps the drag
+  // alive when the finger leaves the 5px bar, which it immediately does.
+  const startDrag = (e: React.PointerEvent) => {
     e.preventDefault();
     const vert = layout === 'vertical';
     const rect = wrapRef.current!.getBoundingClientRect();
-    const move = (ev: MouseEvent) => {
+    const bar = e.currentTarget as HTMLElement;
+    bar.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
       const frac = vert ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
       setSplit(Math.min(80, Math.max(25, frac * 100)));
     };
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+    const up = () => {
+      bar.removeEventListener('pointermove', move);
+      bar.removeEventListener('pointerup', up);
+      bar.removeEventListener('pointercancel', up);
+    };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', up);
+    bar.addEventListener('pointercancel', up);
   };
 
   const act = async (id: number, action: string, e: React.MouseEvent) => {
@@ -71,6 +83,10 @@ export default function Monitor() {
         <span className="mono text-2xs text-text3">{events.length} events</span>
       </div>
       <div style={{ overflowY: 'auto', flex: 1 }}>
+        {/* skeleton-exempt: faithful to its rows — this list has no scroller at all,
+            and EVENT_COLS is ~552px at its minimum. If that overflows on a phone it is
+            the TABLE that needs the scroller, not the placeholder; the skeleton must
+            not quietly look narrower than what replaces it. */}
         {app.eventsLoading && <TableSkeleton cols={EVENT_COLS} rows={7} />}
         {!app.eventsLoading && events.length === 0 && (
           <div className="text-text3 text-sm" style={{ padding: 40, textAlign: 'center'}}>
@@ -137,6 +153,8 @@ export default function Monitor() {
       </div>
       <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column-reverse' }}>
         <div>
+          {/* skeleton-exempt: LOG_COLS is 64px + 130px + 1fr — it fits a 390px phone,
+              so there is nothing to scroll sideways. */}
           {app.logsLoading && <TableSkeleton cols={LOG_COLS} rows={10} dense />}
           {logs.map((l, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: LOG_COLS, gap: 10,
@@ -172,9 +190,10 @@ export default function Monitor() {
         </div>
         {layout !== 'events' && (
           <>
-            <div onMouseDown={startDrag} style={{ flexShrink: 0, background: 'var(--bg3)',
-              cursor: vert ? 'col-resize' : 'row-resize',
-              [vert ? 'width' : 'height']: 5 } as React.CSSProperties} />
+            <div onPointerDown={startDrag} className="split-bar" role="separator"
+              aria-label="Resize panels"
+              style={{ cursor: vert ? 'col-resize' : 'row-resize',
+                [vert ? 'width' : 'height']: 5 } as React.CSSProperties} />
             <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>{logsPanel}</div>
           </>
         )}

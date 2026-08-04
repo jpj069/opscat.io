@@ -51,6 +51,52 @@ function navFromPath(): string {
   return m && PAGES.includes(m[1]) ? m[1] : 'monitor';
 }
 
+/** The tab segment of `/app/<page>/<tab>`, or '' when there is none. */
+function tabFromPath(): string {
+  const m = /^\/app\/[a-z]*\/([a-z0-9-]+)/.exec(location.pathname);
+  return m ? m[1] : '';
+}
+
+/**
+ * A page's tab, in the URL — `/app/pipeline/classifiers` rather than state nobody
+ * can link to. Every tabbed page uses this; a tab that lives only in useState
+ * cannot be shared, bookmarked, or reached by the back button, and reloading the
+ * page silently drops you back on the first one.
+ *
+ * Push, not replace: stepping back through tabs is what a browser's back button is
+ * expected to do once they are addressable at all.
+ */
+export function useTab<T extends string>(ids: readonly T[], fallback?: T): [T, (t: T) => void] {
+  const pick = React.useCallback(() => {
+    const raw = tabFromPath();
+    return (ids as readonly string[]).includes(raw) ? (raw as T) : (fallback ?? ids[0]);
+  }, [ids, fallback]);
+  const [tab, setTabState] = useState<T>(pick);
+
+  // the back/forward buttons move between tabs, so re-read on popstate
+  useEffect(() => {
+    const onPop = () => setTabState(pick());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [pick]);
+
+  // A deep link lands with the tab already in the path; a click on the page's own
+  // nav does not, so normalise once on mount — otherwise the first tab is active
+  // while the URL still says nothing.
+  useEffect(() => {
+    if (!tabFromPath()) {
+      history.replaceState(null, '', `/app/${navFromPath()}/${tab}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setTab = React.useCallback((t: T) => {
+    setTabState(t);
+    history.pushState(null, '', `/app/${navFromPath()}/${t}`);
+  }, []);
+  return [tab, setTab];
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [orgs, setOrgs] = useState<OrgMembership[]>([]);

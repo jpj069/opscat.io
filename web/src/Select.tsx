@@ -356,18 +356,28 @@ export function MultiSelect({ value, onChange, options, title = 'Select', placeh
 }) {
   const [open, setOpen, ref] = useOpen();
   const [overview, setOverview] = React.useState(false);
+  const mobile = useMedia(MOBILE_Q);
   const chosen = options.filter((o) => value.includes(o.value));
   const compact = chosen.length > PILL_LIMIT;
 
   React.useEffect(() => { if (!compact) setOverview(false); }, [compact]);
 
+  // The remove × is a POINTER affordance and is dropped on phones. Measured on a
+  // 390px viewport: it is an 18×18 tap target sitting in the middle of the control
+  // you are trying to open, so tapping the trigger's centre deleted a selection
+  // instead of opening the picker (pills went 2 → 1 and nothing else happened).
+  // Growing it to the 44px touch minimum would make one pill fill the field. On a
+  // phone the whole trigger opens the sheet, and de-selecting is what tapping an
+  // already-selected option in that sheet does.
   const pill = (o: SelectOption) => (
     <span className="sel-pill" key={o.value}>
       <span>{o.label}</span>
-      <button type="button" aria-label={`Remove ${o.label}`}
-        onClick={(e) => { e.stopPropagation(); onChange(value.filter((v) => v !== o.value)); }}>
-        <X size={12} aria-hidden />
-      </button>
+      {!mobile && (
+        <button type="button" aria-label={`Remove ${o.label}`}
+          onClick={(e) => { e.stopPropagation(); onChange(value.filter((v) => v !== o.value)); }}>
+          <X size={12} aria-hidden />
+        </button>
+      )}
     </span>
   );
 

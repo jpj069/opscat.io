@@ -2,13 +2,13 @@
 // check flyout) + Sensor Agents tab (fleet cards, traceroute, self-hosted
 // deploy with one-time probe key). See docs/SENSOR-AGENTS.md for the concept.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
 import {
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Input, Textarea} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, Textarea} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -54,7 +54,7 @@ const fmtT = (ts: number, withDate: boolean) => {
 
 export default function Synthetics() {
   const app = useApp();
-  const [tab, setTab] = useState<'checks' | 'agents'>('checks');
+  const [tab, setTab] = useTab(['checks', 'agents'] as const);
   const [locations, setLocations] = useState<SynthLocation[] | null>(null);
   const [checks, setChecks] = useState<SynthCheck[] | null>(null);
   const [results, setResults] = useState<SynthResult[]>([]);
@@ -183,19 +183,9 @@ export default function Synthetics() {
       <TipHost />
       {/* header: title, tabs, range, actions */}
       <PageHeader title="Synthetics">
-          <span className="row" style={{ gap: 2 }}>
-            {(['checks', 'agents'] as const).map((t) => (
-              <button key={t} onClick={() => setTab(t)}
-                className="text-base font-semibold" style={{ padding: '5px 14px',
-                  color: tab === t ? 'var(--text0)' : 'var(--text2)',
-                  borderBottom: `2px solid ${tab === t ? SEV.low : 'transparent'}` }}>
-                {t === 'checks' ? 'Checks' : 'Sensor Agents'}
-                <span className="mono text-2xs text-text3" style={{ marginLeft: 5 }}>
-                  {t === 'checks' ? (checks?.length ?? '') : (locations?.length ?? '')}
-                </span>
-              </button>
-            ))}
-          </span>
+          <Tabs value={tab} onChange={setTab} tabs={[
+            ['checks', `Checks ${checks?.length ?? ''}`],
+            ['agents', `Sensor Agents ${locations?.length ?? ''}`]] as const} />
         <div className="row row-wrap" style={{ gap: 10 }}>
           {tab === 'checks' && (
             <span className="row" style={{ gap: 4 }}>

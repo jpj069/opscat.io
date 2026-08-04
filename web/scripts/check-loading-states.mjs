@@ -39,6 +39,41 @@ for (const file of walk(SRC)) {
   });
 }
 
+// ── a TableSkeleton must sit INSIDE its TableScroll ──────────────────────────
+// A skeleton stands in for the rows, so it has to live where the rows live. Left
+// outside the scroller, a 620px grid on a 390px phone pushes the whole PAGE
+// sideways for exactly as long as the fetch takes — reported as the page "jumping"
+// when you open a tab, and gone before you can look at it. Two shipped that way.
+const stray = [];
+for (const file of walk(SRC)) {
+  if (!/\.tsx$/.test(file)) continue;
+  const rel = relative(SRC, file);
+  const src = readFileSync(file, 'utf8');
+  for (const m of src.matchAll(/<TableSkeleton/g)) {
+    const before = src.slice(0, m.index);
+    // TableScroll is the component; `.tbl-scroll` is the same scroller hand-rolled
+    // where a table also needs its own vertical window (LogsPage). Both count.
+    const open = (before.match(/<TableScroll|className="tbl-scroll"/g) || []).length;
+    const close = (before.match(/<\/TableScroll>/g) || []).length;
+    if (open > close) continue;                       // inside a scroller — fine
+    const line = before.split('\n').length;
+    // the reason belongs in a comment, which is above the JSX, not on it
+    const lines = src.split('\n');
+    if (lines.slice(Math.max(0, line - 6), line).some((l) => /skeleton-exempt/.test(l))) continue;
+    stray.push(`  src/${rel}:${line}`);
+  }
+}
+if (stray.length) {
+  console.error(
+    '\n<TableSkeleton> outside its <TableScroll> — the skeleton must sit where the\n'
+    + 'rows sit, or a wide grid pushes the page sideways while the data loads:\n\n'
+    + stray.join('\n')
+    + '\n\n  put the head, the skeleton and the rows inside ONE <TableScroll>.'
+    + '\n  A grid that genuinely fits a phone can opt out with a `skeleton-exempt` comment.\n',
+  );
+  process.exit(1);
+}
+
 if (offenders.length) {
   console.error(
     '\nAd-hoc loading placeholder(s) found — use the skeleton components from src/ui.tsx\n'

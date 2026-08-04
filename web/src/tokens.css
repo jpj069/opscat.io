@@ -338,6 +338,16 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .nav-item.active { background: var(--bg3); border-color: var(--border); color: var(--text0); }
 .nav-item.sub { padding-left: 30px; font-size: var(--t-sm); }
 
+/* The rail is a flex column: the nav list takes the slack and scrolls, the account
+   block below it stays pinned. Without this the entries simply overflow a
+   full-height drawer that has no scroller, and the account block leaves the screen —
+   which is what happens on a phone as soon as a super-admin adds the PLATFORM
+   section. `min-height: 0` is the part that is easy to forget: a flex item defaults
+   to min-height:auto and refuses to shrink below its content, so `overflow-y: auto`
+   alone would do nothing. */
+.rail-nav { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.rail-foot { flex-shrink: 0; }
+
 /* overlays */
 .overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: var(--z-dim); }
 
@@ -422,8 +432,12 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-clear { font-size: var(--t-sm); color: #f85149; padding: 2px 4px; }
 
 /* shared option list */
+/* overscroll-behavior: the sheet is a fixed panel over a page that is still
+   scrollable behind it, so without `contain` a flick that reaches the end of the
+   options carries straight on into the document underneath — measured: the page
+   moved 300px while the sheet was open. */
 .sel-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; flex: 1;
-  -webkit-overflow-scrolling: touch; }
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .sel-list:focus-visible { outline: none; }
 .sel-opt {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
@@ -470,6 +484,9 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: var(--z-picker);
   opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+  /* the scrim is not a scroller and must not become a scroll PROXY either: without
+     this a finger dragged on the dimmed area scrolls the page behind the sheet */
+  touch-action: none;
 }
 .sel-backdrop.open { opacity: 1; pointer-events: auto; }
 .sel-sheet {
@@ -487,6 +504,7 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   padding-bottom: env(safe-area-inset-bottom);
 }
 .sel-sheet.open { transform: translateY(0); }
+.sel-sheet { overscroll-behavior: contain; }
 .sel-sheet.dragging { transition: none; }
 /* handle + head are the drag surface: swipe down closes — the grab pill promises
    that gesture, so it has to work */
@@ -497,13 +515,34 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .sel-sheet .sel-list { padding: 0 8px 8px; }
 .sel-sheet .sel-opt { min-height: 44px; font-size: 15px; padding: 10px 12px; }
 .sel-foot {
-  flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0; display: flex; align-items: center; gap: 10px; touch-action: none;
   padding: 10px 16px; border-top: 1px solid var(--bg3); background: var(--bg1);
 }
 .sel-done { flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) {
   .sel-backdrop, .sel-sheet, .sel-chev { transition: none; }
 }
+
+/* split-view divider. `touch-action: none` is what makes it draggable with a finger
+   at all: without it the browser claims the gesture for scrolling before a single
+   pointermove reaches us. The bar stays 5px visually — the grab area grows instead,
+   because a 5px touch target is not one. */
+.split-bar { flex-shrink: 0; background: var(--bg3); touch-action: none; position: relative; }
+.split-bar::after {
+  content: ''; position: absolute; inset: -9px 0; /* 23px tall grab area, 5px bar */
+}
+@media (min-width: 721px) { .split-bar::after { inset: -3px 0; } }
+
+/* page tab bar (ui.tsx <Tabs>) — wraps on a phone; the active tab is marked by a
+   rule under it, so the row keeps its height whichever tab is active */
+.tabs { gap: 0; margin-bottom: 14px; border-bottom: 1px solid var(--bg3); }
+.tab {
+  padding: 6px 14px; font-size: var(--t-sm); font-weight: 600; color: var(--text2);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--text1); }
+.tab.active { color: var(--text0); border-bottom-color: var(--low); }
+@media (max-width: 720px) { .tab { padding: 8px 12px; } }
 
 /* filter chips */
 .chip {
@@ -594,6 +633,7 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
   .btn-sm { padding: 6px 10px; }
   .shell-burger { display: inline-flex; align-items: center; color: var(--text1); padding: 4px; }
   .shell-rail { position: fixed; top: 0; bottom: 0; left: 0; z-index: var(--z-rail);
+    overflow: hidden; padding-bottom: env(safe-area-inset-bottom);
     width: 250px !important; transform: translateX(-100%);
     transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
     box-shadow: 0 0 48px rgba(0, 0, 0, 0.55); }

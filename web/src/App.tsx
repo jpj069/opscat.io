@@ -89,13 +89,6 @@ function PageLoading() {
   );
 }
 
-function planPillColor(plan: string): string {
-  if (plan === 'pro') return SEV.purple;
-  if (plan === 'business') return SEV.green;
-  if (plan === 'enterprise') return SEV.cyan;
-  return SEV.info; // free / unknown
-}
-
 // The MCP OAuth consent screen sends an unauthenticated visitor here with
 // ?next=<authorize url>. Once they are signed in, hand them straight back so the
 // connection flow continues instead of dead-ending in the dashboard.
@@ -336,8 +329,6 @@ function Shell() {
     api.get<BillingStatus>('/api/billing/status').then(setBilling).catch(() => {});
   }, []);
 
-  const planLabel = (billing?.plan || 'free').toUpperCase();
-  const planColor = planPillColor(billing?.plan || 'free');
   const nearLimit = !!billing && billing.plan === 'free'
     && (['users', 'checks', 'sensors', 'snmpTargets', 'agents', 'apiKeys'] as const).some((k) => {
       const lim = billing.limits[k]; const used = billing.usage[k];
@@ -394,6 +385,13 @@ function Shell() {
             {collapsed ? '»' : '«'}
           </button>
         </div>
+        {/* The nav list is the ONLY thing that scrolls in here. On a phone the rail is
+            a fixed, full-height drawer, so once the entries outgrow the viewport
+            (super-admin adds a PLATFORM section) there is nothing to scroll and the
+            account block below is simply pushed off the screen. This is not the
+            "document scrolls on phones" rule — that governs the PAGE; a fixed drawer
+            needs its own window, like .page-console. */}
+        <div className="rail-nav">
         {!collapsed && <div className="micro text-2xs" style={{ letterSpacing: '0.12em', padding: '4px 10px' }}>
           OPERATIONS</div>}
         {NAV.map((n) => (
@@ -438,9 +436,11 @@ function Shell() {
             </button>
           ))}
         </>}
-        <div style={{ flex: 1 }} />
-        {/* account menu — the single place for profile actions (no topbar duplicate) */}
-        <div style={{ position: 'relative', borderTop: '1px solid var(--bg3)' }}>
+        </div>
+        {/* account menu — the single place for profile actions (no topbar duplicate).
+            Pinned: .rail-nav takes the slack, so this stays reachable however long
+            the nav list grows. */}
+        <div className="rail-foot" style={{ position: 'relative', borderTop: '1px solid var(--bg3)' }}>
           <button onClick={() => setShowProfile(!showProfile)} className="row" title="Account"
             style={{ padding: '8px 6px', width: '100%', textAlign: 'left',
               justifyContent: collapsed ? 'center' : 'flex-start' }}>
@@ -490,21 +490,14 @@ function Shell() {
               {app.connected ? 'IN SYNC' : 'OFFLINE'}
             </span>
           </span>
-          <span className="pill tb-hide-m" style={{ color: SEV.green, background: alpha(SEV.green, 0.12),
-            border: `1px solid ${alpha(SEV.green, 0.3)}` }}>
-            {app.settings.backend_label || 'nbg1 · PRIMARY'}
-          </span>
-          {edition === 'cloud' && (
-            <span className="row tb-hide-m" style={{ gap: 6 }}>
-              <span className="pill" style={{ color: planColor, background: alpha(planColor, 0.12),
-                border: `1px solid ${alpha(planColor, 0.3)}` }} title="Current plan">
-                {planLabel}
-              </span>
-              {nearLimit && (
-                <button className="mono" onClick={() => app.setNav('settings')} title="Approaching a plan limit"
-                  style={{ fontSize: 'var(--t-2xs)', fontWeight: 700, color: SEV.medium }}>Upgrade →</button>
-              )}
-            </span>
+          {/* No backend label and no plan pill here: neither told an operator
+              anything they act on, and the top bar is the most expensive real
+              estate in the app. The plan lives on Settings; only the nudge that
+              needs a decision stays. */}
+          {edition === 'cloud' && nearLimit && (
+            <button className="mono tb-hide-m" onClick={() => app.setNav('settings')}
+              title="Approaching a plan limit"
+              style={{ fontSize: 'var(--t-2xs)', fontWeight: 700, color: SEV.medium }}>Upgrade →</button>
           )}
           <button onClick={() => setShowPalette(true)} className="row tb-hide-m" style={{ width: 220,
             justifyContent: 'space-between', background: 'var(--bg2)', border: '1px solid var(--bg3)',

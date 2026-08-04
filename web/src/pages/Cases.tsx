@@ -1,9 +1,9 @@
 // Cases — triage queue with status tabs and an inline case editor.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
+import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -16,7 +16,7 @@ const COLS = '90px 90px 1fr 140px 90px 140px 140px 80px';
 
 export default function Cases() {
   const app = useApp();
-  const [tab, setTab] = useState<Tab>('all');
+  const [tab, setTab] = useTab(TABS);
   const [cases, setCases] = useState<CaseRow[] | null>(null);
   const [editing, setEditing] = useState<CaseRow | null>(null);
 
@@ -38,17 +38,8 @@ export default function Cases() {
     <div className="page">
       <PageHeader title="Cases" />
 
-      <div className="row" style={{ gap: 4, borderBottom: '1px solid var(--bg3)' }}>
-        {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            padding: '6px 12px', fontSize: 'var(--t-base)', textTransform: 'capitalize', marginBottom: -1,
-            color: tab === t ? 'var(--text0)' : 'var(--text2)',
-            borderBottom: tab === t ? '2px solid #388bfd' : '2px solid transparent',
-          }}>
-            {t}{t !== 'all' && <span className="mono text-xs text-text3" style={{ marginLeft: 5}}>{counts[t]}</span>}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onChange={setTab}
+        tabs={TABS.map((t) => [t, t === 'all' ? 'All' : `${t[0].toUpperCase()}${t.slice(1)} ${counts[t]}`] as const)} />
 
       <div className="card" style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={900}>

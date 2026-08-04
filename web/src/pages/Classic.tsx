@@ -61,15 +61,24 @@ export default function Classic() {
   };
 
   const vert = orient === 'vertical';
-  const startDrag = (e: React.MouseEvent) => {
+  // pointer, not mouse — the same divider is undraggable on a phone otherwise
+  const startDrag = (e: React.PointerEvent) => {
     e.preventDefault();
     const rect = wrapRef.current!.getBoundingClientRect();
-    const move = (ev: MouseEvent) => {
+    const bar = e.currentTarget as HTMLElement;
+    bar.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
       const frac = vert ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
       setSplit(Math.min(80, Math.max(20, frac * 100)));
     };
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+    const up = () => {
+      bar.removeEventListener('pointermove', move);
+      bar.removeEventListener('pointerup', up);
+      bar.removeEventListener('pointercancel', up);
+    };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', up);
+    bar.addEventListener('pointercancel', up);
   };
 
   // The sizes below deliberately do NOT ride the --t-* scale: this is a fixed-cell
@@ -186,9 +195,11 @@ export default function Classic() {
           display: 'flex', minHeight: 0, minWidth: 0 } as React.CSSProperties}>
           {logsPane}
         </div>
-        <div onMouseDown={startDrag} style={{ flexShrink: 0, background: pal.head, opacity: 0.35,
-          cursor: vert ? 'col-resize' : 'row-resize',
-          [vert ? 'width' : 'height']: 5 } as React.CSSProperties} />
+        <div onPointerDown={startDrag} className="split-bar" role="separator"
+          aria-label="Resize panes"
+          style={{ background: pal.head, opacity: 0.35,
+            cursor: vert ? 'col-resize' : 'row-resize',
+            [vert ? 'width' : 'height']: 5 } as React.CSSProperties} />
         <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>{eventsPane}</div>
       </div>
     </div>
