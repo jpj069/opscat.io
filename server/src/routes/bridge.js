@@ -30,7 +30,8 @@ const { db, getOrgSetting } = require('../db');
 const config = require('../config');
 const plans = require('../plans');
 const sec = require('../security');
-const { now, isStr, optStr, clampInt, httpError } = require('../util');
+const voice = require('../voice');
+const { now, isStr, optStr, clampInt, httpError, RateLimiter } = require('../util');
 const { hub } = require('./ops'); // org-scoped SSE hub (module cache, no cycle)
 
 const router = express.Router();
@@ -122,6 +123,9 @@ function roomState(room) {
     groups: q.groups.all(room.id),
     participants: q.participants.all(room.id),
     livekit: { url: config.livekit.url, room: roomName(room) },
+    // can transcription actually run? (a provider is configured for this org
+    // or the platform) — the UI turns the chip into a setup hint when false
+    stt: !!voice.resolveConfig(room.org_id),
   };
 }
 
@@ -250,6 +254,45 @@ router.get('/room/:id/feed', sec.requireSession, gate, (req, res) => {
   const rows = after ? q.feedAfter.all(room.id, after, limit)
     : q.feedTail.all(room.id, limit).reverse();
   res.json({ items: rows.map((r) => ({ ...r, meta: JSON.parse(r.meta || '{}') })) });
+});
+
+// ── transcription (docs/BRIDGE.md phase 2, `chunked` mode) ──────────────────
+// Browsers cut speech into VAD-bounded chunks (their OWN mic — pristine local
+// signal, no server-side decode) and post them here; we hand the audio to the
+// org's voice provider and write the text into the feed, attributed to the
+// speaker's current group. index.js mounts express.raw for audio/* on
+// /api/room so req.body is the raw Buffer.
+const sttLimiter = new RateLimiter({ perMinute: 40, burst: 12 }); // per user+room
+
+router.post('/room/:id/transcribe', sec.requireSession, gate, async (req, res) => {
+  const room = getRoom(req, res);
+  if (!room) return;
+  if (room.status !== 'open') return httpError(res, 409, 'room is closed');
+  if (!room.transcription) return httpError(res, 409, 'transcription is off for this room');
+  if (!Buffer.isBuffer(req.body) || req.body.length < 1500) {
+    return httpError(res, 400, 'audio chunk required');
+  }
+  if (!sttLimiter.allow(`${room.id}:${req.user.id}`)) {
+    return httpError(res, 429, 'rate limit exceeded');
+  }
+  let text;
+  try {
+    text = await voice.transcribe(room.org_id, req.body, req.headers['content-type']);
+  } catch (e) {
+    return httpError(res, e.unconfigured ? 503 : 502, String(e.message).slice(0, 300));
+  }
+  text = text.trim().slice(0, 600);
+  if (!text) return res.json({ ok: true, text: null }); // silence / filler
+  const p = q.getParticipant.get(room.id, req.user.id);
+  const durMs = clampInt(req.query.dur, 0, 60000, 0);
+  const item = feedItem(room, {
+    userId: req.user.id,
+    groupId: p ? p.group_id : null,
+    kind: 'transcript',
+    body: text,
+    meta: durMs ? { durMs } : null,
+  });
+  res.json({ ok: true, text, id: item.id });
 });
 
 // ── LiveKit webhook: presence mirror + share events ─────────────────────────

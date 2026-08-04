@@ -179,6 +179,7 @@ export default function Settings() {
 
       {/* 2c. AI endpoint (admin) */}
       {isAdmin && <AiCard />}
+      {isAdmin && <VoiceCard />}
 
       {/* 2b. Maintenance windows */}
       <MaintenanceCard canEdit={leadPlus} />
@@ -456,6 +457,95 @@ function AiCard() {
               </button>
               <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || !!busy}>
                 {busy === 'save' ? 'Saving…' : 'Save AI Settings'}
+              </button>
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- voice / STT
+
+// Org-level voice provider for the Bridge's live transcript (docs/BRIDGE.md
+// phase 2). Same contract as AiCard: OpenAI-compatible /audio/transcriptions,
+// key write-only, platform default applies when empty.
+function VoiceCard() {
+  const [status, setStatus] = useState<AiStatus | null>(null);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState(''); // write-only; never echoed back
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () => api.get<AiStatus>('/api/admin/voice').then((s) => {
+    setStatus(s); setBaseUrl(s.org.baseUrl); setModel(s.org.model);
+  }).catch(() => setStatus(null));
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Record<string, string> = { baseUrl, model };
+      if (apiKey) body.apiKey = apiKey;
+      await api.put('/api/admin/voice', body);
+      setApiKey(''); setDirty(false);
+      setMsg({ ok: true, text: 'saved ✓' });
+      load();
+    } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
+    finally { setBusy(false); }
+  };
+  const clearKey = async () => {
+    if (!confirm('Remove the stored API key? The platform default (if any) applies again.')) return;
+    setBusy(true);
+    try { await api.put('/api/admin/voice', { apiKey: '' }); setMsg({ ok: true, text: 'key removed' }); load(); }
+    catch { setMsg({ ok: false, text: 'could not remove key' }); }
+    finally { setBusy(false); }
+  };
+
+  const effective = status?.effectiveSource
+    ? `Effective: ${status.effectiveModel} (${status.effectiveSource === 'org' ? 'this organization' : 'platform default'})`
+    : 'No voice provider configured — the Bridge live transcript stays off.';
+
+  return (
+    <div className="card">
+      <div className="card-title">Voice / Transcription</div>
+      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
+        Speech-to-text for the Bridge live transcript. Any OpenAI-compatible transcription
+        endpoint (OpenAI, Groq, a local Whisper server, …) — speech chunks go to
+        <span className="mono"> /audio/transcriptions</span>. Leave empty to use the platform
+        default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
+        The API key is stored encrypted and never shown again.
+      </div>
+      {status === null ? <FormSkeleton rows={3} /> : (
+        <>
+          <Row label="Base URL">
+            <Input className="mono" value={baseUrl} placeholder="https://api.openai.com/v1"
+              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+          </Row>
+          <Row label="Model">
+            <Input className="mono" value={model} placeholder="gpt-4o-mini-transcribe"
+              onChange={(e) => { setModel(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+          </Row>
+          <Row label={status.org.hasKey ? 'API key (stored)' : 'API key'}>
+            <div className="row" style={{ gap: 8 }}>
+              <Input type="password" className="mono" value={apiKey}
+                placeholder={status.org.hasKey ? '•••••••• (set — enter to replace)' : 'sk-…'}
+                onChange={(e) => { setApiKey(e.target.value); setDirty(true); }} style={{ flex: 1 }} />
+              {status.org.hasKey && (
+                <button className="btn btn-sm" onClick={clearKey} disabled={busy}>Remove</button>
+              )}
+            </div>
+          </Row>
+          <div className="row row-wrap" style={{ justifyContent: 'space-between', marginTop: 8, gap: 10 }}>
+            <span className="text-xs text-text3">{effective}</span>
+            <span className="row" style={{ gap: 10 }}>
+              {msg && <span className="text-sm font-semibold" style={{
+                color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
+              <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || busy}>
+                {busy ? 'Saving…' : 'Save Voice Settings'}
               </button>
             </span>
           </div>

@@ -18,6 +18,8 @@ app.use(securityHeaders);
 app.use('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 // same story for the LiveKit webhook (OpsCat Bridge)
 app.use('/api/hooks/livekit', express.raw({ type: '*/*', limit: '1mb' }));
+// Bridge speech chunks (audio/* only — the JSON room routes stay untouched)
+app.use('/api/room', express.raw({ type: 'audio/*', limit: '4mb' }));
 app.use(express.json({ limit: '1mb' }));
 // the public status page's "report a problem" form posts urlencoded
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));

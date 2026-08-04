@@ -341,4 +341,5 @@ export interface BridgeState {
   groups?: BridgeGroup[];
   participants?: BridgeParticipant[];
   livekit?: { url: string; room: string };
+  stt?: boolean; // a voice provider is configured (org or platform)
 }

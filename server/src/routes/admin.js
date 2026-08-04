@@ -12,6 +12,7 @@ const pipelineEngine = require('../engine/pipeline');
 const automationEngine = require('../engine/automations');
 const scoutEngine = require('../engine/scout');
 const llm = require('../llm');
+const voice = require('../voice');
 
 const plans = require('../plans');
 
@@ -514,6 +515,38 @@ router.post('/ai/test', sec.requireRole('admin'), async (req, res) => {
   } catch (e) {
     httpError(res, 502, String(e.message).slice(0, 300));
   }
+});
+
+// ---- Voice / STT endpoint (admin) — Bridge transcription (docs/BRIDGE.md) --
+// Org-level override of the platform default. OpenAI-compatible transcription
+// API: base URL is the API root (e.g. https://api.openai.com/v1); the Bridge
+// posts speech chunks against /audio/transcriptions. Key stored encrypted,
+// GET only reports hasKey — same contract as the AI endpoint above.
+
+router.get('/voice', sec.requireRole('admin'), (req, res) => {
+  res.json(voice.statusFor(req.orgId));
+});
+
+router.put('/voice', sec.requireRole('admin'), (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  if (b.baseUrl !== undefined) {
+    const v = String(b.baseUrl).trim();
+    if (v && !/^https?:\/\/[^\s]{1,300}$/.test(v)) return httpError(res, 400, 'baseUrl must be an http(s) URL');
+    patch.baseUrl = v;
+  }
+  if (b.model !== undefined) {
+    if (!isStr(b.model, 200) && b.model !== '') return httpError(res, 400, 'bad model');
+    patch.model = String(b.model);
+  }
+  if (b.apiKey !== undefined) {
+    if (typeof b.apiKey !== 'string' || b.apiKey.length > 500) return httpError(res, 400, 'bad apiKey');
+    patch.apiKey = b.apiKey; // '' clears the stored key
+  }
+  voice.saveOrgConfig(req.orgId, patch);
+  sec.audit(req.user.id, 'voice_config_update',
+    Object.keys(patch).map((k) => (k === 'apiKey' ? 'apiKey(hidden)' : k)).join(','), req.orgId);
+  res.json({ ok: true, ...voice.statusFor(req.orgId) });
 });
 
 // ---- SNMP targets (lead+) ----

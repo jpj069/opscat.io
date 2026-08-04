@@ -218,6 +218,56 @@ async function main() {
   chk('feed tail limit works', page1.length === 2 && page1[0].id < page1[1].id);
   chk('feed after-cursor pages forward', page2.length === all.length - 1 && page2.every((i) => i.id > all[0].id));
 
+  // ── transcription (phase 2, chunked mode) ─────────────────────────────────
+  // A local OpenAI-shaped /audio/transcriptions stub keeps this hermetic.
+  const http = require('http');
+  const voiceMod = require('./src/voice');
+  const sttStub = http.createServer((rq, rs) => {
+    let n = 0;
+    rq.on('data', (c) => { n += c.length; });
+    rq.on('end', () => {
+      rs.setHeader('content-type', 'application/json');
+      rs.end(JSON.stringify({ text: n > 500 ? 'db three replication is lagging' : '' }));
+    });
+  });
+  await new Promise((r) => sttStub.listen(0, '127.0.0.1', r));
+  const audio = Buffer.alloc(4000, 7);
+  const postAudio = async (sess, p, bytes) => {
+    const r = await fetch(BASE + p, { method: 'POST', body: bytes,
+      headers: { cookie: sess.cookie, 'X-OpsCat-CSRF': sess.csrf, 'Content-Type': 'audio/webm' } });
+    let j = null;
+    try { j = await r.json(); } catch { /* non-JSON */ }
+    return { status: r.status, j };
+  };
+
+  const preStt = await call(M, 'GET', `/api/room/${roomId}`);
+  chk('roomState.stt is false without a provider', preStt.j?.stt === false, JSON.stringify(preStt.j?.stt));
+  const noProv = await postAudio(M, `/api/room/${roomId}/transcribe`, audio);
+  chk('transcribe without provider -> 503', noProv.status === 503, `got ${noProv.status}`);
+
+  voiceMod.saveOrgConfig(1, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
+    model: 'whisper-e2e', apiKey: 'stt-key' });
+  const postStt = await call(M, 'GET', `/api/room/${roomId}`);
+  chk('roomState.stt flips true once configured', postStt.j?.stt === true, JSON.stringify(postStt.j?.stt));
+
+  await call(M, 'POST', `/api/room/${roomId}/join`, { groupId: g1.j.group.id });
+  const tr = await postAudio(M, `/api/room/${roomId}/transcribe?dur=1200`, audio);
+  chk('speech chunk becomes a transcript', tr.status === 200 && tr.j?.text === 'db three replication is lagging',
+    `got ${tr.status} ${JSON.stringify(tr.j)}`);
+  feed = await call(M, 'GET', `/api/room/${roomId}/feed?limit=500`);
+  const trItem = feed.j.items.find((i) => i.kind === 'transcript');
+  chk('transcript feed line carries speaker + group + duration',
+    !!trItem && trItem.user_id === member.id && trItem.group_id === g1.j.group.id
+    && trItem.meta?.durMs === 1200, JSON.stringify(trItem));
+  const tiny = await postAudio(M, `/api/room/${roomId}/transcribe`, Buffer.alloc(200));
+  chk('sub-size blip -> 400', tiny.status === 400, `got ${tiny.status}`);
+
+  const vLead = await call(L, 'GET', '/api/admin/voice');
+  chk('admin voice status reports hasKey, never the key', vLead.status === 403
+    || (vLead.j && vLead.j.org && !JSON.stringify(vLead.j).includes('stt-key')),
+    JSON.stringify(vLead.j));
+  chk('lead is below admin for voice settings', vLead.status === 403, `got ${vLead.status}`);
+
   // ── webhook -> presence mirror ────────────────────────────────────────────
   const evJoin = { event: 'participant_joined', room: { name: `br-1-${roomId}` },
     participant: { identity: String(member.id) } };
@@ -265,6 +315,8 @@ async function main() {
   chk('join on a closed room -> 409', joinClosedRoom.status === 409, `got ${joinClosedRoom.status}`);
   const gClosedRoom = await call(M, 'POST', `/api/room/${roomId}/groups`, { name: 'late' });
   chk('new breakout on a closed room -> 409', gClosedRoom.status === 409, `got ${gClosedRoom.status}`);
+  const trClosed = await postAudio(M, `/api/room/${roomId}/transcribe`, audio);
+  chk('transcribe on a closed room -> 409', trClosed.status === 409, `got ${trClosed.status}`);
   await call(L, 'POST', `/api/room/${roomId}/close`);
   feed = await call(M, 'GET', `/api/room/${roomId}/feed?limit=500`);
   chk('close is idempotent (one feed line)',

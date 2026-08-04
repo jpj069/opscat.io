@@ -27,6 +27,18 @@ export const api = {
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
+  // Raw-body POST (Bridge speech chunks): same cookie + CSRF contract as
+  // request(), body passed through untouched with the blob's own MIME type.
+  postBlob: async <T>(path: string, blob: Blob): Promise<T> => {
+    const resp = await fetch(path, {
+      method: 'POST', credentials: 'same-origin', body: blob,
+      headers: { 'Content-Type': blob.type || 'application/octet-stream', 'X-OpsCat-CSRF': csrfToken },
+    });
+    let data: any = null;
+    try { data = await resp.json(); } catch { /* non-JSON */ }
+    if (!resp.ok) throw new ApiError(resp.status, data?.error || `HTTP ${resp.status}`);
+    return data as T;
+  },
 };
 
 // SSE live stream with auto-reconnect. `onBridge` receives the OpsCat Bridge

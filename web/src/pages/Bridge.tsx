@@ -52,6 +52,82 @@ function AudioOut({ track, muted }: { track: Track; muted: boolean }) {
   return <audio ref={ref} style={{ display: 'none' }} />;
 }
 
+// --------------------------------------------------- transcription (phase 2)
+
+// `chunked` mode from docs/BRIDGE.md: energy VAD on the OWN mic (the pristine
+// local signal — no server-side decode), one MediaRecorder segment per speech
+// burst, POSTed for server-side STT. The server attributes the text to the
+// speaker's current group and broadcasts it as a bridge.feed transcript item.
+function useTranscriber(active: boolean, roomRef: React.MutableRefObject<Room | null>, roomId: number | null) {
+  useEffect(() => {
+    if (!active || !roomId) return;
+    const msTrack = roomRef.current?.localParticipant
+      .getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+    if (!msTrack || typeof MediaRecorder === 'undefined') return;
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+      .find((m) => MediaRecorder.isTypeSupported(m));
+    if (!mime) return;
+
+    let gone = false;
+    const stream = new MediaStream([msTrack]);
+    const ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+
+    let rec: MediaRecorder | null = null;
+    let parts: BlobPart[] = [];
+    let speaking = false;
+    let loud = 0;
+    let quiet = 0;
+    let startedAt = 0;
+    const THRESH = 0.02; // RMS 0..1 — above ≈ speech, tuned for headset mics
+
+    const startSegment = () => {
+      parts = [];
+      rec = new MediaRecorder(stream, { mimeType: mime });
+      rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(parts, { type: mime });
+        const dur = Date.now() - startedAt;
+        // skip blips: sub-400ms or tiny blobs are coughs and key clicks
+        if (!gone && blob.size > 2000 && dur > 400) {
+          api.postBlob(`/api/room/${roomId}/transcribe?dur=${dur}`, blob).catch(() => {});
+        }
+      };
+      startedAt = Date.now();
+      rec.start();
+    };
+    const stopSegment = () => {
+      if (rec && rec.state !== 'inactive') rec.stop();
+      rec = null;
+    };
+
+    // 60ms ticks: ~120ms attack, ~720ms release, 15s hard cap per segment
+    const tick = setInterval(() => {
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+      const rms = Math.sqrt(sum / buf.length);
+      if (!speaking) {
+        loud = rms > THRESH ? loud + 1 : 0;
+        if (loud >= 2) { speaking = true; quiet = 0; startSegment(); }
+      } else {
+        quiet = rms > THRESH ? 0 : quiet + 1;
+        if (quiet >= 12 || Date.now() - startedAt > 15000) { speaking = false; loud = 0; stopSegment(); }
+      }
+    }, 60);
+
+    return () => {
+      gone = true;
+      clearInterval(tick);
+      stopSegment();
+      ctx.close().catch(() => {});
+    };
+  }, [active, roomId]);
+}
+
 // ---------------------------------------------------------------- page
 
 export default function Bridge() {
@@ -68,6 +144,7 @@ export default function Bridge() {
   const [participants, setParticipants] = useState<BridgeParticipant[]>([]);
   const [feed, setFeed] = useState<BridgeFeedItem[] | null>(null);
   const [incident, setIncident] = useState<Incident | null>(null);
+  const [stt, setStt] = useState(false); // voice provider configured?
   const [view, setView] = useState<View>('wall');
   const [focusSid, setFocusSid] = useState<string | null>(null);
   const [railOpen, setRailOpen] = useState(true);
@@ -118,6 +195,7 @@ export default function Bridge() {
         setRoom(st.room);
         setGroups(st.groups || []);
         setParticipants(st.participants || []);
+        setStt(!!st.stt);
         setStatus('ready');
         const f = await api.get<{ items: BridgeFeedItem[] }>(`/api/room/${st.room.id}/feed?limit=150`);
         if (!gone) setFeed(f.items);
@@ -259,6 +337,15 @@ export default function Bridge() {
         ? { participantIdentity: String(p.user_id), allowAll: true }
         : { participantIdentity: String(p.user_id), allowedTrackSids: screens })));
   }, [participants, myGroupId, connState, shares, me]);
+
+  // live transcript: my own speech, chunked locally, transcribed server-side
+  useTranscriber(
+    !!room && room.status === 'open' && room.transcription && stt
+      && micOn && connState === ConnectionState.Connected,
+    lkRoom, room ? room.id : null);
+
+  const lastTranscripts = (gid: number | null, n: number) =>
+    (feed || []).filter((i) => i.kind === 'transcript' && (i.group_id ?? null) === gid).slice(-n);
 
   // ---------------------------------------------------------- actions
   const joinGroup = async (gid: number | null) => {
@@ -443,9 +530,13 @@ export default function Bridge() {
           <span className="mono text-md text-text0" style={{ fontVariantNumeric: 'tabular-nums' }}>
             {pad(eh)}:{pad(em)}:{pad(es)}
           </span>
-          <span className="row text-xs" style={{ gap: 5, color: room.transcription ? SEV.green : 'var(--text3)' }}>
-            <GlowDot color={room.transcription ? SEV.green : 'var(--text3)'} size={7} />
-            {room.transcription ? 'Transcript on' : 'Transcript off'}
+          <span className="row text-xs"
+            title={room.transcription && !stt
+              ? 'Transcription is enabled, but no voice provider is configured — an admin sets one under Settings → Voice / Transcription.'
+              : undefined}
+            style={{ gap: 5, color: room.transcription ? (stt ? SEV.green : SEV.medium) : 'var(--text3)' }}>
+            <GlowDot color={room.transcription ? (stt ? SEV.green : SEV.medium) : 'var(--text3)'} size={7} />
+            {room.transcription ? (stt ? 'Transcript on' : 'Transcript: no provider') : 'Transcript off'}
           </span>
           {room.status === 'closed' && <StatusPill text="closed" color="var(--text3)" />}
           <div style={{ flex: 1 }} />
@@ -516,6 +607,15 @@ export default function Bridge() {
                         {members.map((m) => m.name || m.email).join(', ')}
                       </span>
                     </div>
+                    {(() => {
+                      const t = lastTranscripts(g.id, 1)[0];
+                      return t ? (
+                        <div className="text-xs text-text2" style={{ fontStyle: 'italic', whiteSpace: 'nowrap',
+                          overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          “{t.body}” — {nameOf(t.user_id)}
+                        </div>
+                      ) : null;
+                    })()}
                     {gShares.length > 0 ? (
                       <div style={{ display: 'grid', gap: 6,
                         gridTemplateColumns: gShares.length === 1 ? '1fr' : '1fr 1fr' }}>
@@ -598,6 +698,20 @@ export default function Bridge() {
                     ))}
                   </div>
                 )}
+                {room.transcription && stt && (() => {
+                  const lines = lastTranscripts(focusedGroup.id, 2);
+                  return lines.length ? (
+                    <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {lines.map((l) => (
+                        <div key={l.id} className="text-sm" style={{ padding: '5px 9px', borderRadius: 5,
+                          background: 'var(--bg2)', border: '1px solid var(--bg3)' }}>
+                          <span className="text-text1" style={{ fontStyle: 'italic' }}>“{l.body}”</span>
+                          <span className="text-xs text-text3"> — {nameOf(l.user_id)} · {fmtTime(l.created_at)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
               </div>
             );
           })()}
