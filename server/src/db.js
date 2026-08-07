@@ -323,6 +323,12 @@ const MIGRATIONS = [
         ON reputation_listings(asset_id, subject, zone) WHERE resolved_at IS NULL;
     `);
   },
+  // idx 12 -> version 13: the Bridge insight analyzer (docs/BRIDGE.md phase 3)
+  // tracks how far into the feed it has read, per room, so a server restart
+  // neither re-analyzes the whole window nor duplicates insights.
+  () => {
+    addColumn('bridges', 'analyzed_feed_id', 'INTEGER NOT NULL DEFAULT 0');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

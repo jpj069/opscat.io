@@ -4,7 +4,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { db } = require('../db');
-const { now, sha256, clampInt, isStr, optStr, httpError, SseHub } = require('../util');
+const { now, sha256, clampInt, isStr, optStr, httpError, SseHub, RateLimiter } = require('../util');
 const config = require('../config');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
@@ -294,6 +294,47 @@ router.delete('/rules/:id', sec.requireRole('lead'), (req, res) => {
   db.prepare('DELETE FROM alert_rules WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'rule_delete', `rule ${req.params.id}`, req.orgId);
   res.json({ ok: true });
+});
+
+// Fire a clearly-marked synthetic event through a rule's REAL channel so the
+// configuration is verifiable without waiting for a genuine alert. Uses the
+// exact dispatch path production uses; no dedupe/cooldown state is touched,
+// and the attempt lands in the notification log tagged "(test)".
+const alerts = require('../engine/alerts');
+const testAlertLimiter = new RateLimiter({ perMinute: 6, burst: 3 });
+const insTestNotif = db.prepare(`INSERT INTO notifications
+  (org_id, ts, rule_id, rule_name, event_id, case_label, channel, ok, error)
+  VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)`);
+
+router.post('/rules/:id/test', sec.requireRole('lead'), async (req, res) => {
+  const rule = db.prepare('SELECT * FROM alert_rules WHERE id = ? AND org_id = ?')
+    .get(req.params.id, req.orgId);
+  if (!rule) return httpError(res, 404, 'rule not found');
+  if (!testAlertLimiter.allow(`o${req.orgId}`)) return httpError(res, 429, 'rate limit exceeded');
+  const ev = {
+    id: 0,
+    name: 'TEST ALERT',
+    device: 'opscat-test',
+    ip: null,
+    target: null,
+    severity: Math.max(rule.severity_min || 0, 60),
+    hits: 1,
+    description: `Test alert for rule "${rule.name}", sent by `
+      + `${req.user.name || req.user.email}. If you can read this, the channel works. No action needed.`,
+    last_seen: now(),
+  };
+  const t0 = Date.now();
+  try {
+    await alerts.dispatch(rule, ev);
+    insTestNotif.run(req.orgId, now(), rule.id, `${rule.name} (test)`, rule.channel, 1, null);
+    sec.audit(req.user.id, 'rule_test', `rule ${rule.id} (${rule.channel}) ok`, req.orgId);
+    res.json({ ok: true, channel: rule.channel, latencyMs: Date.now() - t0 });
+  } catch (e) {
+    const msg = String(e.message).slice(0, 300);
+    insTestNotif.run(req.orgId, now(), rule.id, `${rule.name} (test)`, rule.channel, 0, msg);
+    sec.audit(req.user.id, 'rule_test', `rule ${rule.id} (${rule.channel}) failed`, req.orgId);
+    httpError(res, 502, msg);
+  }
 });
 
 router.get('/notifications', (req, res) => {

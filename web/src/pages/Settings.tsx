@@ -505,6 +505,15 @@ function VoiceCard() {
     catch { setMsg({ ok: false, text: 'could not remove key' }); }
     finally { setBusy(false); }
   };
+  const test = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api.post<{ ok: boolean; source: string; model: string; latencyMs: number }>(
+        '/api/admin/voice/test', {});
+      setMsg({ ok: true, text: `works — ${r.model} via ${r.source} config, ${r.latencyMs} ms` });
+    } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
+    finally { setBusy(false); }
+  };
 
   const effective = status?.effectiveSource
     ? `Effective: ${status.effectiveModel} (${status.effectiveSource === 'org' ? 'this organization' : 'platform default'})`
@@ -545,6 +554,10 @@ function VoiceCard() {
             <span className="row" style={{ gap: 10 }}>
               {msg && <span className="text-sm font-semibold" style={{
                 color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
+              <button className="btn btn-sm" onClick={test} disabled={busy || dirty}
+                title={dirty ? 'Save first' : 'Round-trip a short test tone through the endpoint'}>
+                Test
+              </button>
               <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || busy}>
                 {busy ? 'Saving…' : 'Save Voice Settings'}
               </button>

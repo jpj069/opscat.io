@@ -128,6 +128,7 @@ require('./engine/vendors').start();
 require('./engine/reports').start();
 require('./engine/retention').start();
 require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
+require('./engine/bridge-insights').start(); // Bridge AI analyzer (docs/BRIDGE.md phase 3)
 
 app.listen(config.port, () => {
   console.log(`OpsCat server listening on :${config.port}`);

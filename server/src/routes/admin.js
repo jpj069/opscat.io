@@ -549,6 +549,21 @@ router.put('/voice', sec.requireRole('admin'), (req, res) => {
   res.json({ ok: true, ...voice.statusFor(req.orgId) });
 });
 
+// Round-trip a synthesized 0.6s test tone through the effective voice
+// endpoint so admins can verify base URL + key + model. A tone transcribes to
+// (near-)empty text — the call succeeding is the verification.
+router.post('/voice/test', sec.requireRole('admin'), async (req, res) => {
+  const t0 = Date.now();
+  try {
+    const text = await voice.transcribe(req.orgId, voice.testWav(), 'audio/wav', { timeoutMs: 20000 });
+    const status = voice.statusFor(req.orgId);
+    res.json({ ok: true, source: status.effectiveSource, model: status.effectiveModel,
+      latencyMs: Date.now() - t0, text: text.slice(0, 100) });
+  } catch (e) {
+    httpError(res, 502, String(e.message).slice(0, 300));
+  }
+});
+
 // ---- SNMP targets (lead+) ----
 router.get('/snmp/targets', sec.requireRole('lead'), (req, res) => {
   res.json(db.prepare(`SELECT id, name, host, port, version, oids, interval_s, enabled,

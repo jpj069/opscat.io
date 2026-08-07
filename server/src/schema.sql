@@ -693,6 +693,8 @@ CREATE TABLE IF NOT EXISTS bridges (
   -- default ON (docs §7.2); org opts out via org setting bridge_transcription='0',
   -- the incident commander per room. Always visibly indicated in the UI.
   transcription INTEGER NOT NULL DEFAULT 1,
+  -- highest bridge_feed.id the insight analyzer has read (phase 3)
+  analyzed_feed_id INTEGER NOT NULL DEFAULT 0,
   created_by    INTEGER REFERENCES users(id),
   created_at    INTEGER NOT NULL,
   closed_at     INTEGER

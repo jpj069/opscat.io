@@ -65,11 +65,30 @@ function platformStatus() {
   return { baseUrl: p.baseUrl, model: p.model, hasKey: !!p.keyEnc };
 }
 
+// Platform scope only — no org fallback. For the super-admin's "does the
+// platform default work" test button; orgs keep resolveConfig's chain.
+function resolvePlatform() {
+  const p = readScope((k) => getSetting(k), []);
+  if (!(p.baseUrl && p.model && p.keyEnc)) return null;
+  try { return { baseUrl: p.baseUrl, model: p.model, apiKey: decrypt(p.keyEnc, config.secret), source: 'platform' }; }
+  catch { return null; }
+}
+
 // OpenAI-compatible chat call. Returns the assistant message content (string).
 // Throws with a safe message (no key material) on any failure.
-async function chat(orgId, messages, { maxTokens = 512, temperature = 0, timeoutMs = 30000 } = {}) {
+async function chat(orgId, messages, opts) {
   const cfg = resolveConfig(orgId);
   if (!cfg) throw new Error('no LLM configured (set one in Settings → AI, or ask the platform admin)');
+  return callChat(cfg, messages, opts);
+}
+
+async function chatPlatform(messages, opts) {
+  const cfg = resolvePlatform();
+  if (!cfg) throw new Error('no platform LLM configured');
+  return callChat(cfg, messages, opts);
+}
+
+async function callChat(cfg, messages, { maxTokens = 512, temperature = 0, timeoutMs = 30000 } = {}) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -95,4 +114,4 @@ async function chat(orgId, messages, { maxTokens = 512, temperature = 0, timeout
   }
 }
 
-module.exports = { resolveConfig, statusFor, saveOrgConfig, savePlatformConfig, platformStatus, chat };
+module.exports = { resolveConfig, resolvePlatform, statusFor, saveOrgConfig, savePlatformConfig, platformStatus, chat, chatPlatform };

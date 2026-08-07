@@ -1,7 +1,7 @@
 // Rules — alert routing rules + recent notification log. Editing requires lead+.
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { SEV, fmtTime } from '../format';
 import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
 import { Select } from '../Select';
@@ -12,10 +12,11 @@ const CHAN_COLORS: Record<string, string> = {
   slack: '#e01e5a', telegram: '#29a9eb', discord: '#7289da', ntfy: '#3fb950', pushover: '#249df1',
 };
 const chanColor = (ch: string) => CHAN_COLORS[ch] || SEV.info;
-const RULE_COLS = '1fr 90px 140px 70px 80px 60px 110px';
+const RULE_COLS = '1fr 90px 140px 70px 80px 60px 165px';
 const NOTIF_COLS = '80px 1fr 90px 90px 70px';
 const DEFAULT_TRIGGERS = ['ddos', 'out_of_memory', 'synthetic_check_failed', 'snmp_unreachable',
-  'agent_offline', 'host_disk_high', 'sentry_error', 'tls_cert_expiring', 'heartbeat_missed', 'container_down'];
+  'agent_offline', 'host_disk_high', 'sentry_error', 'tls_cert_expiring', 'heartbeat_missed', 'container_down',
+  'bridge_insight'];
 
 export default function Rules() {
   const app = useApp();
@@ -41,6 +42,19 @@ export default function Rules() {
     if (!confirm(`Delete rule "${r.name}"?`)) return;
     await api.del(`/api/rules/${r.id}`);
     loadRules();
+  };
+  // fire a synthetic TEST ALERT through the rule's real channel
+  const [testing, setTesting] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<{ id: number; name: string; ok: boolean; text: string } | null>(null);
+  const testFire = async (r: Rule) => {
+    setTesting(r.id); setTestResult(null);
+    try {
+      const resp = await api.post<{ ok: boolean; latencyMs: number }>(`/api/rules/${r.id}/test`, {});
+      setTestResult({ id: r.id, name: r.name, ok: true, text: `test alert sent — ${resp.latencyMs} ms` });
+    } catch (ex) {
+      setTestResult({ id: r.id, name: r.name, ok: false,
+        text: ex instanceof ApiError ? ex.message : 'network error' });
+    } finally { setTesting(null); loadNotifs(); }
   };
 
   return (
@@ -75,6 +89,10 @@ export default function Rules() {
             <Toggle on={r.enabled} disabled={!canEdit} onClick={canEdit ? () => toggle(r) : undefined} />
             {canEdit ? (
               <span className="row" style={{ gap: 6 }}>
+                <button className="btn btn-sm" onClick={() => testFire(r)} disabled={testing === r.id}
+                  title="Send a clearly-marked test alert through this channel now">
+                  {testing === r.id ? 'Sending…' : 'Test'}
+                </button>
                 <button className="btn btn-sm" onClick={() => setEditing(r)}>Edit</button>
                 <button className="btn btn-sm" style={{ color: SEV.critical }} onClick={() => remove(r)}>Del</button>
               </span>
@@ -82,6 +100,12 @@ export default function Rules() {
           </div>
         ))}
         </TableScroll>
+        {testResult && (
+          <div className="text-sm" style={{ padding: '8px 16px', borderTop: '1px solid var(--bg3)',
+            color: testResult.ok ? SEV.green : SEV.critical }}>
+            {testResult.name}: {testResult.text}
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ padding: 0 }}>

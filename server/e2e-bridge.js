@@ -222,12 +222,21 @@ async function main() {
   // A local OpenAI-shaped /audio/transcriptions stub keeps this hermetic.
   const http = require('http');
   const voiceMod = require('./src/voice');
+  let insightGroupId = null; // set right before the analyzer test below
   const sttStub = http.createServer((rq, rs) => {
     let n = 0;
     rq.on('data', (c) => { n += c.length; });
     rq.on('end', () => {
       rs.setHeader('content-type', 'application/json');
-      rs.end(JSON.stringify({ text: n > 500 ? 'db three replication is lagging' : '' }));
+      if ((rq.url || '').includes('/chat/completions')) {
+        // fenced on purpose — the analyzer must strip markdown around JSON
+        const content = '```json\n' + JSON.stringify({ insights: [{ severity: 'critical',
+          groupId: insightGroupId,
+          body: 'db three is the root cause — replication lag since deploy 78d3ae2' }] }) + '\n```';
+        rs.end(JSON.stringify({ choices: [{ message: { content } }] }));
+      } else {
+        rs.end(JSON.stringify({ text: n > 500 ? 'db three replication is lagging' : '' }));
+      }
     });
   });
   await new Promise((r) => sttStub.listen(0, '127.0.0.1', r));
@@ -263,10 +272,58 @@ async function main() {
   chk('sub-size blip -> 400', tiny.status === 400, `got ${tiny.status}`);
 
   const vLead = await call(L, 'GET', '/api/admin/voice');
-  chk('admin voice status reports hasKey, never the key', vLead.status === 403
-    || (vLead.j && vLead.j.org && !JSON.stringify(vLead.j).includes('stt-key')),
-    JSON.stringify(vLead.j));
   chk('lead is below admin for voice settings', vLead.status === 403, `got ${vLead.status}`);
+  mkUser('orgadmin@e2e.test', 'admin', 1);
+  const A = await login('orgadmin@e2e.test');
+  const vGet = await call(A, 'GET', '/api/admin/voice');
+  chk('admin voice status: config visible, key masked',
+    vGet.status === 200 && vGet.j?.org?.hasKey === true
+    && !JSON.stringify(vGet.j).includes('stt-key'), JSON.stringify(vGet.j));
+  const vTest = await call(A, 'POST', '/api/admin/voice/test');
+  chk('voice Test button round-trips the provider (tone WAV)',
+    vTest.status === 200 && vTest.j?.ok === true && vTest.j?.source === 'org'
+    && vTest.j?.model === 'whisper-e2e' && vTest.j?.latencyMs >= 0, JSON.stringify(vTest.j));
+
+  // ── send-test-alert (rules test-fire; webhook channel vs the local stub) ──
+  const ruleMk = await call(L, 'POST', '/api/rules', { name: 'e2e test rule', channel: 'webhook',
+    severityMin: 60, cooldownM: 15, recipients: [`http://127.0.0.1:${sttStub.address().port}/hook`] });
+  chk('rule created for test-fire', ruleMk.status === 200 && !!ruleMk.j?.id, JSON.stringify(ruleMk.j));
+  const tf = await call(L, 'POST', `/api/rules/${ruleMk.j.id}/test`);
+  chk('test alert round-trips the webhook channel',
+    tf.status === 200 && tf.j?.ok === true && tf.j?.channel === 'webhook' && tf.j?.latencyMs >= 0,
+    `got ${tf.status} ${JSON.stringify(tf.j)}`);
+  const notifList = await call(L, 'GET', '/api/notifications');
+  chk('test-fire lands in the notification log tagged (test)',
+    JSON.stringify(notifList.j || []).includes('(test)'), JSON.stringify((notifList.j || [])[0]));
+  const tfDenied = await call(M, 'POST', `/api/rules/${ruleMk.j.id}/test`);
+  chk('analyst cannot test-fire (lead+)', tfDenied.status === 403, `got ${tfDenied.status}`);
+  const tfMissing = await call(L, 'POST', '/api/rules/999999/test');
+  chk('test-fire on unknown rule -> 404', tfMissing.status === 404, `got ${tfMissing.status}`);
+
+  // ── phase 3: insight analyzer (LLM stub behind the same local server) ─────
+  require('./src/llm').saveOrgConfig(1, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
+    model: 'llm-e2e', apiKey: 'llm-key' });
+  insightGroupId = g1.j.group.id;
+  await postAudio(M, `/api/room/${roomId}/transcribe?dur=900`, audio); // 2nd transcript -> above the quiet gate
+  const bi = require('./src/engine/bridge-insights');
+  await bi.runOnce();
+  feed = await call(M, 'GET', `/api/room/${roomId}/feed?limit=500`);
+  const insight = feed.j.items.find((i) => i.kind === 'insight');
+  chk('analyzer writes a critical insight with group attribution',
+    !!insight && insight.severity === 'critical' && insight.group_id === g1.j.group.id
+    && insight.user_id === null && /root cause/.test(insight.body), JSON.stringify(insight));
+  const ptr = db.prepare('SELECT analyzed_feed_id FROM bridges WHERE id = ?').get(roomId);
+  chk('analyzed_feed_id pointer advanced (window never billed twice)',
+    !!ptr && ptr.analyzed_feed_id > 0, JSON.stringify(ptr));
+  const nInsights = feed.j.items.filter((i) => i.kind === 'insight').length;
+  await bi.runOnce(); // nothing new was said -> quiet gate
+  const feedQ = await call(M, 'GET', `/api/room/${roomId}/feed?limit=500`);
+  chk('quiet room -> no duplicate insights',
+    feedQ.j.items.filter((i) => i.kind === 'insight').length === nInsights);
+  const notifBI = await call(L, 'GET', '/api/notifications');
+  chk('critical insight pushed through the alert rules',
+    JSON.stringify(notifBI.j || []).includes('(bridge insight)'),
+    JSON.stringify((notifBI.j || [])[0]));
 
   // ── webhook -> presence mirror ────────────────────────────────────────────
   const evJoin = { event: 'participant_joined', room: { name: `br-1-${roomId}` },
