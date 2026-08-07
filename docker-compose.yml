@@ -82,7 +82,7 @@ services:
   # the webhook URL in livekit.yaml. Open UDP 50100-50200 + TCP 7881 in your
   # firewall. Full walkthrough: docs/BRIDGE.md.
   livekit:
-    image: livekit/livekit-server:v1.9.0
+    image: livekit/livekit-server:v1.13.5
     profiles: ["bridge"]
     command: --config /etc/livekit.yaml
     environment:
