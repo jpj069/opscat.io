@@ -4,6 +4,9 @@ export type Role = 'admin' | 'cto' | 'lead' | 'analyst';
 export interface User {
   id: number; email: string; name: string; role: Role;
   color: string; mustChangePassword?: boolean; isSuperAdmin?: boolean;
+  // false for a link-invited account that has not set one yet — the app then
+  // offers to set a password instead of asking for the current one.
+  hasPassword?: boolean;
 }
 // one organization the signed-in user belongs to (multi-org switcher)
 export interface OrgMembership {
@@ -211,6 +214,8 @@ export interface ReputationOverview {
 export interface UserRow {
   id: number; email: string; name: string; role: string; color: string; active: boolean;
   lastSeenAt: number | null;
+  // invited but never activated — an unused, unexpired activation link is out there
+  pending?: boolean;
 }
 export interface ApiKeyRow {
   id: number; name: string; prefix: string; scopes: string[]; active: boolean;
@@ -277,7 +282,9 @@ export interface PlanInfo {
 export interface PlansResponse {
   edition: 'community' | 'cloud';
   plans: PlanInfo[];
-  auth: { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean };
+  auth: { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean;
+    // this instance can send mail at all — no magic-link tab and no invitation without it
+    mail: boolean };
 }
 
 export interface BillingUsage {

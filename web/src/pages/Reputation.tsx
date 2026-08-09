@@ -11,9 +11,9 @@ import { RefreshCwIcon } from 'lucide-react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import {
+import { Card, Button,
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard, Input} from '../ui';
+  Toggle, KpiCard, Input, HostInput} from '../ui';
 import { Select } from '../Select';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
@@ -159,7 +159,7 @@ export default function Reputation() {
     <div className="page">
       <PageHeader title="Reputation">
         {canWrite && (
-          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add asset</button>
+          <Button variant="primary" onClick={() => setShowAdd(true)}>+ Add asset</Button>
         )}
       </PageHeader>
 
@@ -179,7 +179,7 @@ export default function Reputation() {
         <div className="text-sm" style={{ color: SEV.critical, marginBottom: 10 }}>{err}</div>
       )}
 
-      <div className="card">
+      <Card>
         <div className="card-title">
           Monitored assets
           <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>
@@ -233,7 +233,7 @@ export default function Reputation() {
             );
           })}
         </TableScroll>
-      </div>
+      </Card>
 
       {sel && <AssetFlyout asset={sel} canWrite={canWrite} busy={busyId === sel.id} zones={zones}
         onToggle={() => toggle(sel)} onDelete={() => remove(sel)}
@@ -295,8 +295,8 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                 <span className="mono text-2xs text-text2">
                   {asset.enabled ? 'enabled' : 'paused'}</span>
               </span>
-              <button className="btn btn-sm" onClick={onRun} disabled={busy}>
-                {busy ? 'checking…' : 'Check now'}</button>
+              <Button size="sm" onClick={onRun} disabled={busy}>
+                {busy ? 'checking…' : 'Check now'}</Button>
               <span className="row" style={{ gap: 6 }}>
                 <span className="micro text-2xs">EVERY</span>
                 <Select title="Interval" value={String(asset.intervalS)} style={{ maxWidth: 92 }}
@@ -310,7 +310,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                   ]} />
               </span>
               <span style={{ flex: 1 }} />
-              <button className="btn btn-sm" onClick={onDelete} style={{ color: SEV.critical }}>Delete</button>
+              <Button size="sm" variant="danger" onClick={onDelete} >Delete</Button>
             </div>
           )}
         </div>
@@ -335,7 +335,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
           </div>
 
           {/* findings */}
-          <div className="card">
+          <Card>
             <div className="card-title">Blocklist status</div>
 
             {asset.error && (
@@ -388,10 +388,10 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                 {info.map((l) => l.name).join(', ')}
               </div>
             )}
-          </div>
+          </Card>
 
           {asset.mxHosts.length > 0 && (
-            <div className="card">
+            <Card>
               <div className="card-title">
                 Mail servers
                 <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>
@@ -425,7 +425,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                   </div>
                 ))}
               </div>
-            </div>
+            </Card>
           )}
 
           <ZoneBreakdown asset={asset} zones={zones} />
@@ -471,7 +471,7 @@ function ListingHistory({ assetId }: { assetId: number }) {
   };
 
   return (
-    <div className="card">
+    <Card>
       <div className="card-title">
         Listing history
         {rows && rows.length > 0 && (
@@ -512,7 +512,7 @@ function ListingHistory({ assetId }: { assetId: number }) {
           ))}
         </TableScroll>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -556,7 +556,7 @@ function ZoneBreakdown({ asset, zones }: { asset: ReputationAsset; zones: Reputa
   const shown = open ? rows : notable;
 
   return (
-    <div className="card">
+    <Card>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
         <div className="card-title" style={{ marginBottom: 0 }}>
           Lists checked
@@ -606,7 +606,7 @@ function ZoneBreakdown({ asset, zones }: { asset: ReputationAsset; zones: Reputa
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -659,7 +659,7 @@ function SingleTarget({ zones, intervalS, onAdded }: {
   return (
     <form onSubmit={submit}>
       <Field label="Target">
-        <Input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
+        <HostInput required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
           placeholder="198.51.100.25 or example.com" />
       </Field>
       <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
@@ -674,9 +674,9 @@ function SingleTarget({ zones, intervalS, onAdded }: {
         </div>
       </div>
       {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-        disabled={busy || !target.trim()}>
-        {busy ? '…' : 'Add asset'}</button>
+      <Button variant="primary" block
+ disabled={busy || !target.trim()}>
+        {busy ? '…' : 'Add asset'}</Button>
     </form>
   );
 }
@@ -728,7 +728,7 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
     <div>
       <form onSubmit={scan}>
         <Field label="Sending domain">
-          <Input required autoFocus value={domain} onChange={(e) => setDomain(e.target.value)}
+          <HostInput required autoFocus value={domain} onChange={(e) => setDomain(e.target.value)}
             placeholder="example.com" />
         </Field>
         <div className="text-2xs text-text2" style={{ margin: '-4px 0 12px', lineHeight: 1.7 }}>
@@ -737,10 +737,10 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
           (Microsoft&nbsp;365, Pardot, Mailgun) are shown but not offered — those are the
           provider's addresses, and they watch them.
         </div>
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={scanning || !domain.trim()}>
+        <Button variant="primary" block
+ disabled={scanning || !domain.trim()}>
           {scanning ? 'Reading SPF…' : 'Read SPF record'}
-        </button>
+        </Button>
       </form>
 
       {/* skeleton-exempt: SPF_GRID is ~330px at its minimum and fits a phone. */}
@@ -833,11 +833,11 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
           {err && <div className="text-sm" style={{ color: SEV.critical, margin: '10px 0 0' }}>{err}</div>}
 
           {fresh.length > 0 && (
-            <button type="button" className="btn btn-primary"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
-              disabled={busy || picked.size === 0} onClick={add}>
+            <Button variant="primary" block type="button"
+ style={{ marginTop: 12 }}
+ disabled={busy || picked.size === 0} onClick={add}>
               {busy ? '…' : `Add ${picked.size} asset${picked.size === 1 ? '' : 's'}`}
-            </button>
+            </Button>
           )}
         </div>
       )}

@@ -50,4 +50,15 @@ async function sendMail({ from, to, subject, html }) {
   }
 }
 
-module.exports = { sendMail, mailConfigured };
+// One button, one copyable URL — the shape all three transactional auth mails
+// share (sign-in link, invitation, password reset). Inline styles only: mail
+// clients strip <style> blocks, and several rewrite class names.
+function linkMail({ intro, cta, url, note }) {
+  return `<p style="font-family:sans-serif">${intro}</p>
+<p><a href="${url}" style="font-family:sans-serif;background:#388bfd;color:#fff;padding:10px 18px;
+border-radius:5px;text-decoration:none">${cta}</a></p>
+<p style="font-family:monospace;font-size:12px;color:#666">${url}</p>${
+  note ? `\n<p style="font-family:sans-serif;font-size:12px;color:#666">${note}</p>` : ''}`;
+}
+
+module.exports = { sendMail, mailConfigured, linkMail };

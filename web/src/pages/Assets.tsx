@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
@@ -64,20 +64,20 @@ export default function Assets() {
   return (
     <div className="page">
       <PageHeader title="Assets">
-        {canEdit && <button className="btn btn-primary" onClick={() => setAdding(true)}>+ Add</button>}
+        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}>+ Add</Button>}
       </PageHeader>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
         {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'vendor', 'source'] as const).map((k) => (
-          <button key={k} className="btn btn-sm" onClick={() => setFilter(k)}
-            style={{ background: filter === k ? 'var(--bg3)' : undefined,
-              color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>
+          <Button size="sm" key={k} onClick={() => setFilter(k)}
+ style={{ background: filter === k ? 'var(--bg3)' : undefined,
+ color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>
             {k === 'all' ? `all (${rows?.length ?? 0})` : `${KIND_UI[k].label} (${counts(k)})`}
-          </button>
+          </Button>
         ))}
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
@@ -107,7 +107,7 @@ export default function Assets() {
           </div>
         ))}
         </TableScroll>
-      </div>
+      </Card>
 
       {adding && (
         <Modal title="Add to monitoring" onClose={() => setAdding(false)}>
@@ -178,8 +178,8 @@ function CreateHeartbeatModal({ onClose, onCreated, onSecret }:
           No ping for longer than interval + grace raises a <span className="mono">heartbeat_missed</span> event.
         </div>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || !name.trim()}>{busy ? '…' : 'Create heartbeat'}</button>
+        <Button variant="primary" block
+ disabled={busy || !name.trim()}>{busy ? '…' : 'Create heartbeat'}</Button>
       </form>
     </Modal>
   );

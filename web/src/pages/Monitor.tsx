@@ -3,7 +3,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
-import { Avatar, SevBadge, Spark, TableSkeleton, Input} from '../ui';
+import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input} from '../ui';
 import { PanelTopIcon, PanelLeftIcon, SquareIcon } from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
@@ -12,7 +12,10 @@ const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
 };
 // one source of truth per grid: the rows AND their loading placeholder read it
 const EVENT_COLS = '44px 86px 52px 60px minmax(120px,0.8fr) minmax(160px,1.2fr) 30px';
-const LOG_COLS = '64px 130px 1fr';
+// minmax, not 1fr: the real rows need the track to grow to the longest line
+// (that is what makes the list scroll sideways), and the SKELETON needs it not
+// to collapse to a bar's intrinsic width. One constant feeds both.
+const LOG_COLS = '64px 130px minmax(240px, max-content)';
 
 export default function Monitor() {
   const app = useApp();
@@ -82,11 +85,12 @@ export default function Monitor() {
         <div style={{ flex: 1 }} />
         <span className="mono text-2xs text-text3">{events.length} events</span>
       </div>
+      {/* Vertical on the outside, horizontal inside TableScroll. EVENT_COLS is ~552px
+          at its minimum, so on a 390px phone this list DOES overflow — it used to scroll
+          sideways anyway (overflow-y: auto computes overflow-x to auto next to it) but
+          with no fade and no affordance, so it read as clipped. */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        {/* skeleton-exempt: faithful to its rows — this list has no scroller at all,
-            and EVENT_COLS is ~552px at its minimum. If that overflows on a phone it is
-            the TABLE that needs the scroller, not the placeholder; the skeleton must
-            not quietly look narrower than what replaces it. */}
+        <TableScroll minWidth={620}>
         {app.eventsLoading && <TableSkeleton cols={EVENT_COLS} rows={7} />}
         {!app.eventsLoading && events.length === 0 && (
           <div className="text-text3 text-sm" style={{ padding: 40, textAlign: 'center'}}>
@@ -132,6 +136,7 @@ export default function Monitor() {
             </div>
           );
         })}
+        </TableScroll>
       </div>
     </div>
   );
@@ -153,8 +158,14 @@ export default function Monitor() {
       </div>
       <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column-reverse' }}>
         <div>
-          {/* skeleton-exempt: LOG_COLS is 64px + 130px + 1fr — it fits a 390px phone,
-              so there is nothing to scroll sideways. */}
+          {/* One log line, one row — it scrolls sideways to the end instead of wrapping
+              into four. Wrapping kept every character on screen but destroyed the
+              column rhythm the timestamp and device columns exist for, and a 300-char
+              syslog line pushed the next entry a screen further down. `fit` sizes the
+              scroller to the widest line so borders span the whole scrolled width. */}
+          {/* peek off: the nudge animation is an affordance for a static table; on a
+              stream that appends a row a second it reads as the list twitching. */}
+          <TableScroll fit peek={false}>
           {app.logsLoading && <TableSkeleton cols={LOG_COLS} rows={10} dense />}
           {logs.map((l, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: LOG_COLS, gap: 10,
@@ -162,10 +173,11 @@ export default function Monitor() {
               <span className="mono text-xs text-text3">{fmtTime(l.ts)}</span>
               <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>
-              <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
-                {l.line}</span>
+              <span className="mono text-xs" style={{ color: logSevColor(l.sev),
+                whiteSpace: 'nowrap' }}>{l.line}</span>
             </div>
           ))}
+          </TableScroll>
         </div>
       </div>
     </div>

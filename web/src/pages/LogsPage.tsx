@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { fmtDateTime, logSevColor } from '../format';
-import { TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { LogRow } from '../types';
 
@@ -61,12 +61,12 @@ export default function LogsPage() {
           options={HOURS.map((h) => ({ value: String(h), label: `${h} h` }))} />
         <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
           style={{ flex: '1 1 150px', maxWidth: 400 }} />
-        <button className="btn btn-sm" onClick={() => setFilter('')}>Clear</button>
+        <Button size="sm" onClick={() => setFilter('')}>Clear</Button>
         <div style={{ flex: 1 }} />
         <span className="mono text-xs text-text3">{rows.length} lines</span>
       </div>
 
-      <div className="card" style={{ flex: 1, minHeight: 0, padding: 0, display: 'flex',
+      <Card style={{ flex: 1, minHeight: 0, padding: 0, display: 'flex',
         flexDirection: 'column', overflow: 'hidden' }}>
         {/* the ONE horizontal scroller for this table (design-system TableScroll):
             head + rows scroll sideways together, rows scroll vertically inside */}
@@ -96,7 +96,7 @@ export default function LogsPage() {
         </div>
         </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

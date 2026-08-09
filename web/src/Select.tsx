@@ -25,8 +25,23 @@
 import React from 'react';
 import { Check, ChevronDown, X } from 'lucide-react';
 import { topLayer } from './toplayer';
+import { Button } from './ui';
 
-export type SelectOption = { value: string; label: string; disabled?: boolean };
+export type SelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+  /**
+   * Trailing content, right-aligned — a price, a plan badge, a count.
+   *
+   * It sits BESIDE the label at every width, one shape rather than two. The label
+   * therefore WRAPS instead of truncating: beside a badge at 390px a long label is
+   * cut to about 22 characters, and a value nobody can read is worse than a row two
+   * lines tall. (Decided against the rendering, not on paper — see the same choice
+   * in the template's SearchableSelect.)
+   */
+  meta?: React.ReactNode;
+};
 
 // Below this many options a search field is noise — a month picker (12) must not
 // get one, a check list (dozens) must.
@@ -224,7 +239,8 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
             // up UNDER the finger and would highlight whatever row lands there
             onMouseEnter={mobile ? undefined : () => setActive(i)}>
             <Check size={15} className="sel-tick" aria-hidden />
-            <span>{o.label}</span>
+            <span className="sel-lbl">{o.label}</span>
+            {o.meta && <span className="sel-meta">{o.meta}</span>}
           </button>
         </li>
       ))}
@@ -258,7 +274,7 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
           {(searchable || multi) && (
             <div className="sel-foot">
               {search}
-              {multi && <button type="button" className="btn btn-primary sel-done" onClick={onClose}>Done</button>}
+              {multi && <Button variant="primary" className="sel-done" type="button" onClick={onClose}>Done</Button>}
             </div>
           )}
         </div>

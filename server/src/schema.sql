@@ -66,7 +66,13 @@ CREATE TABLE IF NOT EXISTS login_tokens (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at    INTEGER NOT NULL,
   expires_at    INTEGER NOT NULL,
-  used_at       INTEGER
+  used_at       INTEGER,
+  -- 'login'  = magic-link sign-in, 15 min, requested by the account owner
+  -- 'invite' = account activation / admin password reset, 7 days, issued to an
+  --            address that has not proven ownership yet. Same table because the
+  --            security property is identical (single use, hashed, expiring); the
+  --            purpose keeps the two TTLs and the two cleanup rules apart.
+  purpose       TEXT NOT NULL DEFAULT 'login'
 ) WITHOUT ROWID;
 
 -- pending OAuth state (CSRF for the Google login roundtrip)

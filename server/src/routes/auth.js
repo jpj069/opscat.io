@@ -10,14 +10,35 @@ const mailer = require('../mailer');
 
 const router = express.Router();
 
+// The user object the browser gets, in one place — it is returned from three
+// routes (password login, magic-link login, /me) and they must not drift.
+// `hasPassword` is what lets the UI ask for the current one only when there IS
+// one: an invited user sets their first password without proving anything, they
+// proved ownership of the address by opening the activation link.
+// Two shapes reach this: a full row from `SELECT *` (the two login routes) and
+// the request context, which deliberately omits pass_hash and carries the derived
+// `has_password` instead (see security.js). Reading only `pass_hash` here is how
+// /me silently answered hasPassword:false forever — caught by e2e-invite.js.
+const publicUser = (u) => ({
+  id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
+  mustChangePassword: !!u.must_change_password,
+  hasPassword: u.has_password !== undefined ? !!u.has_password : !!u.pass_hash,
+  isSuperAdmin: !!u.is_super_admin,
+});
+
 router.post('/login', (req, res) => {
   const ip = sec.clientIp(req);
   if (!sec.authLimiter.allow(ip)) return httpError(res, 429, 'too many attempts, slow down');
   const { email, password } = req.body || {};
   if (!isEmail(email) || !isStr(password, 200)) return httpError(res, 400, 'email and password required');
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase());
+  // An empty pass_hash means "this account has no password" — an invited user who
+  // has not set one, or an SSO/reset account. It must never be loggable-into with
+  // any password, so it takes the same dummy-hash path as an unknown address (both
+  // for the answer and for the timing).
+  const hasPass = !!(user && user.pass_hash);
   // Always run the hash to keep timing uniform for unknown users.
-  const ok = user
+  const ok = hasPass
     ? verifyPassword(password, user.pass_salt, user.pass_hash)
     : (verifyPassword(password, '00'.repeat(16), '00'.repeat(64)), false);
   if (!ok || !user.active) {
@@ -27,11 +48,7 @@ router.post('/login', (req, res) => {
   const { sid, csrf } = sec.createSession(user.id, req);
   sec.setSessionCookie(res, sid);
   sec.audit(user.id, 'login', ip);
-  res.json({
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, color: user.color,
-      mustChangePassword: !!user.must_change_password, isSuperAdmin: !!user.is_super_admin },
-    csrf,
-  });
+  res.json({ user: publicUser(user), csrf });
 });
 
 // --- magic-link login (passwordless) ---
@@ -47,9 +64,13 @@ router.post('/magic-link', async (req, res) => {
     try {
       const token = crypto.randomBytes(32).toString('base64url');
       const t = now();
-      db.prepare('DELETE FROM login_tokens WHERE user_id = ? OR expires_at < ?').run(user.id, t);
-      db.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at)
-        VALUES (?, ?, ?, ?)`).run(sha256(token), user.id, t, t + 15 * 60 * 1000);
+      // Only this user's OTHER SIGN-IN tokens go — a pending invitation must
+      // survive, or requesting a magic link would silently void the activation
+      // link the admin just sent. Expired rows of any purpose are swept here too.
+      db.prepare(`DELETE FROM login_tokens
+        WHERE (user_id = ? AND purpose = 'login') OR expires_at < ?`).run(user.id, t);
+      db.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
+        VALUES (?, ?, ?, ?, 'login')`).run(sha256(token), user.id, t, t + 15 * 60 * 1000);
       const url = `${config.baseUrl}/app/login?token=${token}`;
       const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
       // audit before the send so a delivery failure is still visible as a
@@ -57,10 +78,10 @@ router.post('/magic-link', async (req, res) => {
       sec.audit(user.id, 'magic_link_requested', ip);
       await mailer.sendMail({
         from, to: [user.email], subject: 'Your OpsCat sign-in link',
-        html: `<p style="font-family:sans-serif">Click to sign in to OpsCat (valid 15 minutes):</p>
-<p><a href="${url}" style="font-family:sans-serif;background:#388bfd;color:#fff;padding:10px 18px;
-border-radius:5px;text-decoration:none">Sign in to OpsCat</a></p>
-<p style="font-family:monospace;font-size:12px;color:#666">${url}</p>`,
+        html: mailer.linkMail({
+          intro: 'Click to sign in to OpsCat (valid 15 minutes):',
+          cta: 'Sign in to OpsCat', url,
+        }),
       });
     } catch (e) { console.error('magic-link mail failed:', e.message); }
   }
@@ -80,12 +101,11 @@ router.post('/magic-login', (req, res) => {
   if (!user) return httpError(res, 401, 'account disabled');
   const { sid, csrf } = sec.createSession(user.id, req);
   sec.setSessionCookie(res, sid);
-  sec.audit(user.id, 'login_magic_link', ip);
-  res.json({
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, color: user.color,
-      mustChangePassword: !!user.must_change_password, isSuperAdmin: !!user.is_super_admin },
-    csrf,
-  });
+  sec.audit(user.id, row.purpose === 'invite' ? 'invite_accepted' : 'login_magic_link', ip);
+  // `invited` tells the app this was an activation, not a routine sign-in, so it
+  // can offer "set a password" once. An offer, not a gate: the account works
+  // passwordless, and a link they just proved they can read is how they get back in.
+  res.json({ user: publicUser(user), csrf, invited: row.purpose === 'invite' });
 });
 
 router.post('/logout', sec.requireSession, (req, res) => {
@@ -95,12 +115,7 @@ router.post('/logout', sec.requireSession, (req, res) => {
 });
 
 router.get('/me', sec.requireSession, (req, res) => {
-  res.json({
-    user: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role,
-      color: req.user.color, mustChangePassword: !!req.user.must_change_password,
-      isSuperAdmin: !!req.user.is_super_admin },
-    csrf: req.session.csrf,
-  });
+  res.json({ user: publicUser(req.user), csrf: req.session.csrf });
 });
 
 router.post('/change-password', sec.requireSession, (req, res) => {
@@ -108,10 +123,12 @@ router.post('/change-password', sec.requireSession, (req, res) => {
   if (!isStr(newPassword, 200)) return httpError(res, 400, 'newPassword required');
   if (newPassword.length < 12) return httpError(res, 400, 'new password must be at least 12 characters');
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  // A forced change replaces an admin-issued password the user may never have
-  // seen (e.g. after an SSO or magic-link login) — only voluntary changes must
-  // prove knowledge of the old password.
-  if (!user.must_change_password) {
+  // Two cases need no proof of the old password: a FORCED change replaces an
+  // admin-issued one the user may never have seen, and an account with NO
+  // password (invited, or reset by an admin) has nothing to prove — ownership of
+  // the address was proven by opening the link that created this session.
+  // Only a voluntary change on an account that has a password must prove it.
+  if (!user.must_change_password && user.pass_hash) {
     if (!isStr(currentPassword, 200)) return httpError(res, 400, 'currentPassword and newPassword required');
     if (!verifyPassword(currentPassword, user.pass_salt, user.pass_hash)) {
       return httpError(res, 401, 'current password incorrect');

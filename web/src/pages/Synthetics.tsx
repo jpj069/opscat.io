@@ -5,10 +5,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
-import {
+import { Card, Button,
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, Textarea} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, HostInput, Textarea} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -196,15 +196,15 @@ export default function Synthetics() {
             </span>
           )}
           {canWrite && (
-            <button className="btn" onClick={runChecks} disabled={running}>
+            <Button onClick={runChecks} disabled={running}>
               {running ? 'running…' : 'Run checks now'}
-            </button>
+            </Button>
           )}
           {canWrite && tab === 'checks' && (
-            <button className="btn btn-primary" onClick={() => setShowAddCheck(true)}>+ New check</button>
+            <Button variant="primary" onClick={() => setShowAddCheck(true)}>+ New check</Button>
           )}
           {canWrite && tab === 'agents' && (
-            <button className="btn btn-primary" onClick={() => setShowAddAgent(true)}>+ New Sensor Agent</button>
+            <Button variant="primary" onClick={() => setShowAddAgent(true)}>+ New Sensor Agent</Button>
           )}
         </div>
       </PageHeader>
@@ -230,7 +230,7 @@ export default function Synthetics() {
           </div>
 
           {/* checks table */}
-          <div className="card" style={{ padding: 0 }}>
+          <Card style={{ padding: 0 }}>
             <TableScroll stickyFirst minWidth={960}>
               <div className="tbl-head" style={{ gridTemplateColumns: CHECK_GRID }}>
                 <span>Target</span><span>Check</span><span>Agents</span>
@@ -279,15 +279,15 @@ export default function Synthetics() {
                       onClick={(e) => e.stopPropagation()}>
                       {canWrite && <Toggle on={c.enabled} onClick={() => toggleCheck(c)} />}
                       {canWrite && (
-                        <button className="btn btn-sm" title="Delete" onClick={() => removeCheck(c)}
-                          style={{ color: SEV.critical }}>×</button>
+                        <Button size="sm" variant="danger" title="Delete" onClick={() => removeCheck(c)}
+ >×</Button>
                       )}
                     </span>
                   </div>
                 );
               })}
             </TableScroll>
-          </div>
+          </Card>
         </>
       )}
 
@@ -366,7 +366,7 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
                   {check.enabled ? 'enabled' : 'paused'}</span>
               </span>
               <span style={{ flex: 1 }} />
-              <button className="btn btn-sm" onClick={onDelete} style={{ color: SEV.critical }}>Delete</button>
+              <Button size="sm" variant="danger" onClick={onDelete} >Delete</Button>
             </div>
           )}
         </div>
@@ -437,12 +437,12 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
           )}
 
           {/* latency chart for selected agent */}
-          <div className="card">
+          <Card>
             <div className="card-title">
               Latency 24h — {locById.get(chartLoc ?? -1)?.city ?? '—'}
             </div>
             <LineChart points={seriesVals} color={SEV.cyan} fmt={(v) => `${Math.round(v)}ms`} />
-          </div>
+          </Card>
 
           {/* config */}
           <div className="mono text-xs text-text2" style={{ background: 'var(--bg3)',
@@ -533,12 +533,12 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
                     {loc.nodeStatus === 'provisioning' ? 'provisioning' : loc.online ? 'online' : 'offline'}</span>
                 </span>
                 {canWrite && loc.kind === 'customer' && (
-                  <button className="btn btn-sm" style={{ color: SEV.critical }}
-                    onClick={(e) => { e.stopPropagation(); removeLocation(loc); }}>×</button>
+                  <Button size="sm" variant="danger"
+ onClick={(e) => { e.stopPropagation(); removeLocation(loc); }}>×</Button>
                 )}
                 {canWrite && loc.kind === 'managed' && loc.booked && (
-                  <button className="btn btn-sm" title="Unbook"
-                    onClick={(e) => { e.stopPropagation(); unbook(loc); }}>unbook</button>
+                  <Button size="sm" title="Unbook"
+ onClick={(e) => { e.stopPropagation(); unbook(loc); }}>unbook</Button>
                 )}
               </div>
             </div>
@@ -547,7 +547,7 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
       </div>
 
       {/* route card for selected agent */}
-      <div className="card">
+      <Card>
         <div className="card-title">
           Route — from {locations?.find((l) => l.id === selLoc)?.city ?? '—'}</div>
         {route === null
@@ -570,7 +570,7 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
               </div>
             );
           })}
-      </div>
+      </Card>
 
       {canWrite && <CloudCredentialsCard />}
     </>
@@ -593,7 +593,7 @@ function CloudCredentialsCard() {
   };
 
   return (
-    <div className="card" style={{ padding: 0 }}>
+    <Card style={{ padding: 0 }}>
       <div className="card-title" style={{ padding: '12px 16px 0' }}>Cloud credentials
         <span className="mono text-2xs text-text3 font-normal">
           bring your own cloud — encrypted at rest, secrets never shown again</span>
@@ -604,7 +604,7 @@ function CloudCredentialsCard() {
           <span className="mono text-sm text-text1">{c.label}</span>
           <span className="mono text-xs text-text3">{c.hint}</span>
           <span style={{ flex: 1 }} />
-          <button className="btn btn-sm" style={{ color: SEV.critical }} onClick={() => revoke(c)}>revoke</button>
+          <Button size="sm" variant="danger" onClick={() => revoke(c)}>revoke</Button>
         </div>
       ))}
       {creds && creds.length === 0 && (
@@ -612,12 +612,12 @@ function CloudCredentialsCard() {
           no cloud keys yet — needed for AWS/GCP hosted sensor agents</div>
       )}
       <div style={{ padding: '10px 16px' }}>
-        <button className="btn btn-sm" onClick={() => setAdding(true)}>+ Add credential</button>
+        <Button size="sm" onClick={() => setAdding(true)}>+ Add credential</Button>
         <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>AWS · GCP</span>
       </div>
       {adding && <AddCredentialModal onClose={() => setAdding(false)}
         onAdded={() => { setAdding(false); load(); }} />}
-    </div>
+    </Card>
   );
 }
 
@@ -675,8 +675,8 @@ function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded
           </Field>
         )}
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Store encrypted'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : 'Store encrypted'}</Button>
       </form>
     </Modal>
   );
@@ -728,7 +728,7 @@ function AddCheckModal({ locations, onClose, onAdded }: {
             options={CHECK_TYPES.map((t) => ({ value: t, label: t }))} />
         </Field>
         <Field label="Target">
-          <Input required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
+          <HostInput required autoFocus value={target} onChange={(e) => setTarget(e.target.value)}
             placeholder={PLACEHOLDER[type]} />
         </Field>
         <Field label="Interval (seconds)">
@@ -798,9 +798,9 @@ function AddCheckModal({ locations, onClose, onAdded }: {
           </div>
         )}
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || !target || (!allAgents && selAgents.length === 0)}>
-          {busy ? '…' : 'Create check'}</button>
+        <Button variant="primary" block
+ disabled={busy || !target || (!allAgents && selAgents.length === 0)}>
+          {busy ? '…' : 'Create check'}</Button>
       </form>
     </Modal>
   );
@@ -889,8 +889,8 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
           <span className="text-text3" style={{ display: 'block'}}>
             # outbound HTTPS only, no inbound needed</span>
         </div>
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          onClick={onClose}>I stored the key</button>
+        <Button variant="primary" block
+ onClick={onClose}>I stored the key</Button>
       </Modal>
     );
   }
@@ -933,7 +933,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
       {step === 2 && (
         <>
           <div className="row" style={{ gap: 8, marginBottom: 12 }}>
-            <button className="btn btn-sm" onClick={() => { setStep(1); setErr(''); }}>← back</button>
+            <Button size="sm" onClick={() => { setStep(1); setErr(''); }}>← back</Button>
             <span className="mono text-xs text-text2">
               {prov === 'self' ? 'self hosted' : prov === 'managed' ? 'OpsCat Managed' : `${prov.toUpperCase()} hosted`}
             </span>
@@ -1004,12 +1004,12 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
             </>
           )}
           {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-            onClick={create}
-            disabled={busy || (prov === 'self' ? (!city || cc.length !== 2) : !entry)}>
+          <Button variant="primary" block
+ onClick={create}
+ disabled={busy || (prov === 'self' ? (!city || cc.length !== 2) : !entry)}>
             {busy ? '…' : prov === 'self' ? 'Create & show probe key'
               : prov === 'managed' ? 'Book location' : 'Provision sensor agent'}
-          </button>
+          </Button>
         </>
       )}
     </Modal>

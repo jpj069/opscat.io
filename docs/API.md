@@ -56,10 +56,10 @@ Super-admins may target any org with `?org=<id>` or the `X-OpsCat-Org` header.
 
 | Method & path | Body | Notes |
 |---|---|---|
-| POST `/api/auth/login` | `{email, password}` | → `{user, csrf}`; sets session cookie |
-| POST `/api/auth/magic-link` | `{email}` | always `{ok:true}`; sends sign-in link via Resend |
-| POST `/api/auth/magic-login` | `{token}` | consumes link token → `{user, csrf}` |
-| POST `/api/auth/change-password` | `{currentPassword?, newPassword}` | min 12 chars; `currentPassword` not required while a forced change (`mustChangePassword`) is pending |
+| POST `/api/auth/login` | `{email, password}` | → `{user, csrf}`; sets session cookie. An account with **no password** (link-invited, or reset by an admin) is refused here whatever is sent |
+| POST `/api/auth/magic-link` | `{email}` | always `{ok:true}`; sends sign-in link via the configured transport. `GET /api/plans` → `auth.mail` says whether there is one — the login screen hides the tab without it |
+| POST `/api/auth/magic-login` | `{token}` | consumes a sign-in **or** activation token → `{user, csrf, invited}`. `invited:true` marks an activation (7-day invite token), so the app offers "set a password" once |
+| POST `/api/auth/change-password` | `{currentPassword?, newPassword}` | min 12 chars; `currentPassword` not required while a forced change (`mustChangePassword`) is pending, nor on an account that has none yet (`hasPassword:false`) |
 | GET `/api/auth/me` | — | current user + csrf (role reflects the active org) |
 | GET `/api/auth/orgs` | — | the caller's orgs → `{activeOrgId, orgs:[{orgId,name,slug,plan,role,onboardingDone}]}` |
 | POST `/api/auth/switch-org` | `{orgId}` | **cloud only** — set the session's active org (caller must be a member) |
@@ -149,7 +149,30 @@ one-liner shown in onboarding and Settings → Agents:
 - Public vendor grid (no auth, off by default — publish with setting `vendor_grid_published=1` or env `OPSCAT_GRID_PUBLISHED=1`): `GET /api/public/vendor-grid` → `{updatedAt, total, disrupted, counts:{total,green,warn,red}, vendors:[{slug,name,status,activeIncidents,userReports60m,uptimePct,days:[{day,worst}],pageUrl,lastCheckedAt}]}` (org 1's monitored vendors, cached 60 s; `uptimePct`/`days` come from the per-minute `vendor_days` rollup, 45-day window); HTML at `GET /vendor-grid` (query params: `view=grid|list` — list shows 45-day heatbars + uptime, `f=all|green|warn|red` filter pills), and served as the front page on the grid host (`OPSCAT_GRID_HOST`, default `radar.opscat.io` — Caddy vhost included, DNS record required). Community signal: `POST /vendor-grid/report` (form) / `POST /api/public/vendor-grid/report` (JSON) — `{slug}` + honeypot `website`; per-IP rate limit, one report per visitor per vendor per hour, salted IP hash only, pruned after 30 days; grid shows `userReports60m`, ≥5 reports/60 min raise a `vendor_reports_spike` event in org 1
 - `GET /api/superadmin/custom-vendors` (super-admin) — custom feeds across all orgs grouped by URL with org counts: the curation signal for catalog promotion (never public)
 - `GET /api/status-reports?hours=` → `{total, reports:[{ts,component,message}]}` — anonymous problem reports submitted on the public status page. Public submission: `POST /api/status/report[?org=slug]` (JSON) or the status page's own form (`POST /status/report`, `POST /status/:slug/report`, urlencoded) — `{componentId?, message?}` + honeypot field `website`; rate-limited per IP (3/min), one report per visitor per 10 min, stores only a salted IP hash. ≥ `status_reports_threshold` (default 5) reports in 15 min raise a `user_reports_spike` event (severity 75, 85 at 3× threshold, re-raised at most every 10 min)
-- `GET /api/admin/users` (lead+) lists org **members** with their per-org role. POST/PATCH admin only: POST with a known e-mail attaches that existing account to the org (multi-org), an unknown e-mail creates a user (`initialPassword` once); PATCH `{role}` sets the per-org role, `{remove:true}` drops the member from this org, `{resetPassword:true}` → one-time password
+- `GET /api/admin/users` (lead+) lists org **members** with their per-org role. POST/PATCH admin only: POST with a known e-mail attaches that existing account to the org (multi-org, → `{added:true}`), an unknown e-mail creates a user; PATCH `{role}` sets the per-org role, `{remove:true}` drops the member from this org, `{resetPassword:true}` resets the password.
+
+  Creating a user and resetting a password both have **two outcomes**, and the answer says which:
+
+  | Mail transport | Answer | Account state |
+  |---|---|---|
+  | configured | `{invited:true, email}` | no password at all; a single-use activation link, valid 7 days, was mailed |
+  | none | `{initialPassword}` | that password is set and `must_change_password = 1` — hand it over out of band |
+  | send failed | `{initialPassword, mailFailed:true}` | same as above; the account is never left unreachable |
+  | `manual:true` in the body | `{initialPassword}` | the deliberate escape hatch — a mailbox that is not reachable yet, a shared NOC account. Only the literal `true` takes it |
+
+  `GET` also returns **`pending`** per row — an unused, unexpired activation link is
+  outstanding. Derived from the token, not from an empty password: an SSO account has no
+  password either and is not pending, and an expired link needs re-inviting.
+
+  **`POST /api/superadmin/orgs`** (platform-initiated org creation) takes the same three
+  outcomes, plus one of its own: an address that already has an OpsCat account becomes
+  the owner of the new organization (`{attached:true}`) rather than being refused —
+  multi-org is a supported shape. Nothing is issued and nothing is mailed in that case.
+  New organizations start on `free` with **no** `trial_ends_at`: `free` is a forever
+  plan, nothing ever read that column to expire anything, and the billing page showed a
+  trial end date on a plan that does not end.
+
+  The link path is the default wherever mail works: it means no shared secret ever exists, so there is nothing for the forced-change dialog to guard. See `server/src/lib/invites.js` and `server/e2e-invite.js` (61 checks).
 - `GET/POST/PATCH /api/admin/apikeys` (lead+) — POST → `{key}` shown once
 - `GET/POST/PATCH/DELETE /api/admin/snmp/targets` (lead+) — `{name,host,port,version:'2c'|'3',community?,oids:[{oid,label}],intervalS}`; v3 instead of community: `{v3User, v3Level:'noAuthNoPriv'|'authNoPriv'|'authPriv', v3AuthProtocol:'sha'|'md5', v3AuthKey, v3PrivProtocol:'aes'|'des', v3PrivKey}` (keys stored encrypted, never returned)
 - `GET /api/admin/agents` (`{id,name,group,hostname,platform,version,active,autoUpdate,lastSeenAt,online}`), POST (lead+, `{name,group,autoUpdate?}` default true) → `{token}` once, PATCH `/:id` `{autoUpdate}`, `GET /api/admin/agents/:id/metrics?hours=`

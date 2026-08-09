@@ -106,13 +106,13 @@
 body[data-theme="dark"] {
   --bg0: #0b0e14; --bg1: #0d1117; --bg2: #161b22; --bg3: #21262d;
   --border: #30363d; --text0: #f0f6fc; --text1: #c9d1d9; --text2: #8b949e; --text3: #484f58;
-  --low: #388bfd;
+  --low: #388bfd; --critical: #f85149;
 }
 body[data-theme="light"] {
   color-scheme: light;
   --bg0: #f3f5f8; --bg1: #ffffff; --bg2: #ffffff; --bg3: #eaeef1;
   --border: #d3d9e0; --text0: #1f2328; --text1: #3d444d; --text2: #5b6570; --text3: #838c96;
-  --low: #1a6feb;
+  --low: #1a6feb; --critical: #cf222e;
 }
 
 body[data-density="comfortable"] { --row-py: 11px; --log-py: 6px; }
@@ -294,6 +294,14 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .btn-primary { background: #388bfd; border-color: #388bfd; color: #fff; }
 .btn-primary:hover { background: #2f7de6; color: #fff; }
 .btn-sm { padding: 3px 8px; font-size: var(--t-xs); border-radius: 3px; }
+/* Destructive action. Seven call sites wrote `style={{ color: SEV.critical }}` by
+   hand, two of them with the literal hex instead of the token. */
+.btn-danger { color: var(--critical); }
+.btn-danger:hover { color: var(--critical); border-color: var(--critical); }
+/* Full width, label centred — 36 call sites repeated
+   `style={{ width: '100%', justifyContent: 'center' }}`, the single most-copied
+   inline style in the app. */
+.btn-block { width: 100%; justify-content: center; }
 
 /* pills + badges */
 .pill {
@@ -440,14 +448,21 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .sel-list:focus-visible { outline: none; }
 .sel-opt {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left;
   padding: 7px 10px; border-radius: 5px; font-size: var(--t-base); color: var(--text1);
 }
 .sel-opt[aria-selected="true"] { color: var(--text0); font-weight: 600; background: var(--bg3); }
 .sel-opt.active { box-shadow: inset 0 0 0 1px var(--low); }
 .sel-opt[disabled] { opacity: 0.45; cursor: not-allowed; }
-.sel-opt > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sel-tick { flex-shrink: 0; color: var(--low); opacity: 0; }
+/* Without `meta` the label keeps its single-line ellipsis — a plain list reads
+   better with an even row rhythm. WITH a badge beside it the label wraps instead,
+   because at 390px the badge eats the width and a truncated label is unreadable. */
+.sel-opt > .sel-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.sel-opt:has(> .sel-meta) > .sel-lbl { overflow: visible; white-space: normal;
+  overflow-wrap: anywhere; }
+.sel-meta { flex-shrink: 0; margin-left: auto; }
+.sel-tick { flex-shrink: 0; margin-top: 2px; color: var(--low); opacity: 0; }
 .sel-opt[aria-selected="true"] .sel-tick { opacity: 1; }
 .sel-empty { padding: 12px 14px; color: var(--text3); font-size: var(--t-base); }
 /* the ONE real text field in here — 16px, or iOS zooms the page on focus */

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { UserRow } from '../types';
 
@@ -14,7 +14,13 @@ const ROLE_COLOR: Record<string, string> = {
 const roleColor = (r: string) => ROLE_COLOR[r] || '#8b949e';
 const GRID = '260px 220px 90px 90px 110px 170px';
 
-interface Secret { title: string; hint: string; password: string; }
+// Two possible outcomes of an invite or a reset, and the UI has to say WHICH.
+// With a mail transport the colleague gets an activation link and no secret ever
+// exists; without one the admin has to hand a password over, and then the dialog
+// should say so instead of pretending an invitation went out.
+interface Secret { title: string; hint: string; password?: string; sentTo?: string; }
+// what the server answers for both routes
+interface InviteResult { initialPassword?: string; invited?: boolean; email?: string; mailFailed?: boolean; }
 
 export default function Users() {
   const app = useApp();
@@ -37,12 +43,22 @@ export default function Users() {
   };
   const reset = async (u: UserRow) => {
     try {
-      const r = await api.patch<{ initialPassword: string }>(`/api/admin/users/${u.id}`, { resetPassword: true });
-      setSecret({
-        title: `Password reset — ${u.name}`,
-        hint: 'Shown only once. Give it to the user — it must be changed at first login.',
-        password: r.initialPassword,
-      });
+      const r = await api.patch<InviteResult>(`/api/admin/users/${u.id}`, { resetPassword: true });
+      const what = u.pending ? 'Invitation resent' : `Password reset — ${u.name}`;
+      setSecret(r.invited
+        ? { title: what,
+            hint: u.pending
+              ? 'A fresh activation link is on its way. The previous one no longer works.'
+              : 'They can set a new password from the link. The old one no longer works and '
+                + 'every session has been signed out.',
+            sentTo: r.email }
+        : { title: what,
+            hint: r.mailFailed
+              ? 'The reset mail could not be delivered, so here is a one-time password instead. '
+                + 'Hand it over securely — it must be changed at first sign-in.'
+              : 'No mail transport is configured, so here is a one-time password. Hand it over '
+                + 'securely — it must be changed at first sign-in.',
+            password: r.initialPassword });
       load();
     } catch (e) { setErr(e instanceof ApiError ? e.message : 'reset failed'); }
   };
@@ -51,13 +67,13 @@ export default function Users() {
     <div className="page">
       <PageHeader title="Users">
         {isAdmin && (
-          <button className="btn btn-primary" onClick={() => setInvite(true)}>+ Invite user</button>
+          <Button variant="primary" onClick={() => setInvite(true)}>+ Invite user</Button>
         )}
       </PageHeader>
 
-      {err && <div className="card text-base" style={{ color: '#f85149'}}>{err}</div>}
+      {err && <Card className="text-base" style={{ color: '#f85149'}}>{err}</Card>}
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={960}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span>User</span><span>Email</span><span>Role</span>
@@ -92,10 +108,11 @@ export default function Users() {
               background: alpha(roleColor(u.role), 0.12), border: `1px solid ${alpha(roleColor(u.role), 0.3)}` }}>
               {u.role}
             </span>
-            {/* status */}
+            {/* status — "Invited" is its own state: the account exists but nobody
+                has opened the activation link yet, which is invisible otherwise */}
             <span className="row" style={{ gap: 5 }}>
-              <GlowDot color={u.active ? '#3fb950' : '#8b949e'} />
-              <span className="text-sm">{u.active ? 'Active' : 'Inactive'}</span>
+              <GlowDot color={!u.active ? '#8b949e' : u.pending ? '#e3b341' : '#3fb950'} />
+              <span className="text-sm">{!u.active ? 'Inactive' : u.pending ? 'Invited' : 'Active'}</span>
             </span>
             {/* last seen */}
             <span className="mono text-xs text-text2">{relTime(u.lastSeenAt)}</span>
@@ -103,22 +120,23 @@ export default function Users() {
             <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
               {isAdmin ? (
                 <>
-                  <button className="btn btn-sm" onClick={() => setEdit(u)}>Edit</button>
+                  <Button size="sm" onClick={() => setEdit(u)}>Edit</Button>
                   {u.id !== app.user?.id && (
                     u.active
-                      ? <button className="btn btn-sm" style={{ color: '#f85149' }}
-                          onClick={() => setActive(u, false)}>Deactivate</button>
-                      : <button className="btn btn-sm" style={{ color: '#3fb950' }}
-                          onClick={() => setActive(u, true)}>Activate</button>
+                      ? <Button size="sm" variant="danger"
+ onClick={() => setActive(u, false)}>Deactivate</Button>
+                      : <Button size="sm" style={{ color: '#3fb950' }}
+ onClick={() => setActive(u, true)}>Activate</Button>
                   )}
-                  <button className="btn btn-sm" onClick={() => reset(u)}>Reset password</button>
+                  <Button size="sm" onClick={() => reset(u)}>
+                    {u.pending ? 'Resend invitation' : 'Reset password'}</Button>
                 </>
               ) : <span className="text-xs text-text3">view only</span>}
             </span>
           </div>
         ))}
         </TableScroll>
-      </div>
+      </Card>
 
       {edit && <EditModal user={edit} onClose={() => setEdit(null)} onSaved={load} />}
       {invite && <InviteModal onClose={() => setInvite(false)} onSaved={load} onSecret={setSecret} />}
@@ -151,8 +169,8 @@ function EditModal({ user, onClose, onSaved }:
             options={ROLES.map((r) => ({ value: r, label: r }))} />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Save'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : 'Save'}</Button>
       </form>
     </Modal>
   );
@@ -162,25 +180,40 @@ function EditModal({ user, onClose, onSaved }:
 
 function InviteModal({ onClose, onSaved, onSecret }:
   { onClose: () => void; onSaved: () => void; onSecret: (s: Secret) => void }) {
+  const app = useApp();
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('analyst');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // The escape hatch is deliberately NOT a pair of radio buttons. A choice at
+  // this moment makes the admin re-decide a security question on every invite,
+  // and the convenient answer is the wrong one — so the mail path is the button
+  // and handing a secret over is a second, plainer action you have to mean.
+  const [manual, setManual] = useState(false);
+  const byLink = app.mailConfigured && !manual;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr('');
     try {
-      const r = await api.post<{ initialPassword: string }>('/api/admin/users', { email, name, role });
-      onSecret({
-        title: 'User invited',
-        hint: 'Give this to the user — it must be changed at first login.',
-        password: r.initialPassword,
-      });
+      const r = await api.post<InviteResult>('/api/admin/users',
+        { email, name, role, ...(manual ? { manual: true } : null) });
+      onSecret(r.invited
+        ? { title: 'Invitation sent',
+            hint: 'The link works once and expires in 7 days. Nothing to hand over — they '
+              + 'activate the account themselves.',
+            sentTo: r.email }
+        : { title: 'User created',
+            hint: r.mailFailed
+              ? 'The invitation could not be delivered, so the account got a one-time password '
+                + 'instead. Hand it over securely — it must be changed at first sign-in.'
+              : 'No mail transport is configured, so the account got a one-time password. Hand '
+                + 'it over securely — it must be changed at first sign-in.',
+            password: r.initialPassword });
       onSaved(); onClose();
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); setBusy(false); }
   };
   return (
-    <Modal title="Invite user" onClose={onClose}>
+    <Modal title={byLink ? 'Invite user' : 'Create user'} onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="E-Mail">
           <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
@@ -193,9 +226,27 @@ function InviteModal({ onClose, onSaved, onSecret }:
           <Select title="Role" value={role} onChange={setRole}
             options={ROLES.map((r) => ({ value: r, label: r }))} />
         </Field>
+        <div className="text-sm text-text2" style={{ marginBottom: 10, lineHeight: 1.5 }}>
+          {byLink
+            ? 'They get an activation link by mail and choose their own password. '
+              + 'Nothing to hand over.'
+            : app.mailConfigured
+              ? 'A one-time password is shown to you once. Hand it over securely — they must '
+                + 'change it at first sign-in.'
+              : 'No mail transport is configured, so a one-time password is shown to you once. '
+                + 'Hand it over securely — they must change it at first sign-in.'}
+        </div>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Create user'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : byLink ? 'Send invitation' : 'Create user'}</Button>
+        {app.mailConfigured && (
+          <Button block type="button"
+ style={{ marginTop: 8 }}
+ onClick={() => setManual(!manual)}>
+            {manual ? 'Send an invitation by mail instead'
+              : 'No mailbox for them? Use a one-time password'}
+          </Button>
+        )}
       </form>
     </Modal>
   );
@@ -203,15 +254,15 @@ function InviteModal({ onClose, onSaved, onSecret }:
 
 // ---------------------------------------------------------------- one-time secret
 
-function SecretModal({ title, hint, password, onClose }: Secret & { onClose: () => void }) {
+function SecretModal({ title, hint, password, sentTo, onClose }: Secret & { onClose: () => void }) {
   return (
     <Modal title={title} onClose={onClose}>
       <div className="text-sm text-text2" style={{ marginBottom: 10 }}>{hint}</div>
       <div className="mono text-lg font-semibold text-text0" style={{
         background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6,
-        padding: '10px 12px', userSelect: 'all', wordBreak: 'break-all' }}>{password}</div>
-      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
-        onClick={onClose}>Done</button>
+        padding: '10px 12px', userSelect: 'all', wordBreak: 'break-all' }}>{password ?? sentTo}</div>
+      <Button variant="primary" block style={{ marginTop: 12 }}
+ onClick={onClose}>Done</Button>
     </Modal>
   );
 }

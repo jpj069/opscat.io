@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
-import {
+import { Card, Button,
   KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs,
 } from '../ui';
 import { Select } from '../Select';
@@ -61,7 +61,7 @@ function Throughput() {
   const peak = useMemo(() => stats ? Math.max(0, ...stats.buckets.map((b) => b.lines)) : 0, [stats]);
   const fmtCount = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
-  if (err) return <div className="card text-base" style={{ color: SEV.critical}}>{err}</div>;
+  if (err) return <Card className="text-base" style={{ color: SEV.critical}}>{err}</Card>;
 
   // No loading branch: KpiCard and LineChart render their own placeholder when
   // handed null, so the page keeps its real structure from the first paint.
@@ -89,16 +89,16 @@ function Throughput() {
         <KpiCard label={`PEAK / ${stepLabel.toUpperCase()}`} value={stats ? fmtCount(peak) : null}
           color={SEV.green} sub={`busiest ${stepLabel} in range`} />
       </div>
-      <div className="card">
+      <Card>
         <div className="card-title">Log lines per {stepLabel}</div>
         <LineChart points={stats?.buckets.map((b) => b.lines) ?? null} labels={labels}
           color={SEV.cyan} fmt={fmtCount} />
-      </div>
-      <div className="card">
+      </Card>
+      <Card>
         <div className="card-title">Volume per {stepLabel}</div>
         <LineChart points={stats?.buckets.map((b) => b.bytes) ?? null} labels={labels}
           color={SEV.purple} fmt={fmtBytes} />
-      </div>
+      </Card>
     </>
   );
 }
@@ -149,10 +149,10 @@ function Classifiers() {
     <>
       <Tester />
 
-      <div className="card">
+      <Card>
         <div className="card-title" style={{ justifyContent: 'space-between' }}>
           <span>Custom rules · this organization</span>
-          {isAdmin && <button className="btn btn-sm" onClick={add}>+ Add rule</button>}
+          {isAdmin && <Button size="sm" onClick={add}>+ Add rule</Button>}
         </div>
         <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           Evaluated before the built-ins, first match wins. Target group extracts a regex
@@ -194,9 +194,9 @@ function Classifiers() {
         {isAdmin && (
           <div className="row" style={{ justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
             {saved && <span className="text-base font-semibold" style={{ color: SEV.green}}>saved ✓</span>}
-            <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
+            <Button variant="primary" onClick={save} disabled={!dirty || saving}>
               {saving ? 'Saving…' : 'Save Rules'}
-            </button>
+            </Button>
           </div>
         )}
         {!isAdmin && (
@@ -204,9 +204,9 @@ function Classifiers() {
             Only administrators can change classifier rules.
           </div>
         )}
-      </div>
+      </Card>
 
-      <div className="card">
+      <Card>
         <div className="card-title">Built-in rules</div>
         <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           Shipped with OpsCat, evaluated after your custom rules. Lines matching no rule fall
@@ -237,7 +237,7 @@ function Classifiers() {
               </div>
             ))}
         </TableScroll>
-      </div>
+      </Card>
     </>
   );
 }
@@ -262,7 +262,7 @@ function Tester() {
 
   const m = result?.match;
   return (
-    <div className="card">
+    <Card>
       <div className="card-title">Rule tester</div>
       <form onSubmit={run} className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <Input required className="mono" value={line} onChange={(e) => setLine(e.target.value)}
@@ -271,7 +271,7 @@ function Tester() {
         <Select title="Severity" value={sev} onChange={setSev} style={{ width: 150 }}
           options={['0 emerg', '1 alert', '2 crit', '3 err', '4 warning', '5 notice', '6 info', '7 debug']
             .map((s) => ({ value: s.split(' ')[0], label: `syslog ${s}` }))} />
-        <button className="btn btn-primary btn-sm" disabled={busy}>{busy ? '…' : 'Test line'}</button>
+        <Button variant="primary" size="sm" disabled={busy}>{busy ? '…' : 'Test line'}</Button>
       </form>
       {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
       {result && (
@@ -296,7 +296,7 @@ function Tester() {
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -337,7 +337,7 @@ function Scout() {
 
   return (
     <>
-      <div className="card">
+      <Card>
         <div className="card-title">Scout · suggested rules from unmatched lines</div>
         <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
           Scout watches log lines no classifier matched, masks the variable parts
@@ -383,14 +383,14 @@ function Scout() {
               </span>
               <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
                 {isAdmin && <>
-                  <button className="btn btn-sm" disabled={busyId === t.id} onClick={() => suggest(t)}
-                    title="Ask the org's LLM for a name + severity">
+                  <Button size="sm" disabled={busyId === t.id} onClick={() => suggest(t)}
+ title="Ask the org's LLM for a name + severity">
                     {busyId === t.id ? '…' : t.suggestion ? 'Re-suggest' : 'AI suggest'}
-                  </button>
-                  <button className="btn btn-sm" style={{ color: SEV.green }}
-                    onClick={() => setApproving(t)}>Approve</button>
-                  <button className="btn btn-sm" style={{ color: 'var(--text3)' }} disabled={busyId === t.id}
-                    onClick={() => dismiss(t)} title="Never suggest this template again">Dismiss</button>
+                  </Button>
+                  <Button size="sm" style={{ color: SEV.green }}
+ onClick={() => setApproving(t)}>Approve</Button>
+                  <Button size="sm" style={{ color: 'var(--text3)' }} disabled={busyId === t.id}
+ onClick={() => dismiss(t)} title="Never suggest this template again">Dismiss</Button>
                 </>}
               </span>
             </div>
@@ -401,7 +401,7 @@ function Scout() {
             Only administrators can approve or dismiss suggestions.
           </div>
         )}
-      </div>
+      </Card>
       {approving && (
         <ApproveModal template={approving} onClose={() => setApproving(null)}
           onDone={() => { setApproving(null); load(); }} />
@@ -461,8 +461,8 @@ function ApproveModal({ template, onClose, onDone }: {
           Severity ≥ 60 auto-opens a case. The rule appears under Classifiers and applies immediately.
         </div>
         {err && <div style={{ color: SEV.critical, fontSize: 11, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Approve rule'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : 'Approve rule'}</Button>
       </form>
     </Modal>
   );

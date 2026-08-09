@@ -12,8 +12,12 @@ const ingestLimiter = new RateLimiter({ perMinute: 600, burst: 200 });
 
 const getSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
 const touchSession = db.prepare('UPDATE sessions SET last_used_at = ? WHERE id = ?');
+// The request context deliberately never carries pass_salt/pass_hash — nothing
+// downstream needs the credential, and not having it there is one fewer way to
+// leak it into a log line. The UI does need to know WHETHER a password exists
+// (an invited account has none), so that one bit is derived in SQL instead.
 const getUser = db.prepare(`SELECT id, org_id, email, name, role, is_super_admin, color, active,
-  must_change_password FROM users WHERE id = ?`);
+  must_change_password, (pass_hash != '') AS has_password FROM users WHERE id = ?`);
 const getOrg = db.prepare('SELECT id, name, slug, plan, status FROM organizations WHERE id = ?');
 const touchUser = db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?');
 const delSession = db.prepare('DELETE FROM sessions WHERE id = ?');

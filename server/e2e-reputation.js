@@ -81,6 +81,7 @@ async function migrationCarriesOver() {
     const { db } = require(${JSON.stringify(path.join(__dirname, 'src', 'db.js'))});
     console.log(JSON.stringify({
       v: db.pragma('user_version', { simple: true }),
+      target: require(${JSON.stringify(path.join(__dirname, 'src', 'db.js'))}).SCHEMA_VERSION,
       assets: db.prepare('SELECT * FROM reputation_assets').all(),
       listings: db.prepare('SELECT * FROM reputation_listings').all(),
       runs: db.prepare('SELECT * FROM reputation_runs').all(),
@@ -97,7 +98,7 @@ async function migrationCarriesOver() {
   try { r = JSON.parse(String(out).trim().split('\n').pop()); } catch { return false; }
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
 
-  return r.v === 12
+  return r.v === r.target
     && r.assets.length === 1 && r.assets[0].target === '198.51.100.7'
     && r.assets[0].kind === 'ip' && r.assets[0].rdns === 'mail.example.net'
     && r.listings.length === 1 && r.listings[0].zone === 'zen.spamhaus.org'
@@ -205,8 +206,8 @@ async function main() {
   const { db } = require('./src/db');
   const org = db.prepare('SELECT id FROM organizations ORDER BY id LIMIT 1').get();
   chk('a bootstrapped org exists', !!org);
-  chk('the database is at schema v12', db.pragma('user_version', { simple: true }) === 12,
-    String(db.pragma('user_version', { simple: true })));
+  chk('the database is migrated to the end', db.pragma('user_version', { simple: true })
+    === require('./src/db').SCHEMA_VERSION, String(db.pragma('user_version', { simple: true })));
 
   const assetId = db.prepare(`INSERT INTO reputation_assets
       (org_id, target, kind, rdns, interval_s, enabled, created_at)
@@ -701,10 +702,10 @@ async function main() {
     mxDisc.candidates.some((c) => c.target === '198.51.100.44' && c.source.startsWith('mx:')),
     mxDisc.candidates.map((c) => c.target + '/' + c.source).join(', '));
 
-  // ── 13. migration v10 -> v11 carries an open listing across ─────────────
+  // ── 13. migrating a v10 database carries an open listing across ──────────
   // db.js is a singleton, so the migration cannot re-run in this process: build
   // a v10-shaped database and load db.js against it in a child.
-  chk('migration v10 -> v12 preserves the asset and its open listing', await migrationCarriesOver());
+  chk('migrating a v10 database preserves the asset and its open listing', await migrationCarriesOver());
 
   console.log(R.join('\n'));
   const failed = R.filter((r) => r.startsWith('FAIL')).length;

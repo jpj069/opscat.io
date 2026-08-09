@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, fmtTime } from '../format';
-import { StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
+import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
 import { Select } from '../Select';
 import type { Rule, NotificationRow } from '../types';
 
@@ -61,11 +61,11 @@ export default function Rules() {
     <div className="page">
       <PageHeader title="Alert Rules">
         {canEdit && (
-          <button className="btn btn-primary" onClick={() => setEditing('new')}>+ New Rule</button>
+          <Button variant="primary" onClick={() => setEditing('new')}>+ New Rule</Button>
         )}
       </PageHeader>
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={700}>
         <div className="tbl-head" style={{ gridTemplateColumns: RULE_COLS }}>
           <span>Rule</span><span>Channel</span><span>Trigger</span><span>Min Sev</span>
@@ -89,12 +89,12 @@ export default function Rules() {
             <Toggle on={r.enabled} disabled={!canEdit} onClick={canEdit ? () => toggle(r) : undefined} />
             {canEdit ? (
               <span className="row" style={{ gap: 6 }}>
-                <button className="btn btn-sm" onClick={() => testFire(r)} disabled={testing === r.id}
+                <Button size="sm" onClick={() => testFire(r)} disabled={testing === r.id}
                   title="Send a clearly-marked test alert through this channel now">
                   {testing === r.id ? 'Sending…' : 'Test'}
-                </button>
-                <button className="btn btn-sm" onClick={() => setEditing(r)}>Edit</button>
-                <button className="btn btn-sm" style={{ color: SEV.critical }} onClick={() => remove(r)}>Del</button>
+                </Button>
+                <Button size="sm" onClick={() => setEditing(r)}>Edit</Button>
+                <Button size="sm" variant="danger" onClick={() => remove(r)}>Del</Button>
               </span>
             ) : <span />}
           </div>
@@ -106,9 +106,9 @@ export default function Rules() {
             {testResult.name}: {testResult.text}
           </div>
         )}
-      </div>
+      </Card>
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <div className="card-title" style={{ padding: '14px 16px 0' }}>Recent Notifications</div>
         <TableScroll minWidth={560}>
         <div className="tbl-head" style={{ gridTemplateColumns: NOTIF_COLS }}>
@@ -132,7 +132,7 @@ export default function Rules() {
           </div>
         ))}
         </TableScroll>
-      </div>
+      </Card>
 
       {editing && (
         <RuleEditor rule={editing === 'new' ? null : editing} eventNames={eventNames}
@@ -217,9 +217,9 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
           placeholder={RECIPIENTS_UI[channel].placeholder} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={saving || !name.trim()} onClick={save}>
-          {saving ? 'Saving…' : 'Save'}</button>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={saving || !name.trim()} onClick={save}>
+          {saving ? 'Saving…' : 'Save'}</Button>
       </div>
     </Modal>
   );

@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Modal, StatusPill, Field, TableScroll, TableSkeleton, Input} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput} from '../ui';
 import { Select } from '../Select';
 import { RefreshCwIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
@@ -58,7 +58,7 @@ export default function Vendors() {
     <div className="page">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1 className="page-title">Vendors</h1>
-        {canEdit && <button className="btn btn-primary" onClick={() => setAdding(true)}>+ Add vendor</button>}
+        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}>+ Add vendor</Button>}
       </div>
 
       {rows && rows.length > 0 && (
@@ -70,7 +70,7 @@ export default function Vendors() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={720}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Vendor</span><span>Status</span><span>Incidents</span><span>Feed</span><span>Checked</span><span />
@@ -112,7 +112,7 @@ export default function Vendors() {
           );
         })}
         </TableScroll>
-      </div>
+      </Card>
 
       <div className="text-xs text-text3">
         Vendor incidents raise <span className="mono">vendor_incident</span> events — create an alert rule with
@@ -215,9 +215,9 @@ function AddVendorModal({ existing, onClose, onAdded }:
                 </span>
                 {added.has(c.slug)
                   ? <span className="mono text-xs" style={{ color: SEV.green }}>monitored</span>
-                  : <button className="btn btn-sm" disabled={busySlug !== null}
-                      onClick={() => addFromCatalog(c)}>
-                      {busySlug === c.slug ? '…' : '+ Add'}</button>}
+                  : <Button size="sm" disabled={busySlug !== null}
+ onClick={() => addFromCatalog(c)}>
+                      {busySlug === c.slug ? '…' : '+ Add'}</Button>}
               </div>
             ))}
           </div>
@@ -227,10 +227,10 @@ function AddVendorModal({ existing, onClose, onAdded }:
         <form onSubmit={addCustom}>
           <Field label="Status page URL — we detect the feed automatically">
             <div className="row" style={{ gap: 6 }}>
-              <Input autoFocus value={detectUrl} onChange={(e) => setDetectUrl(e.target.value)}
+              <HostInput autoFocus value={detectUrl} onChange={(e) => setDetectUrl(e.target.value)}
                 placeholder="https://status.example.com" style={{ flex: 1 }} />
-              <button type="button" className="btn btn-sm" onClick={detect}
-                disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</button>
+              <Button size="sm" type="button" onClick={detect}
+ disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</Button>
             </div>
           </Field>
           {preview && <div className="mono text-xs" style={{ color: SEV.green, marginBottom: 10 }}>
@@ -244,11 +244,11 @@ function AddVendorModal({ existing, onClose, onAdded }:
               options={FEED_TYPES.map((t) => ({ value: t, label: t }))} />
           </Field>
           <Field label="Feed URL (https)">
-            <Input required value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)}
+            <HostInput required value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)}
               placeholder="https://status.example.com/api/v2/summary.json" />
           </Field>
           <Field label="Status page URL (optional)">
-            <Input value={pageUrl} onChange={(e) => setPageUrl(e.target.value)}
+            <HostInput value={pageUrl} onChange={(e) => setPageUrl(e.target.value)}
               placeholder="https://status.example.com" />
           </Field>
           <div className="text-xs text-text3" style={{ marginBottom: 8 }}>
@@ -256,8 +256,8 @@ function AddVendorModal({ existing, onClose, onAdded }:
             and RSS/Atom. If it fails, pick the feed type manually.
           </div>
           {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-            disabled={busy || !name.trim() || !feedUrl.trim()}>{busy ? '…' : 'Start monitoring'}</button>
+          <Button variant="primary" block
+ disabled={busy || !name.trim() || !feedUrl.trim()}>{busy ? '…' : 'Start monitoring'}</Button>
         </form>
       )}
     </Modal>

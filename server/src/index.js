@@ -55,6 +55,10 @@ app.get('/api/plans', (req, res) => res.json({
     microsoft: eeOAuth && !!config.microsoft.clientId,
     github: !!config.github.clientId,
     signupsOpen: config.signupsOpen && edition.isCloud(),
+    // Whether this instance can send mail at all. The login screen hides the
+    // magic-link tab without it (the route silently no-ops), and the invite
+    // dialog says "send an invitation" instead of promising one it cannot send.
+    mail: require('./mailer').mailConfigured(),
   },
 }));
 

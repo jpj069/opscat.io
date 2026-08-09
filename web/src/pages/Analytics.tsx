@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { SEV, fmtDuration } from '../format';
-import { KpiCard, StackedArea, LineChart, HBars, PageHeader } from '../ui';
+import { Card, KpiCard, StackedArea, LineChart, HBars, PageHeader } from '../ui';
 import type { AnalyticsData } from '../types';
 
 type Range = '24h' | '7d' | '30d';
@@ -45,27 +45,27 @@ export default function Analytics() {
 
         {/* Volume + MTTR */}
         <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+          <Card style={{ flex: 1, minWidth: 280 }}>
             <div className="card-title">Event Volume</div>
             <StackedArea data={ana?.volume ?? null} />
-          </div>
-          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+          </Card>
+          <Card style={{ flex: 1, minWidth: 280 }}>
             <div className="card-title">MTTR</div>
             <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
               fmt={(v) => `${Math.round(v / 60000)}m`} />
-          </div>
+          </Card>
         </div>
 
         {/* Top types + servers */}
         <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+          <Card style={{ flex: 1, minWidth: 280 }}>
             <div className="card-title">Top Event Types</div>
             <HBars items={ana?.topTypes ?? null} color={SEV.low} />
-          </div>
-          <div className="card" style={{ flex: 1, minWidth: 280 }}>
+          </Card>
+          <Card style={{ flex: 1, minWidth: 280 }}>
             <div className="card-title">Most Active Servers</div>
             <HBars items={ana?.topServers ?? null} color={SEV.cyan} />
-          </div>
+          </Card>
         </div>
       </div>
     </div>

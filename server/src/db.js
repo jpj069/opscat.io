@@ -326,8 +326,28 @@ const MIGRATIONS = [
   // idx 12 -> version 13: the Bridge insight analyzer (docs/BRIDGE.md phase 3)
   // tracks how far into the feed it has read, per room, so a server restart
   // neither re-analyzes the whole window nor duplicates insights.
+  //
+  // THIS ORDER IS LOAD-BEARING. Production already ran this one and sits at
+  // user_version 13; the invitation migration below must therefore be 13, not 12.
+  // Swapping them would leave every deployed database at 13 with `login_tokens`
+  // never gaining its `purpose` column — and nothing would fail loudly, the
+  // invitation flow would just start voiding pending invitations.
   () => {
     addColumn('bridges', 'analyzed_feed_id', 'INTEGER NOT NULL DEFAULT 0');
+  },
+  // idx 13 -> version 14: invited users get an activation LINK, not a password
+  // an admin has to relay through a chat. That needs two things:
+  //
+  //  - login_tokens.purpose, so an activation token (7 days, issued to an address
+  //    that has not proven ownership yet) is distinguishable from a magic-link
+  //    sign-in (15 minutes, requested by the account owner). Without it the
+  //    magic-link cleanup — "delete this user's tokens before issuing a new one" —
+  //    would silently void a pending invitation.
+  //  - an empty pass_hash has to mean "this account has NO password", which is now
+  //    a normal state rather than a broken row. Existing rows are untouched: they
+  //    all carry a real hash, and the login route already refuses an empty one.
+  () => {
+    addColumn('login_tokens', 'purpose', "TEXT NOT NULL DEFAULT 'login'");
   },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
@@ -393,4 +413,9 @@ if (!config.secret) {
 module.exports = {
   db, getSetting, setSetting, getOrgSetting, setOrgSetting,
   getMembership, addMembership, listMemberships, removeMembership, anyMembership,
+  // The version a fully-migrated database sits at. Exported so a test can assert
+  // "migrated to the end" instead of pinning a literal that has to be bumped in
+  // every harness each time a migration is added — which is exactly what the
+  // reputation harness did, and it went red on an unrelated change.
+  SCHEMA_VERSION: MIGRATIONS.length,
 };

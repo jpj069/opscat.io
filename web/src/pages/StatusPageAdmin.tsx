@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha, relTime } from '../format';
-import { Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
@@ -83,18 +83,18 @@ export default function StatusPageAdmin() {
       </PageHeader>
 
       {/* overall banner */}
-      <div className="card" style={{ borderColor: alpha(overallColor, 0.4), background: alpha(overallColor, 0.06) }}>
+      <Card style={{ borderColor: alpha(overallColor, 0.4), background: alpha(overallColor, 0.06) }}>
         <div className="row" style={{ gap: 10 }}>
           <GlowDot color={overallColor} size={10} />
           <span className="text-lg font-bold" style={{ color: overallColor }}>{OVERALL[worst]}</span>
         </div>
-      </div>
+      </Card>
 
       {/* components table */}
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px' }}>
           <span className="card-title" style={{ margin: 0 }}>Components</span>
-          {canEdit && <button className="btn btn-sm" onClick={() => setShowAdd(true)}>+ Add component</button>}
+          {canEdit && <Button size="sm" onClick={() => setShowAdd(true)}>+ Add component</Button>}
         </div>
         <TableScroll stickyFirst minWidth={780}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
@@ -123,15 +123,15 @@ export default function StatusPageAdmin() {
               <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <span className="mono text-sm text-text1">{pct}%</span>
                 {canEdit && (
-                  <button className="btn btn-sm" title="Delete" onClick={() => remove(c)}
-                    style={{ color: '#f85149' }}>×</button>
+                  <Button size="sm" variant="danger" title="Delete" onClick={() => remove(c)}
+ >×</Button>
                 )}
               </span>
             </div>
           );
         })}
         </TableScroll>
-      </div>
+      </Card>
 
       <UserReports isAdmin={isAdmin} />
 
@@ -169,7 +169,7 @@ function UserReports({ isAdmin }: { isAdmin: boolean }) {
   };
 
   return (
-    <div className="card" style={{ padding: 0 }}>
+    <Card style={{ padding: 0 }}>
       <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px', flexWrap: 'wrap', gap: 10 }}>
         <span className="card-title" style={{ margin: 0 }}>
           User reports (last 24h: {data ? data.total : '…'})</span>
@@ -207,7 +207,7 @@ function UserReports({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -255,8 +255,8 @@ function AddComponentModal({ onClose, onAdded }: { onClose: () => void; onAdded:
           <Input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Core Services" />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || !name}>{busy ? '…' : 'Add component'}</button>
+        <Button variant="primary" block
+ disabled={busy || !name}>{busy ? '…' : 'Add component'}</Button>
       </form>
     </Modal>
   );

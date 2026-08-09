@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
-import {
-  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input} from '../ui';
+import { Card, Button,
+  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input, HostInput, DateTime} from '../ui';
 import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
@@ -139,7 +139,7 @@ export default function Settings() {
       <BillingCard />
 
       {/* 1. Platform */}
-      <div className="card">
+      <Card>
         <div className="card-title">Platform</div>
         {settings === null
           ? <FormSkeleton rows={4} />
@@ -149,10 +149,10 @@ export default function Settings() {
               {textRow('retention_logs_days', 'Log retention (days)')}
               {toggleRow('status_published', 'Status page published')}
             </>}
-      </div>
+      </Card>
 
       {/* 2. Notifications */}
-      <div className="card">
+      <Card>
         <div className="card-title">Notifications</div>
         {settings === null
           ? <FormSkeleton rows={5} />
@@ -168,14 +168,14 @@ export default function Settings() {
               {textRow('pushover_token', 'Pushover app token',
                 { type: 'password', mono: true, placeholder: 'azGDORePK8gMaC0QOYAMyEEuzJnyUi' })}
             </>}
-      </div>
+      </Card>
 
       {/* save footer for key/value settings */}
       <div className="row" style={{ justifyContent: 'flex-end', gap: 12 }}>
         {saved && <span className="text-base font-semibold" style={{ color: '#3fb950'}}>saved ✓</span>}
-        <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
+        <Button variant="primary" onClick={save} disabled={!dirty || saving}>
           {saving ? 'Saving…' : 'Save Changes'}
-        </button>
+        </Button>
       </div>
 
       {/* 2c. AI endpoint (admin) */}
@@ -187,10 +187,10 @@ export default function Settings() {
 
       {/* 3. API Keys (lead+) */}
       {!keysHidden && (
-        <div className="card">
+        <Card>
           <div className="card-title" style={{ justifyContent: 'space-between' }}>
             <span>API Keys</span>
-            <button className="btn btn-sm" onClick={() => setModal('key')}>+ Create key</button>
+            <Button size="sm" onClick={() => setModal('key')}>+ Create key</Button>
           </div>
           <TableScroll minWidth={720}>
           <div className="tbl-head" style={{ gridTemplateColumns: KEYS_GRID, padding: '8px 0' }}>
@@ -212,11 +212,11 @@ export default function Settings() {
             </div>
           ))}
           </TableScroll>
-        </div>
+        </Card>
       )}
 
       {/* 3b. Connected apps (MCP / OAuth grants) — the caller's own */}
-      <div className="card">
+      <Card>
         <div className="card-title"><span>Connected apps</span></div>
         <p className="text-sm text-text2" style={{ margin: '0 0 10px' }}>
           AI clients you authorized to act on your behalf in this organization. Revoking
@@ -236,21 +236,21 @@ export default function Settings() {
             <span className="mono text-xs text-text2">{c.scopes.join(', ')}</span>
             <span className="mono text-xs text-text2">{relTime(c.createdAt)}</span>
             <span className="mono text-xs text-text2">{relTime(c.lastUsedAt)}</span>
-            <button className="btn btn-sm"
-              onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
+            <Button size="sm"
+ onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
               Revoke
-            </button>
+            </Button>
           </div>
         ))}
         </TableScroll>
-      </div>
+      </Card>
 
       {/* 4. Agents */}
       {!agentsHidden && (
-        <div className="card">
+        <Card>
           <div className="card-title" style={{ justifyContent: 'space-between' }}>
             <span>Agents</span>
-            {leadPlus && <button className="btn btn-sm" onClick={() => setModal('agent')}>+ Register agent</button>}
+            {leadPlus && <Button size="sm" onClick={() => setModal('agent')}>+ Register agent</Button>}
           </div>
           <TableScroll minWidth={840}>
           <div className="tbl-head" style={{ gridTemplateColumns: AGENTS_GRID, padding: '8px 0' }}>
@@ -283,15 +283,15 @@ export default function Settings() {
             </div>
           ))}
           </TableScroll>
-        </div>
+        </Card>
       )}
 
       {/* 5. SNMP Targets (lead+) */}
       {!targetsHidden && (
-        <div className="card">
+        <Card>
           <div className="card-title" style={{ justifyContent: 'space-between' }}>
             <span>SNMP Targets</span>
-            <button className="btn btn-sm" onClick={() => setModal('target')}>+ Add target</button>
+            <Button size="sm" onClick={() => setModal('target')}>+ Add target</Button>
           </div>
           <TableScroll minWidth={780}>
           <div className="tbl-head" style={{ gridTemplateColumns: TARGETS_GRID, padding: '8px 0' }}>
@@ -323,12 +323,12 @@ export default function Settings() {
             </div>
           ))}
           </TableScroll>
-        </div>
+        </Card>
       )}
 
       {/* 6. System (admin) */}
       {!sysHidden && (
-        <div className="card">
+        <Card>
           <div className="card-title">System</div>
           {sys === null ? <FormSkeleton rows={4} /> : (
             <>
@@ -350,7 +350,7 @@ export default function Settings() {
               </Row>
             </>
           )}
-        </div>
+        </Card>
       )}
 
       {modal === 'key' && <CreateKeyModal onClose={() => setModal(null)} onCreated={reloadKeys} onSecret={setSecret} />}
@@ -420,7 +420,7 @@ function AiCard() {
     : 'No LLM configured — AI features (Scout suggestions) stay off.';
 
   return (
-    <div className="card">
+    <Card>
       <div className="card-title">AI</div>
       <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
         Any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, Azure, …). Leave empty to use
@@ -430,7 +430,7 @@ function AiCard() {
       {status === null ? <FormSkeleton rows={3} /> : (
         <>
           <Row label="Base URL">
-            <Input className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
+            <HostInput className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
               onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
           </Row>
           <Row label="Model">
@@ -443,7 +443,7 @@ function AiCard() {
                 placeholder={status.org.hasKey ? '•••••••• (set — enter to replace)' : 'sk-…'}
                 onChange={(e) => { setApiKey(e.target.value); setDirty(true); }} style={{ flex: 1 }} />
               {status.org.hasKey && (
-                <button className="btn btn-sm" onClick={clearKey} disabled={!!busy}>Remove</button>
+                <Button size="sm" onClick={clearKey} disabled={!!busy}>Remove</Button>
               )}
             </div>
           </Row>
@@ -452,18 +452,18 @@ function AiCard() {
             <span className="row" style={{ gap: 10 }}>
               {msg && <span className="text-sm font-semibold" style={{
                 color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
-              <button className="btn btn-sm" onClick={test} disabled={!!busy || dirty}
-                title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
+              <Button size="sm" onClick={test} disabled={!!busy || dirty}
+ title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
                 {busy === 'test' ? 'Testing…' : 'Test'}
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || !!busy}>
+              </Button>
+              <Button variant="primary" size="sm" onClick={save} disabled={!dirty || !!busy}>
                 {busy === 'save' ? 'Saving…' : 'Save AI Settings'}
-              </button>
+              </Button>
             </span>
           </div>
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -520,7 +520,7 @@ function VoiceCard() {
     : 'No voice provider configured — the Bridge live transcript stays off.';
 
   return (
-    <div className="card">
+    <Card>
       <div className="card-title">Voice / Transcription</div>
       <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
         Speech-to-text for the Bridge live transcript. Any OpenAI-compatible transcription
@@ -532,7 +532,7 @@ function VoiceCard() {
       {status === null ? <FormSkeleton rows={3} /> : (
         <>
           <Row label="Base URL">
-            <Input className="mono" value={baseUrl} placeholder="https://api.openai.com/v1"
+            <HostInput className="mono" value={baseUrl} placeholder="https://api.openai.com/v1"
               onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
           </Row>
           <Row label="Model">
@@ -545,7 +545,7 @@ function VoiceCard() {
                 placeholder={status.org.hasKey ? '•••••••• (set — enter to replace)' : 'sk-…'}
                 onChange={(e) => { setApiKey(e.target.value); setDirty(true); }} style={{ flex: 1 }} />
               {status.org.hasKey && (
-                <button className="btn btn-sm" onClick={clearKey} disabled={busy}>Remove</button>
+                <Button size="sm" onClick={clearKey} disabled={busy}>Remove</Button>
               )}
             </div>
           </Row>
@@ -554,18 +554,18 @@ function VoiceCard() {
             <span className="row" style={{ gap: 10 }}>
               {msg && <span className="text-sm font-semibold" style={{
                 color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
-              <button className="btn btn-sm" onClick={test} disabled={busy || dirty}
+              <Button size="sm" onClick={test} disabled={busy || dirty}
                 title={dirty ? 'Save first' : 'Round-trip a short test tone through the endpoint'}>
                 Test
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || busy}>
+              </Button>
+              <Button variant="primary" size="sm" onClick={save} disabled={!dirty || busy}>
                 {busy ? 'Saving…' : 'Save Voice Settings'}
-              </button>
+              </Button>
             </span>
           </div>
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -600,7 +600,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
   const fmt = (t: number) => new Date(t).toLocaleString();
 
   return (
-    <div className="card">
+    <Card>
       <div className="card-title">Maintenance Windows</div>
       <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
         While a window is active, events keep recording but no alerts are sent
@@ -621,18 +621,26 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
         </div>
       ))}
       {canEdit && (
-        <form onSubmit={add} className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-          <Input required value={name} onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. core switch upgrade" style={{ flex: 2, minWidth: 160 }} />
-          <Input required type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)}
-            style={{ flex: 1, minWidth: 150 }} />
-          <Input required type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)}
-            style={{ flex: 1, minWidth: 150 }} />
-          <button className="btn btn-sm">+ Add window</button>
+        <form onSubmit={add} className="row row-wrap" style={{ gap: 12, marginTop: 12,
+          alignItems: 'flex-end' }}>
+          {/* Labelled, because "e.g. core switch upgrade" next to two identical
+              date boxes leaves you guessing which one is the start. A placeholder
+              is not a label — it disappears the moment you type. */}
+          <Field label="Window name">
+            <Input required value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. core switch upgrade" width={220} />
+          </Field>
+          <Field label="Starts">
+            <DateTime required value={from} onChange={(e) => setFrom(e.target.value)} />
+          </Field>
+          <Field label="Ends">
+            <DateTime required value={to} onChange={(e) => setTo(e.target.value)} />
+          </Field>
+          <Button size="sm" style={{ marginBottom: 2 }}>+ Add window</Button>
           {err && <span className="text-sm" style={{ color: '#f85149'}}>{err}</span>}
         </form>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -695,7 +703,7 @@ function PlanUpgradeCard({ plan, interval, current, canBuy, busy, onBuy }: {
   const price = interval === 'month' ? plan.priceMonthly : plan.priceYearly;
   const c = planColor(plan.key);
   return (
-    <div className="card" style={{ flex: 1, minWidth: 200, background: 'var(--bg1)',
+    <Card style={{ flex: 1, minWidth: 200, background: 'var(--bg1)',
       borderColor: current ? c : 'var(--bg3)' }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="text-md font-bold text-text0">{plan.name}</span>
@@ -716,16 +724,16 @@ function PlanUpgradeCard({ plan, interval, current, canBuy, busy, onBuy }: {
         </ul>
       )}
       {current ? (
-        <button className="btn btn-sm" disabled style={{ width: '100%', justifyContent: 'center', opacity: 0.6 }}>
+        <Button size="sm" block disabled style={{ opacity: 0.6 }}>
           Current plan
-        </button>
+        </Button>
       ) : (
-        <button className="btn btn-primary btn-sm" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={!canBuy || busy} title={canBuy ? undefined : 'Admin only'} onClick={onBuy}>
+        <Button variant="primary" size="sm" block
+ disabled={!canBuy || busy} title={canBuy ? undefined : 'Admin only'} onClick={onBuy}>
           {busy ? '…' : 'Upgrade'}
-        </button>
+        </Button>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -780,7 +788,7 @@ function BillingCard() {
   // loading — same chrome as the loaded card: pill row + usage grid placeholders
   if (status === null && !failed) {
     return (
-      <div className="card">
+      <Card>
         <div className="card-title">Plan &amp; Billing</div>
         {bannerEl}
         <Skeleton w={92} h={18} radius={10} />
@@ -788,7 +796,7 @@ function BillingCard() {
           gap: 14, marginTop: 16 }}>
           {USAGE_METRICS.map((m) => <UsageBar key={m.key} label={m.label} used={null} limit={0} />)}
         </div>
-      </div>
+      </Card>
     );
   }
 
@@ -796,13 +804,13 @@ function BillingCard() {
   const showBilling = !!status && (status.billingEnabled || edition === 'cloud');
   if (!showBilling) {
     return (
-      <div className="card">
+      <Card>
         <div className="card-title">Plan &amp; Billing</div>
         {bannerEl}
         <div className="text-base text-text2">
           Community Edition (CE) — all features unlocked.
         </div>
-      </div>
+      </Card>
     );
   }
 
@@ -812,13 +820,13 @@ function BillingCard() {
   const upgradePlans = plans.filter((p) => p.key === 'pro' || p.key === 'business');
 
   return (
-    <div className="card">
+    <Card>
       <div className="card-title" style={{ justifyContent: 'space-between' }}>
         <span>Plan &amp; Billing</span>
         {s.hasBilling && s.billingEnabled && isAdmin && (
-          <button className="btn btn-sm" onClick={portal} disabled={busy === 'portal'}>
+          <Button size="sm" onClick={portal} disabled={busy === 'portal'}>
             {busy === 'portal' ? '…' : 'Manage billing'}
-          </button>
+          </Button>
         )}
       </div>
       {bannerEl}
@@ -878,7 +886,7 @@ function BillingCard() {
           )}
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -959,8 +967,8 @@ export function CreateKeyModal({ onClose, onCreated, onSecret }:
           </div>
         </div>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || scopes.length === 0}>{busy ? '…' : 'Create'}</button>
+        <Button variant="primary" block
+ disabled={busy || scopes.length === 0}>{busy ? '…' : 'Create'}</Button>
       </form>
     </Modal>
   );
@@ -1007,8 +1015,8 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
             — agent updates itself when the server ships a newer version</span>
         </div>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Register'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : 'Register'}</Button>
       </form>
     </Modal>
   );
@@ -1052,7 +1060,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
           <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="core-switch-01" />
         </Field>
         <Field label="Host">
-          <Input required value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.1" />
+          <HostInput required value={host} onChange={(e) => setHost(e.target.value)} placeholder="10.0.0.1" />
         </Field>
         <Field label="Port">
           <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
@@ -1064,7 +1072,8 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
         </Field>
         {version === '2c' ? (
           <Field label="Community">
-            <Input type="password" value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
+            <Input type="password" autoComplete="off" data-1p-ignore data-lpignore="true"
+              value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="public" />
           </Field>
         ) : (
           <>
@@ -1113,8 +1122,8 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
           <Input value={interval} onChange={(e) => setIntervalS(e.target.value)} inputMode="numeric" />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : 'Add target'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : 'Add target'}</Button>
       </form>
     </Modal>
   );
@@ -1130,8 +1139,8 @@ export function OnceSecretModal({ title, note, value, extra, onClose }: SecretIn
         border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', userSelect: 'all',
         wordBreak: 'break-all' }}>{value}</div>
       {extra}
-      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
-        onClick={onClose}>Done</button>
+      <Button variant="primary" block style={{ marginTop: 12 }}
+ onClick={onClose}>Done</Button>
     </Modal>
   );
 }

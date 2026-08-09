@@ -15,6 +15,7 @@ const llm = require('../llm');
 const voice = require('../voice');
 
 const plans = require('../plans');
+const invites = require('../lib/invites');
 
 const router = express.Router();
 router.use(sec.requireSession);
@@ -37,16 +38,28 @@ const COLORS = ['#bc8cff', '#38b6ff', '#3fb950', '#f0883e', '#e3b341', '#f85149'
 // (from the membership); active is a global per-user flag.
 // GET is lead+ (email/role/last-seen enumeration); assignee pickers use /api/team.
 router.get('/users', sec.requireRole('lead'), (req, res) => {
-  res.json(db.prepare(`SELECT u.id, u.email, u.name, m.role, u.color, u.active, u.last_seen_at
+  // `pending` = invited but never activated. Derived from an OUTSTANDING invite
+  // token rather than from an empty pass_hash alone: an SSO account has no
+  // password either and is not pending, and an expired link is not either — it
+  // needs re-inviting, which is exactly what the admin has to be able to see.
+  res.json(db.prepare(`SELECT u.id, u.email, u.name, m.role, u.color, u.active, u.last_seen_at,
+      (u.pass_hash = '' AND u.auth_provider = 'password' AND EXISTS (
+         SELECT 1 FROM login_tokens t WHERE t.user_id = u.id AND t.purpose = 'invite'
+           AND t.used_at IS NULL AND t.expires_at > ?)) AS pending
     FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY u.id`)
-    .all(req.orgId).map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
-      active: !!u.active, lastSeenAt: u.last_seen_at })));
+    .all(now(), req.orgId).map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
+      active: !!u.active, lastSeenAt: u.last_seen_at, pending: !!u.pending })));
 });
 
 // Add a member: an existing OpsCat account is attached to this org (multi-org);
 // an unknown e-mail creates a brand-new user whose home org is this one.
-router.post('/users', sec.requireRole('admin'), (req, res) => {
-  const { email, name, role } = req.body || {};
+//
+// With a mail transport the new account is created WITHOUT a password and gets an
+// activation link (see lib/invites.js). Without one — community, air-gapped — it
+// falls back to the one-time password the admin has to hand over, and only then
+// does `must_change_password` come into play.
+router.post('/users', sec.requireRole('admin'), async (req, res) => {
+  const { email, name, role, manual } = req.body || {};
   if (!isEmail(email)) return httpError(res, 400, 'valid email required');
   if (!ROLES.includes(role)) return httpError(res, 400, 'bad role');
   const existing = db.prepare('SELECT id, name FROM users WHERE email = ?').get(email.toLowerCase());
@@ -59,19 +72,42 @@ router.post('/users', sec.requireRole('admin'), (req, res) => {
   }
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   if (!withinPlan(req, res, 'users')) return undefined;
-  const password = crypto.randomBytes(12).toString('base64url');
-  const { salt, hash } = hashPassword(password);
   const color = COLORS[listMemberships(req.user.id).length % COLORS.length];
+  // `manual` is the deliberate escape hatch — a colleague whose mailbox is not
+  // reachable yet, a shared NOC account, an air-gapped instance. It is a choice
+  // the admin has to make on purpose; it is never the default where mail works.
+  const byLink = invites.mailConfigured() && manual !== true;
+  // A link-invited account starts with NO password: '' is a real state now, and
+  // the login route refuses it for every password (see auth.js).
+  const password = byLink ? null : crypto.randomBytes(12).toString('base64url');
+  const { salt, hash } = password ? hashPassword(password) : { salt: '', hash: '' };
   const info = db.prepare(`INSERT INTO users (org_id, email, name, role, pass_salt, pass_hash, color, active,
-    must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`)
-    .run(req.orgId, email.toLowerCase(), name, role, salt, hash, color, now());
-  addMembership(info.lastInsertRowid, req.orgId, role);
+    must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .run(req.orgId, email.toLowerCase(), name, role, salt, hash, color, byLink ? 0 : 1, now());
+  const id = info.lastInsertRowid;
+  addMembership(id, req.orgId, role);
   sec.audit(req.user.id, 'user_create', `${email} (${role})`, req.orgId);
-  // initial password returned once to the creating admin
-  res.json({ id: info.lastInsertRowid, initialPassword: password });
+
+  if (!byLink) return res.json({ id, initialPassword: password });
+
+  try {
+    await invites.sendInviteLink({ id, email: email.toLowerCase() },
+      { kind: 'invite', orgName: req.org.name, invitedBy: req.user.name });
+    sec.audit(req.user.id, 'user_invited', email, req.orgId);
+    return res.json({ id, invited: true, email: email.toLowerCase() });
+  } catch (e) {
+    // The account exists but the invitation did not arrive — do not leave the
+    // colleague with no way in. Issue the fallback password and say what happened.
+    console.error('invite mail failed:', e.message);
+    const fallback = crypto.randomBytes(12).toString('base64url');
+    const f = hashPassword(fallback);
+    db.prepare(`UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1
+      WHERE id = ?`).run(f.salt, f.hash, id);
+    return res.json({ id, initialPassword: fallback, mailFailed: true });
+  }
 });
 
-router.patch('/users/:id', sec.requireRole('admin'), (req, res) => {
+router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
   // target must be a member of the acting org
   const mem = getMembership(req.params.id, req.orgId);
   const u = mem && db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -102,14 +138,27 @@ router.patch('/users/:id', sec.requireRole('admin'), (req, res) => {
     .run(isStr(b.name, 100) ? b.name : null,
       typeof b.active === 'boolean' ? (b.active ? 1 : 0) : null, u.id);
   if (b.active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  // Same split as the invitation: a reset link when mail works, a one-time
+  // password only when it does not. Sessions die either way — that is the point
+  // of a reset — so a mail failure must still leave a usable credential behind.
   if (b.resetPassword === true) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+    sec.audit(req.user.id, 'user_password_reset', u.email, req.orgId);
+    if (invites.mailConfigured()) {
+      invites.clearPassword(u.id);
+      try {
+        await invites.sendInviteLink(u, { kind: 'reset', invitedBy: req.user.name });
+        return res.json({ ok: true, invited: true, email: u.email });
+      } catch (e) {
+        console.error('reset mail failed:', e.message);
+      }
+    }
     const password = crypto.randomBytes(12).toString('base64url');
     const { salt, hash } = hashPassword(password);
     db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1 WHERE id = ?')
       .run(salt, hash, u.id);
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
-    sec.audit(req.user.id, 'user_password_reset', u.email, req.orgId);
-    return res.json({ ok: true, initialPassword: password });
+    return res.json({ ok: true, initialPassword: password,
+      mailFailed: invites.mailConfigured() || undefined });
   }
   sec.audit(req.user.id, 'user_update', u.email, req.orgId);
   res.json({ ok: true });

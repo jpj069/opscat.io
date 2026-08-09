@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { api, ApiError } from './api';
 import { useApp } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
-import { Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
+import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import { topLayer } from './toplayer';
 import {
@@ -103,6 +103,15 @@ function PageLoading() {
 // sessionStorage is attacker-writable — so this can never become an open redirect.
 const NEXT_KEY = 'opscat-oauth-next';
 
+// True for exactly the render in which an ACTIVATION link (not a routine
+// magic-link sign-in) created the session. The Shell reads it once to offer
+// "set a password" — an offer, because the account works passwordless and the
+// same mail always gets them back in. A module-level flag rather than state:
+// Login unmounts and Shell mounts in the same page load, so there is nothing to
+// pass it through, and putting it in storage would make it survive a reload and
+// re-open the dialog for no reason.
+let justInvited = false;
+
 function isSafeNext(v: string | null): v is string {
   return !!v && v.startsWith('/oauth/');
 }
@@ -174,8 +183,10 @@ const OAUTH_ERRORS: Record<string, string> = {
   nosignup: 'Sign-ups are currently closed for this instance.',
 };
 
-type AuthFlags = { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean };
-const NO_AUTH: AuthFlags = { google: false, microsoft: false, github: false, signupsOpen: false };
+type AuthFlags = { google: boolean; microsoft: boolean; github: boolean; signupsOpen: boolean;
+  mail: boolean };
+const NO_AUTH: AuthFlags = { google: false, microsoft: false, github: false, signupsOpen: false,
+  mail: false };
 const OAUTH_PROVIDERS: { key: 'google' | 'microsoft' | 'github'; label: string;
   Icon: React.ComponentType<{ size?: number }> }[] = [
   { key: 'google', label: 'Continue with Google', Icon: GoogleIcon },
@@ -209,8 +220,15 @@ function Login() {
     const oauthErr = params.get('error');
     if (token) {
       history.replaceState(null, '', '/app/login');
-      api.post<{ user: User; csrf: string }>('/api/auth/magic-login', { token })
-        .then((r) => app.setUser(r.user, r.csrf))
+      api.post<{ user: User; csrf: string; invited?: boolean }>('/api/auth/magic-login', { token })
+        .then((r) => {
+          // The token is already out of the URL; land on /app rather than leaving
+          // a signed-in session sitting on the /app/login path (a reload would
+          // then take an activated user back to a login screen they are past).
+          history.replaceState(null, '', '/app');
+          justInvited = !!r.invited;
+          app.setUser(r.user, r.csrf);
+        })
         .catch((e) => setErr(e.message));
     } else if (oauthErr) {
       history.replaceState(null, '', '/app/login');
@@ -218,7 +236,14 @@ function Login() {
     }
   }, []);
 
-  const tabs: LoginMode[] = auth.signupsOpen ? ['password', 'magic', 'signup'] : ['password', 'magic'];
+  // No mail transport, no magic link: the route answers {ok:true} either way (it
+  // must not leak whether an address exists), so a tab offered here would look
+  // like it worked and silently never deliver anything.
+  const tabs: LoginMode[] = [
+    'password' as LoginMode,
+    ...(auth.mail ? ['magic' as LoginMode] : []),
+    ...(auth.signupsOpen ? ['signup' as LoginMode] : []),
+  ];
   const tabLabel = (m: LoginMode) => m === 'password' ? 'Password' : m === 'magic' ? 'Magic Link' : 'Sign up';
 
   const submit = async (e: React.FormEvent) => {
@@ -284,9 +309,9 @@ function Login() {
         )}
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         {msg && <div className="text-sm" style={{ color: SEV.green, marginBottom: 8 }}>{msg}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+        <Button variant="primary" block disabled={busy}>
           {busy ? '…' : mode === 'password' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send sign-in link'}
-        </button>
+        </Button>
         {(auth.google || auth.microsoft || auth.github) && (
           <>
             <div className="row text-text3 text-xs" style={{ gap: 8, margin: '14px 0 12px'}}>
@@ -296,12 +321,12 @@ function Login() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {OAUTH_PROVIDERS.filter((p) => auth[p.key]).map((p) => (
-                <button key={p.key} type="button" className="btn"
-                  style={{ width: '100%', justifyContent: 'center', gap: 8 }}
-                  onClick={() => { window.location.href = `/api/auth/${p.key}`; }}>
+                <Button block key={p.key} type="button"
+ style={{ gap: 8 }}
+ onClick={() => { window.location.href = `/api/auth/${p.key}`; }}>
                   <p.Icon size={15} />
                   {p.label}
-                </button>
+                </Button>
               ))}
             </div>
           </>
@@ -319,7 +344,13 @@ function Shell() {
   const [drawer, setDrawer] = useState(false); // phone: sidebar as slide-in drawer
   const [showPalette, setShowPalette] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [showPwModal, setShowPwModal] = useState(!!app.user?.mustChangePassword);
+  // Forced when an admin issued a password that is out there in a chat somewhere;
+  // merely offered right after an activation link, where no such secret exists.
+  const [showPwModal, setShowPwModal] = useState(() => {
+    const open = !!app.user?.mustChangePassword || justInvited;
+    justInvited = false;
+    return open;
+  });
   const [edition, setEdition] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const Page = PAGES[app.nav] || Monitor;
@@ -554,23 +585,32 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
   const [next, setNext] = useState('');
   const [repeat, setRepeat] = useState('');
   const [err, setErr] = useState('');
+  // Nothing to prove when there is no password to prove: an account activated by
+  // link has none, and ownership of the address was proven by opening the link.
+  // The server agrees (auth.js) — asking here for something it will not check
+  // would just be a field nobody can fill in.
+  const first = app.user?.hasPassword === false;
+  const noCurrent = forced || first;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr('');
     if (next !== repeat) { setErr('passwords do not match'); return; }
     try {
       await api.post('/api/auth/change-password',
-        forced ? { newPassword: next } : { currentPassword: cur, newPassword: next });
-      app.setUser({ ...app.user!, mustChangePassword: false });
+        noCurrent ? { newPassword: next } : { currentPassword: cur, newPassword: next });
+      app.setUser({ ...app.user!, mustChangePassword: false, hasPassword: true });
       onClose();
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'error'); }
   };
+  const title = forced ? 'Set a new password' : first ? 'Set a password' : 'Change password';
   return (
-    <Modal title={forced ? 'Set a new password' : 'Change password'} onClose={forced ? () => {} : onClose}
-      hideClose={forced}>
+    <Modal title={title} onClose={forced ? () => {} : onClose} hideClose={forced}>
       {forced && <div className="text-sm text-text2" style={{ marginBottom: 10 }}>
         Your password was issued by an administrator — please set your own before continuing.</div>}
+      {!forced && first && <div className="text-sm text-text2" style={{ marginBottom: 10 }}>
+        Welcome to OpsCat. Your account has no password yet — set one now if you like, or skip
+        it and sign in with a link whenever you need to.</div>}
       <form onSubmit={submit}>
-        {!forced && <Field label="Current password">
+        {!noCurrent && <Field label="Current password">
           <Input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
         </Field>}
         <Field label="New password (min. 12 characters)">
@@ -580,9 +620,11 @@ function ChangePassword({ onClose, forced }: { onClose: () => void; forced: bool
           <Input type="password" required minLength={12} value={repeat} onChange={(e) => setRepeat(e.target.value)} />
         </Field>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>Save</button>
-        {forced && <button type="button" className="btn" onClick={app.logout}
-          style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>Sign out</button>}
+        <Button variant="primary" block >Save</Button>
+        {forced && <Button block type="button" onClick={app.logout}
+ style={{ marginTop: 8 }}>Sign out</Button>}
+        {!forced && first && <Button block type="button" onClick={onClose}
+ style={{ marginTop: 8 }}>Skip for now</Button>}
       </form>
     </Modal>
   );
@@ -689,10 +731,10 @@ function EventSlideOver({ id }: { id: number }) {
         <div style={{ padding: '14px 20px', display: 'flex', gap: 10 }}>
           {[['SCORE', String(detail.severity)], ['HITS', String(detail.hits)],
             ['AGE', age(Date.now() - detail.firstSeen)]].map(([l, v]) => (
-            <div key={l} className="card" style={{ flex: 1, padding: '10px 12px', textAlign: 'center' }}>
+            <Card key={l} style={{ flex: 1, padding: '10px 12px', textAlign: 'center' }}>
               <div className="micro" style={{ fontSize: 'var(--t-2xs)' }}>{l}</div>
               <div className="mono font-bold" style={{ fontSize: 22, color: c }}>{v}</div>
-            </div>
+            </Card>
           ))}
         </div>
         <div style={{ padding: '0 20px 14px' }}>
@@ -713,21 +755,21 @@ function EventSlideOver({ id }: { id: number }) {
           ))}
         </div>
         <div style={{ padding: '0 20px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-sm" style={{ color: SEV.purple }} onClick={() => act('assign')}>
-            Assign to me</button>
-          <button className="btn btn-sm" style={{ color: SEV.medium }} onClick={() => act('downgrade')}>
-            ↓ Downgrade</button>
-          <button className="btn btn-sm" style={{ color: SEV.green }} onClick={() => act('finish')}>
-            ✓ Finish Case</button>
-          <button className="btn btn-sm" style={{ color: SEV.cyan }} onClick={() => setShowNote(!showNote)}>
-            Add Note</button>
+          <Button size="sm" style={{ color: SEV.purple }} onClick={() => act('assign')}>
+            Assign to me</Button>
+          <Button size="sm" style={{ color: SEV.medium }} onClick={() => act('downgrade')}>
+            ↓ Downgrade</Button>
+          <Button size="sm" style={{ color: SEV.green }} onClick={() => act('finish')}>
+            ✓ Finish Case</Button>
+          <Button size="sm" style={{ color: SEV.cyan }} onClick={() => setShowNote(!showNote)}>
+            Add Note</Button>
         </div>
         {showNote && (
           <div style={{ padding: '0 20px 14px' }}>
             <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)}
               placeholder="Note for the case…" />
-            <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }}
-              onClick={() => { act('note', { note }); setShowNote(false); setNote(''); }}>Save note</button>
+            <Button variant="primary" size="sm" style={{ marginTop: 6 }}
+ onClick={() => { act('note', { note }); setShowNote(false); setNote(''); }}>Save note</Button>
           </div>
         )}
         <div style={{ padding: '0 20px 20px' }}>

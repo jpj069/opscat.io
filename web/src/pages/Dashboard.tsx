@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, fmtDuration } from '../format';
-import { Avatar, KpiCard, StackedArea, LineChart, HBars, Skeleton, BarsSkeleton, PageHeader } from '../ui';
+import { Card, Avatar, KpiCard, StackedArea, LineChart, HBars, Skeleton, BarsSkeleton, PageHeader } from '../ui';
 import type { DashboardData, AnalyticsData } from '../types';
 
 const BANDS: Record<'critical' | 'high' | 'medium' | 'low', [number, number]> = {
@@ -50,7 +50,7 @@ export default function Dashboard() {
       </div>
 
       {/* Severity Impact Map */}
-      <div className="card">
+      <Card>
         <div className="card-title">Severity Impact Map</div>
         {app.eventsLoading ? (
           <Skeleton h={64} radius={6} />
@@ -78,28 +78,28 @@ export default function Dashboard() {
             </div>
           </>
         )}
-      </div>
+      </Card>
 
       {/* Volume + MTTR */}
       <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-        <div className="card" style={{ flex: 1, minWidth: 280 }}>
+        <Card style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Event Volume 7d</div>
           <StackedArea data={ana?.volume ?? null} />
-        </div>
-        <div className="card" style={{ flex: 1, minWidth: 280 }}>
+        </Card>
+        <Card style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">MTTR 7d</div>
           <LineChart points={mttrPoints} labels={mttrLabels} color={SEV.green}
             fmt={(v) => `${Math.round(v / 60000)}m`} />
-        </div>
+        </Card>
       </div>
 
       {/* Top types + cases by analyst */}
       <div className="row" style={{ gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
-        <div className="card" style={{ flex: 1, minWidth: 280 }}>
+        <Card style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Top Event Types</div>
           <HBars items={ana?.topTypes ?? null} color={SEV.low} />
-        </div>
-        <div className="card" style={{ flex: 1, minWidth: 280 }}>
+        </Card>
+        <Card style={{ flex: 1, minWidth: 280 }}>
           <div className="card-title">Cases by Analyst</div>
           {!dash ? (
             <BarsSkeleton rows={4} labelW={110} />
@@ -123,7 +123,7 @@ export default function Dashboard() {
               ))}
             </div>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );

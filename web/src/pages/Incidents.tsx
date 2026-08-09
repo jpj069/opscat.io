@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
-import { SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
+import { Card, Button, SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
 import type { Incident } from '../types';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
@@ -55,7 +55,7 @@ export default function Incidents() {
         <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px',
           borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
           <span className="text-lg font-bold text-text0">Incidents</span>
-          <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Incident</button>
+          <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>+ New Incident</Button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {incidents === null && <ListSkeleton rows={5} lines={3} />}
@@ -165,15 +165,15 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
           const col = STATUS_COLOR[s];
           const on = incident.status === s;
           return (
-            <button key={s} className="btn btn-sm" onClick={() => setStatus(s)}
-              style={{ color: col, borderColor: col, textTransform: 'capitalize',
-                background: on ? alpha(col, 0.15) : 'transparent' }}>{s}</button>
+            <Button size="sm" key={s} onClick={() => setStatus(s)}
+ style={{ color: col, borderColor: col, textTransform: 'capitalize',
+ background: on ? alpha(col, 0.15) : 'transparent' }}>{s}</Button>
           );
         })}
       </div>
 
       {/* timeline */}
-      <div className="card" style={{ marginBottom: 18 }}>
+      <Card style={{ marginBottom: 18 }}>
         <div className="card-title">Timeline</div>
         {updates.length === 0 && <div className="text-sm text-text3">No updates yet.</div>}
         {updates.map((u, i) => (
@@ -185,10 +185,10 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
             <span className="text-sm text-text1">{u.message}</span>
           </div>
         ))}
-      </div>
+      </Card>
 
       {/* RCA editor */}
-      <div className="card">
+      <Card>
         <div className="card-title" style={{ justifyContent: 'space-between' }}>
           <span>Root Cause Analysis</span>
           {saved && <span className="mono text-xs" style={{ color: SEV.green }}>saved ✓</span>}
@@ -200,10 +200,10 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
               onChange={(e) => { setDraft((d) => ({ ...d, [f.key]: e.target.value })); setDirty(true); setSaved(false); }} />
           </label>
         ))}
-        <button className="btn btn-primary" onClick={saveRca} disabled={busy || !dirty}>
+        <Button variant="primary" onClick={saveRca} disabled={busy || !dirty}>
           {busy ? 'Saving…' : 'Save RCA'}
-        </button>
-      </div>
+        </Button>
+      </Card>
     </>
   );
 }
@@ -241,8 +241,8 @@ function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreat
             placeholder="We are investigating reports of…" />
         </Field>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy || !title}>{busy ? '…' : 'Create incident'}</button>
+        <Button variant="primary" block
+ disabled={busy || !title}>{busy ? '…' : 'Create incident'}</Button>
       </form>
     </Modal>
   );

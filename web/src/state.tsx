@@ -15,6 +15,8 @@ export interface AppState {
   createOrg: (orgName: string) => Promise<number>;
   reloadOrgs: () => Promise<void>;
   edition: string | null;
+  // this instance can send mail — invitations go out as a link, not a password
+  mailConfigured: boolean;
   theme: string; setTheme: (t: string) => void;
   density: string; setDensity: (d: string) => void;
   nav: string; setNav: (n: string) => void;
@@ -102,6 +104,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [orgs, setOrgs] = useState<OrgMembership[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<number | null>(null);
   const [edition, setEdition] = useState<string | null>(null);
+  const [mailConfigured, setMailConfigured] = useState(false);
   const [theme, setThemeState] = useState(lsGet('opscat-theme', 'dark'));
   const [density, setDensityState] = useState(lsGet('opscat-density', 'comfortable'));
   const [nav, setNavState] = useState(navFromPath());
@@ -118,7 +121,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { document.body.dataset.theme = theme; lsSet('opscat-theme', theme); }, [theme]);
   useEffect(() => { document.body.dataset.density = density; lsSet('opscat-density', density); }, [density]);
-  useEffect(() => { api.get<{ edition: string }>('/api/plans').then((r) => setEdition(r.edition)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get<{ edition: string; auth?: { mail?: boolean } }>('/api/plans')
+      .then((r) => { setEdition(r.edition); setMailConfigured(!!r.auth?.mail); }).catch(() => {});
+  }, []);
 
   const setNav = (n: string) => {
     setNavState(n);
@@ -204,11 +210,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const value = useMemo<AppState>(() => ({
-    user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition,
+    user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition, mailConfigured,
     theme, setTheme: setThemeState, density, setDensity: setDensityState,
     nav, setNav, events, logs, eventsLoading, logsLoading, refreshEvents, connected,
     selectedEvent, setSelectedEvent, bridgeIncident, setBridgeIncident, users, settings, logout,
-  }), [user, orgs, activeOrgId, edition, theme, density, nav, events, logs, eventsLoading,
+  }), [user, orgs, activeOrgId, edition, mailConfigured, theme, density, nav, events, logs, eventsLoading,
     logsLoading, connected, selectedEvent, bridgeIncident, users, settings]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

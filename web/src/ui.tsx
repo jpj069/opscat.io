@@ -286,8 +286,9 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
  * It is per call site on purpose: it earns its keep when column one is the row's
  * identity (case id, hostname) and gets in the way when it is not.
  */
-export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, children }:
-  { minWidth?: number; stickyFirst?: boolean; peek?: boolean; children: React.ReactNode }) {
+export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, fit = false, children }:
+  { minWidth?: number | string; stickyFirst?: boolean; peek?: boolean; fit?: boolean;
+    children: React.ReactNode }) {
   const box = React.useRef<HTMLDivElement>(null);
   const sc = React.useRef<HTMLDivElement>(null);
 
@@ -354,7 +355,15 @@ export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, 
   return (
     <div className={`tbl-box${stickyFirst ? ' tbl-sticky1' : ''}`} ref={box} data-more="0">
       <div className="tbl-scroll" ref={sc}>
-        <div style={{ minWidth }}>{children}</div>
+        {/* `fit` is for a list whose width is set by its CONTENT rather than by a
+            column plan — a log line. `width: max-content` makes this wrapper as wide
+            as the widest row, so row borders and the hover tint still span the full
+            scrolled width; `min-width: 100%` keeps short content filling the panel.
+            Without the max-content half, rows overflow a 100%-wide wrapper and their
+            borders visibly stop where the viewport did. */}
+        <div style={fit ? { width: 'max-content', minWidth: '100%' } : { minWidth }}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -372,6 +381,62 @@ export function PageHeader({ title, children }:
       {children && (
         <div className="row row-wrap" style={{ gap: 10, minWidth: 0 }}>{children}</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * THE button.
+ *
+ * It emits the same `.btn` classes the app already used — a typed façade over the
+ * existing CSS, not a second look. What it buys is that the variants finally live in
+ * ONE place, and that two copy-pasted patterns stop being copy-pasted:
+ *
+ *   `block`  — 36 call sites wrote `style={{ width: '100%', justifyContent: 'center' }}`,
+ *              the single most-duplicated inline style in the app.
+ *   `danger` — 7 wrote `style={{ color: SEV.critical }}`, two with the raw hex.
+ *
+ * `type` is deliberately NOT defaulted. A bare <button> inside a <form> defaults to
+ * `type="submit"`, so giving this a `type="button"` default would silently turn every
+ * submit button in the app into a no-op — a regression a green build sails straight
+ * through.
+ */
+export const Button = React.forwardRef<HTMLButtonElement,
+  React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: 'default' | 'primary' | 'danger';
+    size?: 'md' | 'sm';
+    /** Full width with the label centred — the shape a dialog's confirm button wants. */
+    block?: boolean;
+  }>(
+  function Button({ variant = 'default', size = 'md', block, className, ...rest }, ref) {
+    const cls = ['btn'];
+    if (variant === 'primary') cls.push('btn-primary');
+    if (variant === 'danger') cls.push('btn-danger');
+    if (size === 'sm') cls.push('btn-sm');
+    if (block) cls.push('btn-block');
+    if (className) cls.push(className);
+    return <button ref={ref} className={cls.join(' ')} {...rest} />;
+  });
+
+/**
+ * THE surface. A titled panel — the box every page is built out of.
+ *
+ * `title` renders the `.card-title` row, so a card with a heading no longer needs two
+ * elements at the call site. Never give this `overflow`: a flex child that hides its
+ * overflow can collapse below its content height and grow an inner scrollbar, which is
+ * exactly what `TableScroll` exists to avoid.
+ */
+export function Card({ title, actions, children, className, ...rest }:
+  React.HTMLAttributes<HTMLDivElement> & { title?: React.ReactNode; actions?: React.ReactNode }) {
+  return (
+    <div className={className ? `card ${className}` : 'card'} {...rest}>
+      {title && (
+        <div className="card-title">
+          {title}
+          {actions && <><span style={{ flex: 1 }} />{actions}</>}
+        </div>
+      )}
+      {children}
     </div>
   );
 }
@@ -398,10 +463,37 @@ export const Input = React.forwardRef<HTMLInputElement,
     // Derived here rather than at the call site: nine fields would have to remember
     // it, and the tenth would not. A decimal field passes inputMode explicitly.
     const mode = inputMode ?? (type === 'number' ? 'numeric' : undefined);
+    // A machine address is never prose. `url`/`email` keyboards drop the space bar
+    // for a `.` and lose the suggestion strip — but only if the phone is also told
+    // to stop capitalising and "correcting", which is three more attributes nobody
+    // remembers. So they follow from the keyboard, in one place.
+    const machine = mode === 'url' || mode === 'email';
     return (
       <input ref={ref} className={className ? `ctl ${className}` : 'ctl'} type={type} inputMode={mode}
+        {...(machine ? { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } : null)}
         style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
     );
+  });
+
+/**
+ * THE control for a machine address — a hostname, an IP, a domain or a URL.
+ *
+ * There is NO digits-and-a-dot keyboard on iOS, and the two candidates both fail:
+ * `inputMode="numeric"` has no `.` at all, and `inputMode="decimal"` puts the
+ * LOCALE's decimal separator on the key — a comma on a German phone, so `10,0,0,1`.
+ * The URL keyboard is the real answer: it keeps the letters a hostname needs, moves
+ * `.` and `/` onto the main layer in place of the space bar, and drops the
+ * suggestion strip that was offering "Ich / Hallo / Ja" over a field holding
+ * `10.0.0.1`.
+ *
+ * `type` stays `text`: `type="url"` makes the browser demand a scheme, and
+ * `core-switch-01` is a perfectly good host.
+ */
+export const HostInput = React.forwardRef<HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'width' | 'type' | 'inputMode'>
+  & { width?: number | string }>(
+  function HostInput({ autoComplete = 'off', ...rest }, ref) {
+    return <Input ref={ref} type="text" inputMode="url" autoComplete={autoComplete} {...rest} />;
   });
 
 /* There is deliberately no NativeSelect any more. `Select` (Select.tsx) is THE
@@ -412,6 +504,24 @@ export const Input = React.forwardRef<HTMLInputElement,
    not pay for a second dropdown that behaved differently in every respect.
    A `<select>` is also sized by its LONGEST OPTION, i.e. by data, which is what
    pushed toolbars past the viewport in the first place. */
+
+/**
+ * THE date/time control.
+ *
+ * It exists because a `datetime-local` is the one input whose INTRINSIC width matters:
+ * the browser sizes it to fit "05.08.2026, 09:21" in the user's locale, and that is
+ * wider than any layout guess. Sizing it by hand is what broke the maintenance-window
+ * form — three controls given `style={{ flex, minWidth }}` instead of the `width` prop,
+ * so `--ctl-w` stayed unset, the optical scale compensated against 100% of the wrong
+ * box, and the field overlapped its neighbour and ran 8px past the card.
+ *
+ * So the width lives HERE, once, and call sites override it through `width` only.
+ */
+export const DateTime = React.forwardRef<HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'width' | 'type'> & { width?: number | string }>(
+  function DateTime({ width = 190, ...rest }, ref) {
+    return <Input ref={ref} type="datetime-local" width={width} {...rest} />;
+  });
 
 /**
  * THE multi-line text control.

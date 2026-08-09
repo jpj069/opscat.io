@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea} from '../ui';
+import { Card, Button, SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -41,7 +41,7 @@ export default function Cases() {
       <Tabs value={tab} onChange={setTab}
         tabs={TABS.map((t) => [t, t === 'all' ? 'All' : `${t[0].toUpperCase()}${t.slice(1)} ${counts[t]}`] as const)} />
 
-      <div className="card" style={{ padding: 0 }}>
+      <Card style={{ padding: 0 }}>
         <TableScroll stickyFirst minWidth={900}>
         <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
           <span>Case</span><span>Sev</span><span>Event</span><span>Server</span>
@@ -78,7 +78,7 @@ export default function Cases() {
           </div>
         ))}
         </TableScroll>
-      </div>
+      </Card>
 
       {editing && (
         <CaseEditor c={editing} users={app.users} onClose={() => setEditing(null)}
@@ -137,9 +137,9 @@ function CaseEditor({ c, users, onClose, onSaved }:
         <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={saving} onClick={save}>
-          {saving ? 'Saving…' : 'Save'}</button>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={saving} onClick={save}>
+          {saving ? 'Saving…' : 'Save'}</Button>
       </div>
     </Modal>
   );

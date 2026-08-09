@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV } from '../format';
-import { Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput} from '../ui';
 import { Select } from '../Select';
 
 interface TeamMember { id: number; name: string; role: string; }
@@ -52,10 +52,10 @@ export default function Automation() {
   return (
     <div className="page">
       <PageHeader title="Automation">
-        {canEdit && <button className="btn btn-sm" onClick={() => setEditing('new')}>+ New automation</button>}
+        {canEdit && <Button size="sm" onClick={() => setEditing('new')}>+ New automation</Button>}
       </PageHeader>
 
-      <div className="card">
+      <Card>
         <div className="card-title">Rules</div>
         <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           When an event matches the trigger, the actions run — at most once per event
@@ -103,9 +103,9 @@ export default function Automation() {
             </div>
           ))}
         </TableScroll>
-      </div>
+      </Card>
 
-      <div className="card">
+      <Card>
         <div className="card-title">Recent runs</div>
         {runs === null && <ListSkeleton rows={3} lines={1} />}
         {runs?.length === 0 && (
@@ -121,7 +121,7 @@ export default function Automation() {
               color: r.detail.includes('FAILED') ? SEV.critical : 'var(--text1)' }}>{r.detail}</span>
           </div>
         ))}
-      </div>
+      </Card>
 
       {editing && (
         <EditModal existing={editing === 'new' ? null : editing} team={team}
@@ -238,7 +238,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
             {a.type === 'webhook' && (
               <div style={{ marginTop: 8 }}>
                 <Field label="Webhook URL (POST, JSON payload)">
-                  <Input required type="url" className="mono" value={a.url || ''}
+                  <HostInput required className="mono" value={a.url || ''}
                     onChange={(e) => setAction(i, { url: e.target.value })}
                     placeholder="https://hooks.example.com/opscat" />
                 </Field>
@@ -247,13 +247,13 @@ function EditModal({ existing, team, onClose, onSaved }: {
           </div>
         ))}
         {actions.length < 5 && (
-          <button type="button" className="btn btn-sm" style={{ marginBottom: 12 }}
-            onClick={() => setActions((cur) => [...cur, { type: 'webhook' }])}>+ Add action</button>
+          <Button size="sm" type="button" style={{ marginBottom: 12 }}
+ onClick={() => setActions((cur) => [...cur, { type: 'webhook' }])}>+ Add action</Button>
         )}
 
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-          disabled={busy}>{busy ? '…' : existing ? 'Save changes' : 'Create automation'}</button>
+        <Button variant="primary" block
+ disabled={busy}>{busy ? '…' : existing ? 'Save changes' : 'Create automation'}</Button>
       </form>
     </Modal>
   );

@@ -49,7 +49,10 @@ for (const file of walk(SRC)) {
   if (!/\.tsx$/.test(file)) continue;
   const rel = relative(SRC, file);
   const src = readFileSync(file, 'utf8');
-  for (const m of src.matchAll(/<TableSkeleton/g)) {
+  // The boundary matters: without it `<TableSkeletonDemo` — a wrapper component in
+  // the Component Lab — reads as a bare TableSkeleton and the guard fires on a file
+  // that is doing exactly the right thing. A check that cries wolf gets switched off.
+  for (const m of src.matchAll(/<TableSkeleton(?![A-Za-z0-9_])/g)) {
     const before = src.slice(0, m.index);
     // TableScroll is the component; `.tbl-scroll` is the same scroller hand-rolled
     // where a table also needs its own vertical window (LogsPage). Both count.

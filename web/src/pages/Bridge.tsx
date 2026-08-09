@@ -11,7 +11,7 @@ import {
 import { api, ApiError, openStream } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtTime, initials, sevColor } from '../format';
-import { Busy, GlowDot, Modal, SevBadge, Skeleton, StatusPill, ListSkeleton, Input, Field } from '../ui';
+import { Card, Button, Busy, GlowDot, Modal, SevBadge, Skeleton, StatusPill, ListSkeleton, Input, Field } from '../ui';
 import {
   ArrowLeftIcon, BellIcon, ChevronLeftIcon, ChevronRightIcon, LogOutIcon,
   MaximizeIcon, MicIcon, MicOffIcon, MonitorIcon, MonitorUpIcon, PlusIcon,
@@ -411,22 +411,22 @@ export default function Bridge() {
   if (status === 'noincident') {
     return (
       <div className="page">
-        <div className="card" style={{ maxWidth: 560 }}>
+        <Card style={{ maxWidth: 560 }}>
           <div className="card-title"><RadioIcon size={14} /> Bridge</div>
           <p className="text-sm" style={{ margin: 0 }}>
             The Bridge is an incident's war room. Open one from
             <b> Incidents</b> → select an incident → <b>Open the Bridge</b>.
           </p>
-          <button className="btn btn-primary" style={{ marginTop: 12 }}
-            onClick={() => app.setNav('incidents')}>Go to Incidents</button>
-        </div>
+          <Button variant="primary" style={{ marginTop: 12 }}
+ onClick={() => app.setNav('incidents')}>Go to Incidents</Button>
+        </Card>
       </div>
     );
   }
   if (status === 'unconfigured') {
     return (
       <div className="page">
-        <div className="card" style={{ maxWidth: 640 }}>
+        <Card style={{ maxWidth: 640 }}>
           <div className="card-title"><RadioIcon size={14} /> Bridge is not configured</div>
           <p className="text-sm" style={{ marginTop: 0 }}>
             The LiveKit sidecar is not set up on this server yet. An admin needs to:
@@ -437,45 +437,45 @@ export default function Bridge() {
             <li>add a DNS record for <span className="mono">bridge.&lt;your-domain&gt;</span> and open UDP 50100-50200 + TCP 7881</li>
           </ol>
           <p className="text-sm text-text2" style={{ margin: 0 }}>Full walkthrough: docs/BRIDGE.md</p>
-        </div>
+        </Card>
       </div>
     );
   }
   if (status === 'noplan') {
     return (
       <div className="page">
-        <div className="card" style={{ maxWidth: 560 }}>
+        <Card style={{ maxWidth: 560 }}>
           <div className="card-title"><RadioIcon size={14} /> Bridge</div>
           <p className="text-sm" style={{ margin: 0 }}>
             The Bridge is available on the Business and Enterprise plans.
           </p>
-        </div>
+        </Card>
       </div>
     );
   }
   if (status === 'noroom') {
     return (
       <div className="page">
-        <div className="card" style={{ maxWidth: 560 }}>
+        <Card style={{ maxWidth: 560 }}>
           <div className="card-title"><RadioIcon size={14} /> No bridge yet</div>
           <p className="text-sm" style={{ margin: 0 }}>
             This incident has no bridge open. A user with the <b>lead</b> role (or above)
             opens it from the incident.
           </p>
-          <button className="btn" style={{ marginTop: 12 }} onClick={() => app.setNav('incidents')}>
+          <Button style={{ marginTop: 12 }} onClick={() => app.setNav('incidents')}>
             <ArrowLeftIcon size={13} /> Back to Incidents
-          </button>
-        </div>
+          </Button>
+        </Card>
       </div>
     );
   }
   if (status === 'error') {
     return (
       <div className="page">
-        <div className="card" style={{ maxWidth: 560 }}>
+        <Card style={{ maxWidth: 560 }}>
           <div className="card-title"><RadioIcon size={14} /> Bridge unavailable</div>
           <p className="text-sm" style={{ margin: 0 }}>{errMsg}</p>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -542,23 +542,23 @@ export default function Bridge() {
           <div style={{ flex: 1 }} />
           {connLabel && <span className="pill" style={{ color: connLabel.color, background: alpha(connLabel.color, 0.1),
             border: `1px solid ${alpha(connLabel.color, 0.3)}` }}>{connLabel.text}</span>}
-          <button className="btn btn-sm" onClick={toggleMic} title={micOn ? 'Mute' : 'Unmute'}
-            style={micOn ? {} : { color: SEV.critical, borderColor: alpha(SEV.critical, 0.4) }}>
+          <Button size="sm" onClick={toggleMic} title={micOn ? 'Mute' : 'Unmute'}
+ style={micOn ? {} : { color: SEV.critical, borderColor: alpha(SEV.critical, 0.4) }}>
             {micOn ? <MicIcon size={13} /> : <MicOffIcon size={13} />}
-          </button>
-          <button className="btn btn-sm" onClick={toggleShare} title={sharing ? 'Stop sharing' : 'Share your screen'}
-            style={sharing ? { color: SEV.green, borderColor: alpha(SEV.green, 0.45) } : {}}>
+          </Button>
+          <Button size="sm" onClick={toggleShare} title={sharing ? 'Stop sharing' : 'Share your screen'}
+ style={sharing ? { color: SEV.green, borderColor: alpha(SEV.green, 0.45) } : {}}>
             {sharing ? <MonitorIcon size={13} /> : <MonitorUpIcon size={13} />}
-          </button>
+          </Button>
           {canLead && room.status === 'open' && (
-            <button className="btn btn-sm" onClick={closeRoom}
-              style={closeArmed ? { color: '#fff', background: SEV.critical, borderColor: SEV.critical } : {}}>
+            <Button size="sm" onClick={closeRoom}
+ style={closeArmed ? { color: '#fff', background: SEV.critical, borderColor: SEV.critical } : {}}>
               {closeArmed ? 'Confirm close' : 'Close bridge'}
-            </button>
+            </Button>
           )}
-          <button className="btn btn-sm" onClick={leave} title="Leave the bridge">
+          <Button size="sm" onClick={leave} title="Leave the bridge">
             <LogOutIcon size={13} /> Leave
-          </button>
+          </Button>
         </div>
         {lkNote && <div className="text-xs" style={{ padding: '0 18px 8px', color: SEV.medium }}>{lkNote}</div>}
 
@@ -572,10 +572,10 @@ export default function Bridge() {
                 const gShares = sharesFor(g.id);
                 const mine = (myGroupId ?? null) === g.id;
                 return (
-                  <div key={g.id ?? 'lobby'} role="button" tabIndex={0}
+                  <Card key={g.id ?? 'lobby'} role="button" tabIndex={0}
                     onClick={() => joinGroup(g.id)}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); joinGroup(g.id); } }}
-                    className="card" style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex',
+                    style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex',
                       flexDirection: 'column', gap: 8, borderColor: mine ? 'var(--low)' : undefined }}>
                     <div className="row" style={{ gap: 7, minWidth: 0 }}>
                       <GlowDot color={g.color} size={8} />
@@ -633,7 +633,7 @@ export default function Bridge() {
                       <div className="text-sm text-text3" style={{ border: '1px dashed var(--bg3)', borderRadius: 4,
                         padding: '14px 10px', textAlign: 'center' }}>No screens shared — audio only</div>
                     )}
-                  </div>
+                  </Card>
                 );
               })}
               <button onClick={() => setShowNewGroup(true)}
@@ -651,9 +651,9 @@ export default function Bridge() {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0 }}>
                 <div className="row row-wrap" style={{ gap: 10 }}>
-                  <button className="btn btn-sm" onClick={() => setView('wall')}>
+                  <Button size="sm" onClick={() => setView('wall')}>
                     <ArrowLeftIcon size={12} /> Mission Control
-                  </button>
+                  </Button>
                   <span className="row text-lg font-semibold text-text0" style={{ gap: 8 }}>
                     <GlowDot color={focusedGroup.color} size={8} />{focusedGroup.name}
                   </span>
@@ -808,11 +808,11 @@ export default function Bridge() {
           </div>
           {toast.group_id && (
             <div className="row" style={{ gap: 8, marginTop: 9 }}>
-              <button className="btn btn-sm btn-primary"
-                onClick={() => { const gid = toast.group_id; setToast(null); void joinGroup(gid); }}>
+              <Button variant="primary" size="sm"
+ onClick={() => { const gid = toast.group_id; setToast(null); void joinGroup(gid); }}>
                 Open {openGroups.find((g) => g.id === toast.group_id)?.name || 'group'}
-              </button>
-              <button className="btn btn-sm" onClick={() => setToast(null)}>Dismiss</button>
+              </Button>
+              <Button size="sm" onClick={() => setToast(null)}>Dismiss</Button>
             </div>
           )}
         </div>
@@ -832,8 +832,8 @@ function NewGroupModal({ onClose, onCreate }: { onClose: () => void; onCreate: (
           autoFocus onKeyDown={(e) => { if (e.key === 'Enter') onCreate(name); }} />
       </Field>
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" onClick={() => onCreate(name)} disabled={!name.trim()}>Create</button>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={() => onCreate(name)} disabled={!name.trim()}>Create</Button>
       </div>
     </Modal>
   );

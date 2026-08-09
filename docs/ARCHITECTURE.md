@@ -409,6 +409,35 @@ Desktop keeps the dense NOC values unchanged; only the phone column moves. Rules
 - Exception: `Classic.tsx` is a fixed-cell terminal skin whose character grid only lines
   up at one size; it deliberately does not ride the scale.
 
+### Form control primitives, and why width is a prop
+
+`Input` (text-like), `Textarea` (multi-line) and `DateTime` (`datetime-local`) live in
+`ui.tsx`; `Select`/`MultiSelect` in `Select.tsx`. There is no bare `<input>`/`<select>`/
+`<textarea>` in a page.
+
+`Input` draws its value at an **optical 14px** while telling Safari 16px — `.ctl` in
+`tokens.css` applies `transform: scale(.875)` and compensates the layout box with
+`width: calc(var(--ctl-w, 100%) / var(--ctl-s))` plus a negative margin. A transform
+shrinks what is *painted*, not what is *measured*, so the zoom cannot fire while the
+value stops towering over its 13px label.
+
+That compensation is the reason **width is a prop**: only `width` sets `--ctl-w`. Given a
+width through `style`, a `w-*` class or `flex`/`minWidth`, the element's layout box is set
+by the utility while the compensation still divides 100% of the *parent* — the two
+disagree and the control ends up wider than the space it was given. Measured on
+`/app/settings` at 390px: three maintenance-window controls sized with
+`style={{ flex: 1, minWidth: … }}` produced a `datetime-local` that overlapped its
+neighbour by 6px and ran 8px past the card.
+
+`DateTime` exists because `datetime-local` is the one input whose **intrinsic** width
+matters — the browser sizes it to fit the locale's date+time ("05.08.2026, 09:21"), which
+is wider than any layout guess. So the width lives in the primitive (190px), once, and
+call sites override only through `width`.
+
+`scripts/probe-mobile.mjs` hit-tests every `.ctl`/`.ctl-ta` against its parent box and
+fails on a spill. It replaced a static lint rule that grepped for inline sizing: that rule
+flagged 14 call sites and exactly one of them actually broke.
+
 ## Frontend scroll architecture (why phones scroll the document)
 
 Desktop is a classic app shell: `html, body, #root` are exactly window-height, the shell
