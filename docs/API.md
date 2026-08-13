@@ -104,7 +104,7 @@ enforce the plan's `ingestLinesPerDay` limit and answer `429` once the day's all
 
 Install files are served unauthenticated under `/agent/` (`install.sh`,
 `opscat-agent.js`, `opscat-agent.service`), enabling the copy-paste install
-one-liner shown in onboarding and Settings → Agents:
+one-liner shown in onboarding and Settings → Agents & SNMP:
 `curl -fsSL https://<host>/agent/install.sh | sudo OPSCAT_URL=… OPSCAT_AGENT_TOKEN=oca_… sh`
 
 | Endpoint | Body |
@@ -216,7 +216,7 @@ revokes the probe key before destroying the VM).
 | GET `/super-admins` | list platform super-admins |
 | POST `/super-admins` | `{email}` — grant the flag to an existing account (audited) |
 | POST `/users/:id/super-admin` | grant/revoke the platform role by user id (self-demote rejected) |
-| GET/PUT `/ai` | platform LLM default (OpenAI-compatible `{baseUrl, model, apiKey}` — key write-only/encrypted); orgs without their own Settings → AI override use this |
+| GET/PUT `/ai` | platform LLM default (OpenAI-compatible `{baseUrl, model, apiKey}` — key write-only/encrypted); orgs without their own Settings → AI & Voice override use this |
 | GET `/audit` | platform-wide audit trail |
 
 Errors are always JSON `{error}` with proper status codes. Rate limits: auth 10/min/IP,

@@ -69,7 +69,7 @@ into a real classifier rule, or dismiss. Masking runs only for unmatched lines
 and counts are buffered (5 s flush), so the ingest hot path stays cheap.
 
 AI features call the org's LLM through `server/src/llm.js` (OpenAI-compatible
-chat completions): org override (Settings → AI) → platform default (super-admin
+chat completions): org override (Settings → AI & Voice) → platform default (super-admin
 console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by any API.
 
 ## Synthetics
@@ -529,6 +529,17 @@ Two things that conversion has to preserve, both easy to lose:
   **upward** over the trigger — an overview that pushed the form down would move the very
   field the user is looking at. Two pills already need three lines at 390px, which is why
   "compact" means one.
+- **The panel swallows the click's DEFAULT ACTION** (`preventDefault` on the panel root
+  and on the MultiSelect overview). `Field` (`ui.tsx`) is a `<label>` that *wraps* its
+  control, and the panel is deliberately a DOM descendant of `.sel` (no portal, see the
+  top layer below) — so a click in the panel is a click inside that label, whose default
+  action is "fire a click at the labeled control", i.e. at the trigger. Measured in
+  Chromium: picking an option gave the real click (`detail=1`) on `.sel-opt` and then a
+  second *trusted* click with `detail=0` on `.sel-trigger`; `setOpen(false)` had already
+  run, so the trigger read `open === false` and re-opened the panel. Symptom: picking did
+  not close the picker, and clicking the scrim "did nothing" (it closed and re-opened in
+  the same gesture). 22 pickers across 11 pages sit inside a `Field`. `stopPropagation`
+  does **not** help — only `preventDefault` cancels an activation behavior.
 - **a11y:** trigger is `role="combobox"` + `aria-expanded`, panel is `role="listbox"` with
   `aria-selected` / `aria-activedescendant`; arrows move the highlight, Enter picks,
   Escape closes (handler on `document` — after a drag the focus is outside the panel),
@@ -621,6 +632,40 @@ derived, never hand-drawn.**
 - **Guard:** `web/scripts/check-loading-states.mjs` (runs in `npm run build`, therefore
   in the Docker build and the deploy) fails on any new ad-hoc `loading…` text outside
   `ui.tsx`. A deliberate text-only case opts out with a `skeleton-exempt` comment.
+
+## Settings page (six tabs, addressable)
+
+`Settings.tsx` was one scroll of twelve unrelated cards — billing, platform fields,
+five notification providers, two LLM endpoints, maintenance windows, API keys, OAuth
+grants, agents, SNMP targets and system info — with nothing between them. It is now
+one tab per job, via `<Tabs>` + `useTab` like every other tabbed page, so each half of
+it has a URL:
+
+| Tab | URL | Cards | Visible to |
+|-----|-----|-------|-----------|
+| General | `/app/settings/general` | Organization (name, backend label, log retention, status page published) · System | everyone; System admin-only |
+| Notifications | `/app/settings/notifications` | Sender addresses · Channel credentials (Teams / Telegram / Pushover) · Maintenance Windows | everyone; editing admin, windows lead+ |
+| AI & Voice | `/app/settings/ai` | AI (chat endpoint) · Voice / Transcription (STT) | admin only — the tab is not rendered for anyone else |
+| API & Access | `/app/settings/access` | API Keys · Connected apps (the caller's own MCP/OAuth grants) | keys lead+, connected apps everyone |
+| Agents & SNMP | `/app/settings/collectors` | Agents · SNMP Targets | agents everyone (edit lead+), SNMP lead+ |
+| Billing | `/app/settings/billing` | Plan & Billing (usage bars, upgrade, Stripe portal) | everyone; buying admin |
+
+Three things fall out of the split and are easy to get wrong again:
+
+- **One draft, two tabs.** General and Notifications both PATCH `/api/admin/settings`,
+  so the draft lives in the page (`useSettingsDraft`) and both tabs render the same
+  `SaveBar`. Switching tabs must not drop an edit, and one save has to write both;
+  the bar says *Unsaved changes* so the shared draft is visible rather than implied.
+- **Each tab fetches its own data**, on mount of the tab, not of the page. Opening
+  Settings no longer fires six requests for cards nobody looked at.
+- **Role gates decide the tab, not just the card.** The AI tab would be empty for
+  non-admins (`/api/admin/ai` is `requireRole('admin')`), so it is not offered at all;
+  cards that a role may only partly see still fall back on a 403 from their own fetch.
+
+Stripe returns to `/app/settings/billing?billing=success|cancel` (`routes/billing.js`).
+The tab has to be picked from that query **during render** — `useTab` normalises the URL
+on mount and the query is gone by the first effect — which is what `billingReturnTab()`
+does; the card then drops the query and keeps the tab.
 
 ## Repository layout
 

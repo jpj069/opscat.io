@@ -1,10 +1,17 @@
-// Settings — platform config, notifications, API keys, agents, SNMP targets, system info.
-import React, { useEffect, useState } from 'react';
+// Settings — everything that configures the organization, in six tabs.
+//
+// This page used to be ONE scroll of twelve unrelated cards: billing, platform
+// fields, five notification providers, two LLM endpoints, maintenance windows,
+// API keys, OAuth grants, agents, SNMP targets and system info, with nothing
+// between them. Each tab is one job now, and the tab lives in the URL — so
+// /app/settings/notifications is a link somebody can send.
+import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
-import { useApp } from '../state';
+import { useApp, useTab } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import { Card, Button,
-  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy, PageHeader, Input, HostInput, DateTime} from '../ui';
+  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy,
+  PageHeader, Tabs, Input, HostInput, DateTime} from '../ui';
 import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
@@ -19,11 +26,36 @@ const AGENTS_GRID = '1fr 100px 140px 100px 80px 100px 90px 60px';
 const TARGETS_GRID = '1fr 160px 70px 90px 110px 110px 80px';
 const CONNECTIONS_GRID = '1fr 130px 120px 120px 90px';
 
+// Grouped by the job, not by the API that happens to serve them: the two cards
+// that PATCH /api/admin/settings sit in the two tabs their fields belong to.
+const SETTINGS_TABS = [
+  ['general', 'General'],
+  ['notifications', 'Notifications'],
+  ['ai', 'AI & Voice'],
+  ['access', 'API & Access'],
+  ['collectors', 'Agents & SNMP'],
+  ['billing', 'Billing'],
+] as const;
+type Tab = (typeof SETTINGS_TABS)[number][0];
+
 interface SystemInfo {
   uptimeS?: number; dbBytes?: number; nodeVersion?: string;
   counts?: { logs?: number; events?: number; cases?: number; users?: number };
 }
 export interface SecretInfo { title: string; note: string; value: string; extra?: React.ReactNode; }
+
+const on403 = (setHidden: (v: boolean) => void, fallback: () => void) => (e: unknown) => {
+  if (e instanceof ApiError && e.status === 403) setHidden(true); else fallback();
+};
+
+// Stripe sends the customer back to /app/settings/billing?billing=success|cancel.
+// Read during RENDER, not from an effect: useTab normalises the URL on mount and
+// the tab has to be picked before that. Old links without the tab segment still
+// land right, which is why this exists at all.
+function billingReturnTab(): Tab | undefined {
+  const p = new URLSearchParams(location.search).get('billing');
+  return p === 'success' || p === 'cancel' ? 'billing' : undefined;
+}
 
 // ---------------------------------------------------------------- page
 
@@ -33,331 +65,426 @@ export default function Settings() {
   const leadPlus = rank >= 2;
   const isAdmin = app.user?.role === 'admin';
 
-  // key/value settings + edit draft
+  // /api/admin/ai and /api/admin/voice are admin-only end to end, so the tab is
+  // not offered to anyone else — an empty tab is worse than no tab.
+  const tabs = useMemo(() => SETTINGS_TABS.filter(([id]) => id !== 'ai' || isAdmin), [isAdmin]);
+  const ids = useMemo(() => tabs.map((t) => t[0]), [tabs]);
+  const [tab, setTab] = useTab<Tab>(ids, billingReturnTab());
+
+  // One draft for both settings tabs: they write the same endpoint, so switching
+  // tabs must not drop an edit and one save has to persist all of them.
+  const draft = useSettingsDraft();
+
+  return (
+    <div className="page">
+      <PageHeader title="Settings" />
+      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+
+      {tab === 'general' && <GeneralTab d={draft} isAdmin={!!isAdmin} />}
+      {tab === 'notifications' && <NotificationsTab d={draft} isAdmin={!!isAdmin} canEdit={leadPlus} />}
+      {tab === 'ai' && isAdmin && <><AiCard /><VoiceCard /></>}
+      {tab === 'access' && <AccessTab leadPlus={leadPlus} />}
+      {tab === 'collectors' && <CollectorsTab leadPlus={leadPlus} />}
+      {tab === 'billing' && <BillingCard />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- key/value settings
+
+interface SettingsDraft {
+  settings: SettingsMap | null;
+  val: (k: string) => string;
+  setVal: (k: string, v: string) => void;
+  has: (k: string) => boolean;
+  dirty: boolean; saving: boolean; saved: boolean; err: string;
+  save: () => void;
+}
+
+// The /api/admin/settings key/value pairs, plus the edit draft over them. Lives
+// in the page so the General and Notifications tabs share one draft and one save.
+function useSettingsDraft(): SettingsDraft {
   const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-
-  // sub-resources
-  const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
-  const [keysHidden, setKeysHidden] = useState(false);
-  const [agents, setAgents] = useState<AgentRow[] | null>(null);
-  const [agentsHidden, setAgentsHidden] = useState(false);
-  const [targets, setTargets] = useState<SnmpTarget[] | null>(null);
-  const [targetsHidden, setTargetsHidden] = useState(false);
-  const [connections, setConnections] = useState<McpConnection[] | null>(null);
-  const [sys, setSys] = useState<SystemInfo | null>(null);
-  const [sysHidden, setSysHidden] = useState(false);
-
-  // modals
-  const [modal, setModal] = useState<'key' | 'agent' | 'target' | null>(null);
-  const [secret, setSecret] = useState<SecretInfo | null>(null);
-
-  const on403 = (setHidden: (v: boolean) => void, fallback: () => void) => (e: unknown) => {
-    if (e instanceof ApiError && e.status === 403) setHidden(true); else fallback();
-  };
-  const reloadKeys = () => api.get<ApiKeyRow[]>('/api/admin/apikeys').then(setKeys).catch(() => {});
-  const reloadAgents = () => api.get<AgentRow[]>('/api/admin/agents').then(setAgents).catch(() => {});
-  const reloadTargets = () => api.get<SnmpTarget[]>('/api/admin/snmp/targets').then(setTargets).catch(() => {});
-  // Connections are the caller's OWN authorized MCP clients, not org config —
-  // every role sees their own, so this is not behind the lead+ gate.
-  const reloadConnections = () => api.get<McpConnection[]>('/api/admin/connections')
-    .then(setConnections).catch(() => setConnections([]));
+  const [err, setErr] = useState('');
 
   useEffect(() => {
     api.get<SettingsMap>('/api/admin/settings').then(setSettings).catch(() => setSettings({}));
-    reloadConnections();
-
-    if (leadPlus) {
-      api.get<ApiKeyRow[]>('/api/admin/apikeys').then(setKeys)
-        .catch(on403(setKeysHidden, () => setKeys([])));
-      api.get<SnmpTarget[]>('/api/admin/snmp/targets').then(setTargets)
-        .catch(on403(setTargetsHidden, () => setTargets([])));
-    } else { setKeysHidden(true); setTargetsHidden(true); }
-
-    api.get<AgentRow[]>('/api/admin/agents').then(setAgents)
-      .catch(on403(setAgentsHidden, () => setAgents([])));
-
-    if (isAdmin) {
-      api.get<SystemInfo>('/api/admin/system').then(setSys)
-        .catch(on403(setSysHidden, () => setSysHidden(true)));
-    } else setSysHidden(true);
   }, []);
 
-  // key/value helpers
-  const val = (k: string) => draft[k] ?? settings?.[k] ?? '';
-  const setVal = (k: string, v: string) => setDraft((d) => ({ ...d, [k]: v }));
-  const has = (k: string) => settings != null && k in settings;
-  const dirty = Object.keys(draft).length > 0;
-
   const save = async () => {
-    if (!dirty) return;
-    setSaving(true);
+    if (!Object.keys(draft).length) return;
+    setSaving(true); setErr('');
     try {
       await api.patch('/api/admin/settings', draft);
       setSettings((s) => ({ ...(s || {}), ...draft }));
       setDraft({});
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch { /* keep draft so the user can retry */ }
-    finally { setSaving(false); }
+    } catch (ex) {
+      // keep the draft so the user can retry — but say so, instead of swallowing it
+      setErr(ex instanceof ApiError ? ex.message : 'network error');
+    } finally { setSaving(false); }
   };
 
-  const textRow = (k: string, label: string,
-    opts?: { type?: string; placeholder?: string; mono?: boolean }) => (
-    <Row key={k} label={label}>
-      {has(k) ? (
-        <Input type={opts?.type || 'text'} value={val(k)} placeholder={opts?.placeholder}
-          className={opts?.mono ? 'mono' : undefined}
-          onChange={(e) => setVal(k, e.target.value)} />
+  return {
+    settings,
+    val: (k) => draft[k] ?? settings?.[k] ?? '',
+    setVal: (k, v) => setDraft((cur) => ({ ...cur, [k]: v })),
+    // a key the server did not return is one this role may not read
+    has: (k) => settings != null && k in settings,
+    dirty: Object.keys(draft).length > 0,
+    saving, saved, err, save,
+  };
+}
+
+// Editing needs admin (PATCH /api/admin/settings is requireRole('admin')). Everyone
+// else reads: the value when the server sends it, "—" when it is admin-only.
+function TextRow({ d, k, label, hint, isAdmin, type, placeholder, mono }: {
+  d: SettingsDraft; k: string; label: string; hint?: string; isAdmin: boolean;
+  type?: string; placeholder?: string; mono?: boolean;
+}) {
+  const secret = type === 'password';
+  return (
+    <Row label={label} hint={hint}>
+      {isAdmin && d.has(k) ? (
+        <Input type={type || 'text'} value={d.val(k)} placeholder={placeholder}
+          className={mono ? 'mono' : undefined}
+          onChange={(e) => d.setVal(k, e.target.value)} />
       ) : (
-        <div className="row" style={{ gap: 8 }}>
-          <Input disabled value="" placeholder={opts?.placeholder}
-            style={{ opacity: 0.55 }} />
+        <div className="row" style={{ gap: 8, minWidth: 0 }}>
+          <span className={`text-sm text-text2${mono && !secret ? ' mono' : ''}`}
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {d.has(k) && d.val(k) ? (secret ? '••••••••' : d.val(k)) : '—'}
+          </span>
           <span className="text-xs text-text3" style={{ whiteSpace: 'nowrap' }}>admin only</span>
         </div>
       )}
     </Row>
   );
-  const toggleRow = (k: string, label: string) => {
-    const isOn = val(k) === '1';
-    return (
-      <Row key={k} label={label}>
-        {has(k)
-          ? <Toggle on={isOn} onClick={() => setVal(k, isOn ? '0' : '1')} />
-          : <span className="text-xs text-text3">admin only</span>}
-      </Row>
-    );
-  };
+}
+function ToggleRow({ d, k, label, hint, isAdmin }: {
+  d: SettingsDraft; k: string; label: string; hint?: string; isAdmin: boolean;
+}) {
+  const isOn = d.val(k) === '1';
+  const editable = isAdmin && d.has(k);
+  return (
+    <Row label={label} hint={hint}>
+      <div className="row" style={{ gap: 8 }}>
+        <Toggle on={isOn} disabled={!editable}
+          onClick={editable ? () => d.setVal(k, isOn ? '0' : '1') : undefined} />
+        {!editable && <span className="text-xs text-text3">admin only</span>}
+      </div>
+    </Row>
+  );
+}
+
+function SaveBar({ d }: { d: SettingsDraft }) {
+  return (
+    <div className="row row-wrap" style={{ justifyContent: 'flex-end', gap: 12 }}>
+      {d.err && <span className="text-sm" style={{ color: SEV.critical }}>{d.err}</span>}
+      {d.dirty && !d.err && <span className="text-sm text-text3">Unsaved changes</span>}
+      {d.saved && <span className="text-base font-semibold" style={{ color: SEV.green }}>saved ✓</span>}
+      <Button variant="primary" onClick={d.save} disabled={!d.dirty || d.saving}>
+        {d.saving ? 'Saving…' : 'Save changes'}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- general
+
+function GeneralTab({ d, isAdmin }: { d: SettingsDraft; isAdmin: boolean }) {
+  return (
+    <>
+      <Card title="Organization">
+        <CardNote>Who this tenant is, how long its data is kept, and whether the
+          public status page is served.</CardNote>
+        {d.settings === null ? <FormSkeleton rows={4} /> : (
+          <>
+            <TextRow d={d} isAdmin={isAdmin} k="org_name" label="Organization name" />
+            <TextRow d={d} isAdmin={isAdmin} k="backend_label" label="Backend label"
+              hint="Free-text label for this deployment, e.g. nbg1 · PRIMARY" />
+            <TextRow d={d} isAdmin={isAdmin} k="retention_logs_days" label="Log retention (days)"
+              type="number" hint="Logs older than this are dropped by the nightly cleanup" />
+            <ToggleRow d={d} isAdmin={isAdmin} k="status_published" label="Status page published"
+              hint="Serves the public status page at /status" />
+          </>
+        )}
+      </Card>
+      {isAdmin && <SaveBar d={d} />}
+      {isAdmin && <SystemCard />}
+    </>
+  );
+}
+
+// Admin-only read-out of the running instance (/api/admin/system).
+function SystemCard() {
+  const [sys, setSys] = useState<SystemInfo | null>(null);
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    api.get<SystemInfo>('/api/admin/system').then(setSys)
+      .catch(on403(setHidden, () => setHidden(true)));
+  }, []);
+  if (hidden) return null;
+  return (
+    <Card title="System">
+      {sys === null ? <FormSkeleton rows={4} /> : (
+        <>
+          <Row label="Uptime">
+            <span className="mono text-sm text-text1">
+              {sys.uptimeS != null ? fmtDuration(sys.uptimeS * 1000) : '—'}</span>
+          </Row>
+          <Row label="Database size">
+            <span className="mono text-sm text-text1">
+              {sys.dbBytes != null ? fmtBytes(sys.dbBytes) : '—'}</span>
+          </Row>
+          <Row label="Records">
+            <span className="mono text-sm text-text1">
+              {sys.counts?.logs ?? 0} logs · {sys.counts?.events ?? 0} events · {sys.counts?.cases ?? 0} cases · {sys.counts?.users ?? 0} users
+            </span>
+          </Row>
+          <Row label="Node version">
+            <span className="mono text-sm text-text1">{sys.nodeVersion || '—'}</span>
+          </Row>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- notifications
+
+function NotificationsTab({ d, isAdmin, canEdit }:
+  { d: SettingsDraft; isAdmin: boolean; canEdit: boolean }) {
+  return (
+    <>
+      <Card title="Sender addresses">
+        <CardNote>From addresses for outgoing mail. Auth mail falls back to the alert
+          address when it is left empty.</CardNote>
+        {d.settings === null ? <FormSkeleton rows={2} /> : (
+          <>
+            <TextRow d={d} isAdmin={isAdmin} k="alert_email_from" label="Alert email from"
+              placeholder="OpsCat Alerts <alerts@opscat.io>" />
+            <TextRow d={d} isAdmin={isAdmin} k="auth_email_from" label="Auth email from"
+              hint="Sign-in and magic-link mail" placeholder="OpsCat <auth@opscat.io>" />
+          </>
+        )}
+      </Card>
+
+      <Card title="Channel credentials">
+        <CardNote>Org-wide credentials the alert channels need. WHO gets an alert is
+          decided per rule under Alert Rules — a Telegram chat id, a Pushover user key
+          or a Slack, Discord, ntfy or webhook URL is a recipient and lives there.</CardNote>
+        {d.settings === null ? <FormSkeleton rows={3} /> : (
+          <>
+            <TextRow d={d} isAdmin={isAdmin} k="teams_webhook_url" label="Teams webhook URL"
+              mono hint="Fallback for Teams rules that carry no webhook of their own"
+              placeholder="https://outlook.office.com/webhook/…" />
+            <TextRow d={d} isAdmin={isAdmin} k="telegram_bot_token" label="Telegram bot token"
+              type="password" mono placeholder="123456:ABC-DEF…" />
+            <TextRow d={d} isAdmin={isAdmin} k="pushover_token" label="Pushover app token"
+              type="password" mono placeholder="azGDORePK8gMaC0QOYAMyEEuzJnyUi" />
+          </>
+        )}
+      </Card>
+
+      {isAdmin && <SaveBar d={d} />}
+      <MaintenanceCard canEdit={canEdit} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- API & access
+
+function AccessTab({ leadPlus }: { leadPlus: boolean }) {
+  const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
+  const [keysHidden, setKeysHidden] = useState(!leadPlus);
+  const [connections, setConnections] = useState<McpConnection[] | null>(null);
+  const [modal, setModal] = useState(false);
+  const [secret, setSecret] = useState<SecretInfo | null>(null);
+
+  const reloadKeys = () => api.get<ApiKeyRow[]>('/api/admin/apikeys').then(setKeys)
+    .catch(on403(setKeysHidden, () => setKeys([])));
+  // Connections are the caller's OWN authorized MCP clients, not org config —
+  // every role sees their own, so this is not behind the lead+ gate.
+  const reloadConnections = () => api.get<McpConnection[]>('/api/admin/connections')
+    .then(setConnections).catch(() => setConnections([]));
+
+  useEffect(() => {
+    if (leadPlus) reloadKeys();
+    reloadConnections();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <div className="page">
-      <PageHeader title="Settings" />
-
-      {/* 0. Plan & Billing */}
-      <BillingCard />
-
-      {/* 1. Platform */}
-      <Card>
-        <div className="card-title">Platform</div>
-        {settings === null
-          ? <FormSkeleton rows={4} />
-          : <>
-              {textRow('org_name', 'Organization name')}
-              {textRow('backend_label', 'Backend label')}
-              {textRow('retention_logs_days', 'Log retention (days)')}
-              {toggleRow('status_published', 'Status page published')}
-            </>}
-      </Card>
-
-      {/* 2. Notifications */}
-      <Card>
-        <div className="card-title">Notifications</div>
-        {settings === null
-          ? <FormSkeleton rows={5} />
-          : <>
-              {textRow('alert_email_from', 'Alert email from',
-                { placeholder: 'OpsCat Alerts <alerts@opscat.io>' })}
-              {textRow('auth_email_from', 'Auth email from',
-                { placeholder: 'OpsCat <auth@opscat.io>' })}
-              {textRow('teams_webhook_url', 'Teams webhook URL',
-                { mono: true, placeholder: 'https://outlook.office.com/webhook/…' })}
-              {textRow('telegram_bot_token', 'Telegram bot token',
-                { type: 'password', mono: true, placeholder: '123456:ABC-DEF…' })}
-              {textRow('pushover_token', 'Pushover app token',
-                { type: 'password', mono: true, placeholder: 'azGDORePK8gMaC0QOYAMyEEuzJnyUi' })}
-            </>}
-      </Card>
-
-      {/* save footer for key/value settings */}
-      <div className="row" style={{ justifyContent: 'flex-end', gap: 12 }}>
-        {saved && <span className="text-base font-semibold" style={{ color: '#3fb950'}}>saved ✓</span>}
-        <Button variant="primary" onClick={save} disabled={!dirty || saving}>
-          {saving ? 'Saving…' : 'Save Changes'}
-        </Button>
-      </div>
-
-      {/* 2c. AI endpoint (admin) */}
-      {isAdmin && <AiCard />}
-      {isAdmin && <VoiceCard />}
-
-      {/* 2b. Maintenance windows */}
-      <MaintenanceCard canEdit={leadPlus} />
-
-      {/* 3. API Keys (lead+) */}
+    <>
       {!keysHidden && (
-        <Card>
-          <div className="card-title" style={{ justifyContent: 'space-between' }}>
-            <span>API Keys</span>
-            <Button size="sm" onClick={() => setModal('key')}>+ Create key</Button>
-          </div>
+        <Card title="API Keys"
+          actions={<Button size="sm" onClick={() => setModal(true)}>+ Create key</Button>}>
+          <CardNote>Machine credentials for log ingest, server agents and remote probes.
+            A key is shown once, at creation.</CardNote>
           <TableScroll minWidth={720}>
-          <div className="tbl-head" style={{ gridTemplateColumns: KEYS_GRID, padding: '8px 0' }}>
-            <span>Name</span><span>Prefix</span><span>Scopes</span>
-            <span>Created</span><span>Last used</span><span>Active</span>
-          </div>
-          {keys === null && <TableSkeleton cols={KEYS_GRID} rows={3} flush />}
-          {keys?.length === 0 && <Empty>No API keys yet.</Empty>}
-          {keys?.map((k) => (
-            <div key={k.id} style={{ display: 'grid', gridTemplateColumns: KEYS_GRID,
-              gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span className="text-sm text-text0">{k.name}</span>
-              <span className="mono text-sm text-text2">{k.prefix}…</span>
-              <span className="mono text-xs text-text2">{k.scopes.join(', ')}</span>
-              <span className="mono text-xs text-text2">{relTime(k.createdAt)}</span>
-              <span className="mono text-xs text-text2">{relTime(k.lastUsedAt)}</span>
-              <Toggle on={k.active}
-                onClick={() => api.patch(`/api/admin/apikeys/${k.id}`, { active: !k.active }).then(reloadKeys)} />
+            <div className="tbl-head" style={{ gridTemplateColumns: KEYS_GRID, padding: '8px 0' }}>
+              <span>Name</span><span>Prefix</span><span>Scopes</span>
+              <span>Created</span><span>Last used</span><span>Active</span>
             </div>
-          ))}
+            {keys === null && <TableSkeleton cols={KEYS_GRID} rows={3} flush />}
+            {keys?.length === 0 && <Empty>No API keys yet.</Empty>}
+            {keys?.map((k) => (
+              <div key={k.id} style={{ display: 'grid', gridTemplateColumns: KEYS_GRID,
+                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+                <span className="text-sm text-text0">{k.name}</span>
+                <span className="mono text-sm text-text2">{k.prefix}…</span>
+                <span className="mono text-xs text-text2">{k.scopes.join(', ')}</span>
+                <span className="mono text-xs text-text2">{relTime(k.createdAt)}</span>
+                <span className="mono text-xs text-text2">{relTime(k.lastUsedAt)}</span>
+                <Toggle on={k.active}
+                  onClick={() => api.patch(`/api/admin/apikeys/${k.id}`, { active: !k.active }).then(reloadKeys)} />
+              </div>
+            ))}
           </TableScroll>
         </Card>
       )}
 
-      {/* 3b. Connected apps (MCP / OAuth grants) — the caller's own */}
-      <Card>
-        <div className="card-title"><span>Connected apps</span></div>
-        <p className="text-sm text-text2" style={{ margin: '0 0 10px' }}>
-          AI clients you authorized to act on your behalf in this organization. Revoking
-          takes effect immediately.
-        </p>
+      <Card title="Connected apps">
+        <CardNote>AI clients you authorized to act on your behalf in this organization.
+          Revoking takes effect immediately.</CardNote>
         <TableScroll minWidth={620}>
-        <div className="tbl-head" style={{ gridTemplateColumns: CONNECTIONS_GRID, padding: '8px 0' }}>
-          <span>Application</span><span>Permissions</span>
-          <span>Connected</span><span>Last used</span><span></span>
-        </div>
-        {connections === null && <TableSkeleton cols={CONNECTIONS_GRID} rows={2} flush />}
-        {connections?.length === 0 && <Empty>No connected apps.</Empty>}
-        {connections?.map((c) => (
-          <div key={c.clientId} style={{ display: 'grid', gridTemplateColumns: CONNECTIONS_GRID,
-            gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-            <span className="text-sm text-text0">{c.name}</span>
-            <span className="mono text-xs text-text2">{c.scopes.join(', ')}</span>
-            <span className="mono text-xs text-text2">{relTime(c.createdAt)}</span>
-            <span className="mono text-xs text-text2">{relTime(c.lastUsedAt)}</span>
-            <Button size="sm"
- onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
-              Revoke
-            </Button>
+          <div className="tbl-head" style={{ gridTemplateColumns: CONNECTIONS_GRID, padding: '8px 0' }}>
+            <span>Application</span><span>Permissions</span>
+            <span>Connected</span><span>Last used</span><span></span>
           </div>
-        ))}
+          {connections === null && <TableSkeleton cols={CONNECTIONS_GRID} rows={2} flush />}
+          {connections?.length === 0 && <Empty>No connected apps.</Empty>}
+          {connections?.map((c) => (
+            <div key={c.clientId} style={{ display: 'grid', gridTemplateColumns: CONNECTIONS_GRID,
+              gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <span className="text-sm text-text0">{c.name}</span>
+              <span className="mono text-xs text-text2">{c.scopes.join(', ')}</span>
+              <span className="mono text-xs text-text2">{relTime(c.createdAt)}</span>
+              <span className="mono text-xs text-text2">{relTime(c.lastUsedAt)}</span>
+              <Button size="sm"
+                onClick={() => api.del(`/api/admin/connections/${c.clientId}`).then(reloadConnections)}>
+                Revoke
+              </Button>
+            </div>
+          ))}
         </TableScroll>
       </Card>
 
-      {/* 4. Agents */}
+      {modal && <CreateKeyModal onClose={() => setModal(false)} onCreated={reloadKeys} onSecret={setSecret} />}
+      {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- agents & SNMP
+
+function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
+  const [agents, setAgents] = useState<AgentRow[] | null>(null);
+  const [agentsHidden, setAgentsHidden] = useState(false);
+  const [targets, setTargets] = useState<SnmpTarget[] | null>(null);
+  const [targetsHidden, setTargetsHidden] = useState(!leadPlus);
+  const [modal, setModal] = useState<'agent' | 'target' | null>(null);
+  const [secret, setSecret] = useState<SecretInfo | null>(null);
+
+  const reloadAgents = () => api.get<AgentRow[]>('/api/admin/agents').then(setAgents)
+    .catch(on403(setAgentsHidden, () => setAgents([])));
+  const reloadTargets = () => api.get<SnmpTarget[]>('/api/admin/snmp/targets').then(setTargets)
+    .catch(on403(setTargetsHidden, () => setTargets([])));
+
+  useEffect(() => {
+    reloadAgents();
+    if (leadPlus) reloadTargets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <>
       {!agentsHidden && (
-        <Card>
-          <div className="card-title" style={{ justifyContent: 'space-between' }}>
-            <span>Agents</span>
-            {leadPlus && <Button size="sm" onClick={() => setModal('agent')}>+ Register agent</Button>}
-          </div>
+        <Card title="Agents"
+          actions={leadPlus && <Button size="sm" onClick={() => setModal('agent')}>+ Register agent</Button>}>
+          <CardNote>Server agents shipping metrics, containers and logs. Registering one
+            hands out an install one-liner with a token shown only once.</CardNote>
           <TableScroll minWidth={840}>
-          <div className="tbl-head" style={{ gridTemplateColumns: AGENTS_GRID, padding: '8px 0' }}>
-            <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
-            <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
-          </div>
-          {agents === null && <TableSkeleton cols={AGENTS_GRID} rows={3} flush />}
-          {agents?.length === 0 && <Empty>No agents registered.</Empty>}
-          {agents?.map((a) => (
-            <div key={a.id} style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID,
-              gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span className="mono text-sm text-text0">{a.name}
-                {a.version && <span className="text-text3"> v{a.version}</span>}</span>
-              <span className="mono text-xs text-text2">{a.group}</span>
-              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.hostname || '—'}</span>
-              <span className="text-xs text-text2">{a.platform || '—'}</span>
-              <StatusCell online={a.online} />
-              <span className="mono text-xs text-text2">{relTime(a.lastSeenAt)}</span>
-              <Toggle on={a.autoUpdate} disabled={!leadPlus}
-                onClick={leadPlus ? () => api.patch(`/api/admin/agents/${a.id}`, { autoUpdate: !a.autoUpdate }).then(reloadAgents) : undefined} />
-              <span>
-                {leadPlus && (
-                  <button className="text-lg" title="Delete agent" style={{ color: '#f85149'}}
-                    onClick={() => {
-                      if (confirm(`Delete agent "${a.name}"?`)) api.del(`/api/admin/agents/${a.id}`).then(reloadAgents);
-                    }}>×</button>
-                )}
-              </span>
+            <div className="tbl-head" style={{ gridTemplateColumns: AGENTS_GRID, padding: '8px 0' }}>
+              <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
+              <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
             </div>
-          ))}
-          </TableScroll>
-        </Card>
-      )}
-
-      {/* 5. SNMP Targets (lead+) */}
-      {!targetsHidden && (
-        <Card>
-          <div className="card-title" style={{ justifyContent: 'space-between' }}>
-            <span>SNMP Targets</span>
-            <Button size="sm" onClick={() => setModal('target')}>+ Add target</Button>
-          </div>
-          <TableScroll minWidth={780}>
-          <div className="tbl-head" style={{ gridTemplateColumns: TARGETS_GRID, padding: '8px 0' }}>
-            <span>Name</span><span>Host</span><span>Port</span><span>Interval</span>
-            <span>Enabled</span><span>Last status</span><span></span>
-          </div>
-          {targets === null && <TableSkeleton cols={TARGETS_GRID} rows={3} flush />}
-          {targets?.length === 0 && <Empty>No SNMP targets configured.</Empty>}
-          {targets?.map((t) => (
-            <div key={t.id} style={{ display: 'grid', gridTemplateColumns: TARGETS_GRID,
-              gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
-              <span className="text-sm text-text0">{t.name}</span>
-              <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.host}</span>
-              <span className="mono text-xs text-text2">{t.port}</span>
-              <span className="mono text-xs text-text2">{t.intervalS}s</span>
-              <Toggle on={t.enabled}
-                onClick={() => api.patch(`/api/admin/snmp/targets/${t.id}`, { enabled: !t.enabled }).then(reloadTargets)} />
-              <span className="mono text-xs" style={{ color: snmpStatusColor(t.lastStatus) }}>
-                {t.lastStatus || 'unknown'}
-                <span className="text-text3"> · {relTime(t.lastSeenAt)}</span>
-              </span>
-              <span>
-                <button className="text-lg" title="Delete target" style={{ color: '#f85149'}}
-                  onClick={() => {
-                    if (confirm(`Delete SNMP target "${t.name}"?`)) api.del(`/api/admin/snmp/targets/${t.id}`).then(reloadTargets);
-                  }}>×</button>
-              </span>
-            </div>
-          ))}
-          </TableScroll>
-        </Card>
-      )}
-
-      {/* 6. System (admin) */}
-      {!sysHidden && (
-        <Card>
-          <div className="card-title">System</div>
-          {sys === null ? <FormSkeleton rows={4} /> : (
-            <>
-              <Row label="Uptime">
-                <span className="mono text-sm text-text1">
-                  {sys.uptimeS != null ? fmtDuration(sys.uptimeS * 1000) : '—'}</span>
-              </Row>
-              <Row label="Database size">
-                <span className="mono text-sm text-text1">
-                  {sys.dbBytes != null ? fmtBytes(sys.dbBytes) : '—'}</span>
-              </Row>
-              <Row label="Records">
-                <span className="mono text-sm text-text1">
-                  {sys.counts?.logs ?? 0} logs · {sys.counts?.events ?? 0} events · {sys.counts?.cases ?? 0} cases · {sys.counts?.users ?? 0} users
+            {agents === null && <TableSkeleton cols={AGENTS_GRID} rows={3} flush />}
+            {agents?.length === 0 && <Empty>No agents registered.</Empty>}
+            {agents?.map((a) => (
+              <div key={a.id} style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID,
+                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+                <span className="mono text-sm text-text0">{a.name}
+                  {a.version && <span className="text-text3"> v{a.version}</span>}</span>
+                <span className="mono text-xs text-text2">{a.group}</span>
+                <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.hostname || '—'}</span>
+                <span className="text-xs text-text2">{a.platform || '—'}</span>
+                <StatusCell online={a.online} />
+                <span className="mono text-xs text-text2">{relTime(a.lastSeenAt)}</span>
+                <Toggle on={a.autoUpdate} disabled={!leadPlus}
+                  onClick={leadPlus ? () => api.patch(`/api/admin/agents/${a.id}`, { autoUpdate: !a.autoUpdate }).then(reloadAgents) : undefined} />
+                <span>
+                  {leadPlus && (
+                    <button className="text-lg" title="Delete agent" style={{ color: SEV.critical }}
+                      onClick={() => {
+                        if (confirm(`Delete agent "${a.name}"?`)) api.del(`/api/admin/agents/${a.id}`).then(reloadAgents);
+                      }}>×</button>
+                  )}
                 </span>
-              </Row>
-              <Row label="Node version">
-                <span className="mono text-sm text-text1">{sys.nodeVersion || '—'}</span>
-              </Row>
-            </>
-          )}
+              </div>
+            ))}
+          </TableScroll>
         </Card>
       )}
 
-      {modal === 'key' && <CreateKeyModal onClose={() => setModal(null)} onCreated={reloadKeys} onSecret={setSecret} />}
+      {!targetsHidden && (
+        <Card title="SNMP Targets"
+          actions={<Button size="sm" onClick={() => setModal('target')}>+ Add target</Button>}>
+          <CardNote>Devices polled over SNMP v2c or v3. Credentials are stored encrypted
+            and never read back.</CardNote>
+          <TableScroll minWidth={780}>
+            <div className="tbl-head" style={{ gridTemplateColumns: TARGETS_GRID, padding: '8px 0' }}>
+              <span>Name</span><span>Host</span><span>Port</span><span>Interval</span>
+              <span>Enabled</span><span>Last status</span><span></span>
+            </div>
+            {targets === null && <TableSkeleton cols={TARGETS_GRID} rows={3} flush />}
+            {targets?.length === 0 && <Empty>No SNMP targets configured.</Empty>}
+            {targets?.map((t) => (
+              <div key={t.id} style={{ display: 'grid', gridTemplateColumns: TARGETS_GRID,
+                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+                <span className="text-sm text-text0">{t.name}</span>
+                <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.host}</span>
+                <span className="mono text-xs text-text2">{t.port}</span>
+                <span className="mono text-xs text-text2">{t.intervalS}s</span>
+                <Toggle on={t.enabled}
+                  onClick={() => api.patch(`/api/admin/snmp/targets/${t.id}`, { enabled: !t.enabled }).then(reloadTargets)} />
+                <span className="mono text-xs" style={{ color: snmpStatusColor(t.lastStatus) }}>
+                  {t.lastStatus || 'unknown'}
+                  <span className="text-text3"> · {relTime(t.lastSeenAt)}</span>
+                </span>
+                <span>
+                  <button className="text-lg" title="Delete target" style={{ color: SEV.critical }}
+                    onClick={() => {
+                      if (confirm(`Delete SNMP target "${t.name}"?`)) api.del(`/api/admin/snmp/targets/${t.id}`).then(reloadTargets);
+                    }}>×</button>
+                </span>
+              </div>
+            ))}
+          </TableScroll>
+        </Card>
+      )}
+
       {modal === 'agent' && <RegisterAgentModal onClose={() => setModal(null)} onCreated={reloadAgents} onSecret={setSecret} />}
       {modal === 'target' && <AddTargetModal onClose={() => setModal(null)} onCreated={reloadTargets} />}
       {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
-    </div>
+    </>
   );
 }
 
@@ -420,13 +547,10 @@ function AiCard() {
     : 'No LLM configured — AI features (Scout suggestions) stay off.';
 
   return (
-    <Card>
-      <div className="card-title">AI</div>
-      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
-        Any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, Azure, …). Leave empty to use
-        the platform default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
-        The API key is stored encrypted and never shown again.
-      </div>
+    <Card title="AI">
+      <CardNote>Any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, Azure, …). Leave
+        empty to use the platform default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
+        The API key is stored encrypted and never shown again.</CardNote>
       {status === null ? <FormSkeleton rows={3} /> : (
         <>
           <Row label="Base URL">
@@ -451,9 +575,9 @@ function AiCard() {
             <span className="text-xs text-text3">{effective}</span>
             <span className="row" style={{ gap: 10 }}>
               {msg && <span className="text-sm font-semibold" style={{
-                color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
+                color: msg.ok ? SEV.green : SEV.critical }}>{msg.text}</span>}
               <Button size="sm" onClick={test} disabled={!!busy || dirty}
- title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
+                title={dirty ? 'Save first' : 'Send a one-line test prompt'}>
                 {busy === 'test' ? 'Testing…' : 'Test'}
               </Button>
               <Button variant="primary" size="sm" onClick={save} disabled={!dirty || !!busy}>
@@ -520,15 +644,12 @@ function VoiceCard() {
     : 'No voice provider configured — the Bridge live transcript stays off.';
 
   return (
-    <Card>
-      <div className="card-title">Voice / Transcription</div>
-      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
-        Speech-to-text for the Bridge live transcript. Any OpenAI-compatible transcription
-        endpoint (OpenAI, Groq, a local Whisper server, …) — speech chunks go to
-        <span className="mono"> /audio/transcriptions</span>. Leave empty to use the platform
+    <Card title="Voice / Transcription">
+      <CardNote>Speech-to-text for the Bridge live transcript. Any OpenAI-compatible
+        transcription endpoint (OpenAI, Groq, a local Whisper server, …) — speech chunks go
+        to <span className="mono">/audio/transcriptions</span>. Leave empty to use the platform
         default{status?.platformConfigured === false ? ' (currently not configured)' : ''}.
-        The API key is stored encrypted and never shown again.
-      </div>
+        The API key is stored encrypted and never shown again.</CardNote>
       {status === null ? <FormSkeleton rows={3} /> : (
         <>
           <Row label="Base URL">
@@ -553,7 +674,7 @@ function VoiceCard() {
             <span className="text-xs text-text3">{effective}</span>
             <span className="row" style={{ gap: 10 }}>
               {msg && <span className="text-sm font-semibold" style={{
-                color: msg.ok ? '#3fb950' : '#f85149' }}>{msg.text}</span>}
+                color: msg.ok ? SEV.green : SEV.critical }}>{msg.text}</span>}
               <Button size="sm" onClick={test} disabled={busy || dirty}
                 title={dirty ? 'Save first' : 'Round-trip a short test tone through the endpoint'}>
                 Test
@@ -600,12 +721,9 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
   const fmt = (t: number) => new Date(t).toLocaleString();
 
   return (
-    <Card>
-      <div className="card-title">Maintenance Windows</div>
-      <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
-        While a window is active, events keep recording but no alerts are sent
-        (the notification log shows them as suppressed).
-      </div>
+    <Card title="Maintenance Windows">
+      <CardNote>While a window is active, events keep recording but no alerts are sent
+        (the notification log shows them as suppressed).</CardNote>
       {windows === null && <ListSkeleton rows={2} lines={1} divided={false} />}
       {windows?.length === 0 && <Empty>No maintenance windows.</Empty>}
       {windows?.map((w) => (
@@ -616,7 +734,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
           <span className="text-sm text-text0 font-semibold">{w.name}</span>
           <span className="mono text-xs text-text2" style={{ flex: 1 }}>
             {fmt(w.startsAt)} → {fmt(w.endsAt)}</span>
-          {canEdit && <button className="text-md" title="Delete" style={{ color: '#f85149'}}
+          {canEdit && <button className="text-md" title="Delete" style={{ color: SEV.critical }}
             onClick={() => remove(w)}>×</button>}
         </div>
       ))}
@@ -637,7 +755,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
             <DateTime required value={to} onChange={(e) => setTo(e.target.value)} />
           </Field>
           <Button size="sm" style={{ marginBottom: 2 }}>+ Add window</Button>
-          {err && <span className="text-sm" style={{ color: '#f85149'}}>{err}</span>}
+          {err && <span className="text-sm" style={{ color: SEV.critical }}>{err}</span>}
         </form>
       )}
     </Card>
@@ -724,12 +842,12 @@ function PlanUpgradeCard({ plan, interval, current, canBuy, busy, onBuy }: {
         </ul>
       )}
       {current ? (
-        <Button size="sm" block disabled style={{ opacity: 0.6 }}>
+        <Button size="sm" disabled block style={{ opacity: 0.6 }}>
           Current plan
         </Button>
       ) : (
         <Button variant="primary" size="sm" block
- disabled={!canBuy || busy} title={canBuy ? undefined : 'Admin only'} onClick={onBuy}>
+          disabled={!canBuy || busy} title={canBuy ? undefined : 'Admin only'} onClick={onBuy}>
           {busy ? '…' : 'Upgrade'}
         </Button>
       )}
@@ -752,7 +870,8 @@ function BillingCard() {
     const p = new URLSearchParams(location.search).get('billing');
     if (p === 'success' || p === 'cancel') {
       setBanner(p);
-      history.replaceState(null, '', '/app/settings');
+      // drop the query, keep the tab — the page is addressed by its tab now
+      history.replaceState(null, '', '/app/settings/billing');
     }
     api.get<PlansResponse>('/api/plans')
       .then((r) => { setPlans(r.plans || []); setEdition(r.edition); }).catch(() => {});
@@ -788,8 +907,7 @@ function BillingCard() {
   // loading — same chrome as the loaded card: pill row + usage grid placeholders
   if (status === null && !failed) {
     return (
-      <Card>
-        <div className="card-title">Plan &amp; Billing</div>
+      <Card title="Plan &amp; Billing">
         {bannerEl}
         <Skeleton w={92} h={18} radius={10} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
@@ -804,8 +922,7 @@ function BillingCard() {
   const showBilling = !!status && (status.billingEnabled || edition === 'cloud');
   if (!showBilling) {
     return (
-      <Card>
-        <div className="card-title">Plan &amp; Billing</div>
+      <Card title="Plan &amp; Billing">
         {bannerEl}
         <div className="text-base text-text2">
           Community Edition (CE) — all features unlocked.
@@ -820,15 +937,12 @@ function BillingCard() {
   const upgradePlans = plans.filter((p) => p.key === 'pro' || p.key === 'business');
 
   return (
-    <Card>
-      <div className="card-title" style={{ justifyContent: 'space-between' }}>
-        <span>Plan &amp; Billing</span>
-        {s.hasBilling && s.billingEnabled && isAdmin && (
-          <Button size="sm" onClick={portal} disabled={busy === 'portal'}>
-            {busy === 'portal' ? '…' : 'Manage billing'}
-          </Button>
-        )}
-      </div>
+    <Card title="Plan &amp; Billing"
+      actions={s.hasBilling && s.billingEnabled && isAdmin && (
+        <Button size="sm" onClick={portal} disabled={busy === 'portal'}>
+          {busy === 'portal' ? '…' : 'Manage billing'}
+        </Button>
+      )}>
       {bannerEl}
 
       {/* current plan header */}
@@ -892,12 +1006,22 @@ function BillingCard() {
 
 // ---------------------------------------------------------------- small helpers
 
-function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+// The one-line "what is this card for" under a card title. Every card on this
+// page has one now — a tab that hides its neighbours has to say what it holds.
+function CardNote({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs text-text3" style={{ margin: '0 0 10px', maxWidth: 640 }}>{children}</p>;
+}
+
+function Row({ label, hint, children }:
+  { label: React.ReactNode; hint?: string; children: React.ReactNode }) {
   return (
     // geometry lives in .form-row (tokens.css), not inline: on a phone the label has to
     // move ABOVE the field, and a media query cannot override an inline style.
     <div className="form-row">
-      <span className="form-row-label text-sm text-text2">{label}</span>
+      <span className="form-row-label text-sm text-text2">
+        {label}
+        {hint && <span className="text-xs text-text3" style={{ display: 'block' }}>{hint}</span>}
+      </span>
       <div className="form-row-field">{children}</div>
     </div>
   );
@@ -968,7 +1092,7 @@ export function CreateKeyModal({ onClose, onCreated, onSecret }:
         </div>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block
- disabled={busy || scopes.length === 0}>{busy ? '…' : 'Create'}</Button>
+          disabled={busy || scopes.length === 0}>{busy ? '…' : 'Create'}</Button>
       </form>
     </Modal>
   );
@@ -1016,7 +1140,7 @@ export function RegisterAgentModal({ onClose, onCreated, onSecret }:
         </div>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block
- disabled={busy}>{busy ? '…' : 'Register'}</Button>
+          disabled={busy}>{busy ? '…' : 'Register'}</Button>
       </form>
     </Modal>
   );
@@ -1123,7 +1247,7 @@ export function AddTargetModal({ onClose, onCreated }: { onClose: () => void; on
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block
- disabled={busy}>{busy ? '…' : 'Add target'}</Button>
+          disabled={busy}>{busy ? '…' : 'Add target'}</Button>
       </form>
     </Modal>
   );
@@ -1140,7 +1264,7 @@ export function OnceSecretModal({ title, note, value, extra, onClose }: SecretIn
         wordBreak: 'break-all' }}>{value}</div>
       {extra}
       <Button variant="primary" block style={{ marginTop: 12 }}
- onClick={onClose}>Done</Button>
+        onClick={onClose}>Done</Button>
     </Modal>
   );
 }

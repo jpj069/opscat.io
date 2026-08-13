@@ -78,7 +78,7 @@ function resolvePlatform() {
 // Throws with a safe message (no key material) on any failure.
 async function chat(orgId, messages, opts) {
   const cfg = resolveConfig(orgId);
-  if (!cfg) throw new Error('no LLM configured (set one in Settings → AI, or ask the platform admin)');
+  if (!cfg) throw new Error('no LLM configured (set one in Settings → AI & Voice, or ask the platform admin)');
   return callChat(cfg, messages, opts);
 }
 

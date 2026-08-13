@@ -25,7 +25,7 @@ curl -fsSL https://opscat.io/agent/install.sh | sudo \
   OPSCAT_AGENT_FLAGS="--logs" sh
 ```
 
-(Register the agent first under Settings → Agents — or in onboarding — to get
+(Register the agent first under Settings → Agents & SNMP — or in onboarding — to get
 the `oca_…` token; add `OPSCAT_PROBE_KEY=ocp_…` and `--probe` to also run
 synthetic probes from this host.)
 

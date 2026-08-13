@@ -73,4 +73,4 @@ curl -X POST https://opscat.io/v1/ingest/logs \
   -d '{"logs":[{"device":"web-01","line":"kernel: Out of memory: Killed process 4242","sev":2}]}'
 ```
 
-Create API keys in the UI under **Settings → API Keys**. Full surface: [docs/API.md](docs/API.md).
+Create API keys in the UI under **Settings → API & Access**. Full surface: [docs/API.md](docs/API.md).

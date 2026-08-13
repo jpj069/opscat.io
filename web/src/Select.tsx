@@ -92,6 +92,27 @@ function useKeyboardInset(active: boolean) {
   return inset;
 }
 
+/**
+ * A click on a floating surface must not ALSO be delivered to the trigger.
+ *
+ * `Field` (ui.tsx) is a <label> that WRAPS its control, and these surfaces are DOM
+ * descendants of `.sel` on purpose (no portal — see the header). So every click in
+ * them is a click inside that label, and a label's default action is "fire a click
+ * at the labeled control" — which here is the trigger button. Measured in Chromium:
+ * picking an option produced the real click (detail=1) on `.sel-opt` and, right
+ * after it, a second trusted click with detail=0 on `.sel-trigger`. By then
+ * `setOpen(false)` had already run, so the trigger's own handler read `open ===
+ * false` and re-opened the panel. Same for the scrim — it closed and instantly
+ * re-opened, which is indistinguishable from "clicking outside does nothing".
+ * 22 pickers across 11 pages sit inside a Field.
+ *
+ * The forwarding is the event's DEFAULT ACTION, so preventDefault kills it — and
+ * stopPropagation would not. Nothing inside these surfaces has a default action
+ * worth keeping: every button is type="button", and the search field takes focus
+ * and its caret on pointerdown, not on click.
+ */
+const swallowLabelForwarding = (e: React.MouseEvent) => e.preventDefault();
+
 type Anchor = { left: number; top: number; width: number; maxH: number; up: boolean };
 
 // Fixed coordinates for the desktop popover, re-measured on scroll/resize so it
@@ -258,7 +279,7 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
 
   if (mobile) {
     return (
-      <div className="top-layer" ref={layerRef}>
+      <div className="top-layer" ref={layerRef} onClick={swallowLabelForwarding}>
         <div className="sel-backdrop open" style={drag ? { opacity: Math.max(0, 1 - drag / 260) } : undefined}
           onClick={onClose} />
         <div className={`sel-sheet open${drag ? ' dragging' : ''}`} role="dialog" aria-modal="true"
@@ -283,7 +304,7 @@ function Panel({ options, selected, multi, title, searchable, onPick, onClose, a
   }
 
   return (
-    <div className="top-layer" ref={layerRef}>
+    <div className="top-layer" ref={layerRef} onClick={swallowLabelForwarding}>
       <div className="sel-scrim" onClick={onClose} />
       <div className="sel-pop" role="dialog" aria-label={title} onKeyDown={onKeyDown}
         style={{
@@ -424,7 +445,7 @@ export function MultiSelect({ value, onChange, options, title = 'Select', placeh
       {/* opens UPWARD — an overview that pushes the form down moves the field the
           user is looking at; laying it over the trigger does not */}
       {compact && overview && (
-        <div className="sel-overview">
+        <div className="sel-overview" onClick={swallowLabelForwarding}>
           <div className="sel-ovhead">
             <span className="micro">{chosen.length} selected</span>
             <button type="button" className="sel-clear" onClick={() => onChange([])}>Remove all</button>

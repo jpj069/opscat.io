@@ -532,7 +532,7 @@ export default function Bridge() {
           </span>
           <span className="row text-xs"
             title={room.transcription && !stt
-              ? 'Transcription is enabled, but no voice provider is configured — an admin sets one under Settings → Voice / Transcription.'
+              ? 'Transcription is enabled, but no voice provider is configured — an admin sets one under Settings → AI & Voice.'
               : undefined}
             style={{ gap: 5, color: room.transcription ? (stt ? SEV.green : SEV.medium) : 'var(--text3)' }}>
             <GlowDot color={room.transcription ? (stt ? SEV.green : SEV.medium) : 'var(--text3)'} size={7} />
