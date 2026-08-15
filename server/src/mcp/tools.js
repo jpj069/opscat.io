@@ -20,6 +20,7 @@ const { z } = require('zod');
 const { db } = require('../db');
 const { now, isStr, clampInt } = require('../util');
 const sec = require('../security');
+const incidents = require('../lib/incidents');
 
 const SEVERITY_HINT = 'OpsCat severity is 0-100; >=80 is critical, >=60 major, >=40 minor.';
 
@@ -438,17 +439,16 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     handler: (a, p) => {
       if (!isStr(a.title, 200)) return fail('title required.');
-      const t = now();
-      const info = db.prepare(`INSERT INTO incidents (org_id, title, severity, status, started_at, created_by)
-        VALUES (?, ?, ?, 'investigating', ?, ?)`)
-        .run(p.orgId, a.title, clampInt(a.severity, 0, 100, 50), t, p.user.id);
-      db.prepare(`INSERT INTO incident_updates (incident_id, ts, status, message, user_id)
-        VALUES (?, ?, 'investigating', ?, ?)`)
-        .run(info.lastInsertRowid, t, a.message || 'Incident opened.', p.user.id);
+      // through lib/incidents so the synthetic lifecycle events fire and the
+      // audit/view stays identical to the REST path (docs/INCIDENTS-V2.md §3.2)
+      const row = incidents.create(p.orgId, p.user.id, {
+        title: a.title, severity: clampInt(a.severity, 0, 100, 50),
+        message: isStr(a.message, 2000) ? a.message : undefined,
+      });
       auditTool(p, 'incident_create', a.title);
       return ok({
-        id: Number(info.lastInsertRowid), label: `INC-${1000 + Number(info.lastInsertRowid)}`,
-        title: a.title, status: 'investigating', published: false,
+        id: row.id, label: incidents.label(row.id),
+        title: row.title, status: row.status, published: !!row.published,
       });
     },
   },
@@ -466,15 +466,10 @@ const TOOLS = [
     outputSchema: { id: z.number(), status: z.string(), published: z.boolean(), resolvedAt: z.number().nullable() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     handler: (a, p) => {
-      const i = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
-      if (!i) return fail(`No incident ${a.id} in this organization.`);
-      const t = now();
-      db.prepare('UPDATE incidents SET status = ?, resolved_at = ? WHERE id = ? AND org_id = ?')
-        .run(a.status, a.status === 'resolved' ? t : null, i.id, p.orgId);
-      db.prepare('INSERT INTO incident_updates (incident_id, ts, status, message, user_id) VALUES (?,?,?,?,?)')
-        .run(i.id, t, a.status, isStr(a.message, 2000) ? a.message : `Status changed to ${a.status}.`, p.user.id);
-      auditTool(p, 'incident_status', `INC-${1000 + i.id} → ${a.status}`);
-      const after = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, p.orgId);
+      const after = incidents.setStatus(p.orgId, p.user.id, a.id, a.status,
+        isStr(a.message, 2000) ? a.message : undefined);
+      if (!after) return fail(`No incident ${a.id} in this organization.`);
+      auditTool(p, 'incident_status', `${incidents.label(after.id)} → ${a.status}`);
       return ok({ id: after.id, status: after.status, published: !!after.published, resolvedAt: after.resolved_at });
     },
   },

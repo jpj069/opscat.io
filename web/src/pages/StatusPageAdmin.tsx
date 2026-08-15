@@ -3,17 +3,19 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
-import { alpha, relTime } from '../format';
+import { alpha, relTime, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
-const GRID = '20px 1fr 110px 150px 260px 70px';
-const COMP_COLOR: Record<CompStatus, string> = {
-  operational: '#3fb950', degraded: '#e3b341', partial: '#f0883e', major: '#f85149', maintenance: '#bc8cff',
-};
-const COMP_STATUSES: CompStatus[] = ['operational', 'degraded', 'partial', 'major', 'maintenance'];
-const RANK: Record<CompStatus, number> = { operational: 0, maintenance: 1, degraded: 2, partial: 3, major: 4 };
+const GRID = '20px 1fr 100px 150px 150px 260px 70px';
+// colors, ranks and the status list all come from the shared scale
+// (format.ts STATUS_META — mirror of server/src/lib/status-scale.js)
+const COMP_COLOR = Object.fromEntries(
+  Object.entries(STATUS_META).map(([k, v]) => [k, v.color])) as Record<CompStatus, string>;
+const COMP_STATUSES = Object.keys(STATUS_META) as CompStatus[];
+const RANK = Object.fromEntries(
+  Object.entries(STATUS_META).map(([k, v]) => [k, v.rank])) as Record<CompStatus, number>;
 const OVERALL: Record<CompStatus, string> = {
   operational: 'All Systems Operational',
   maintenance: 'Scheduled Maintenance in Progress',
@@ -25,12 +27,9 @@ const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 
 
 // uptime-strip cell color (maintenance shares the amber warning tone here)
 function dayColor(w: CompStatus): string {
-  switch (w) {
-    case 'operational': return alpha('#3fb950', 0.55);
-    case 'degraded': case 'maintenance': return '#e3b341';
-    case 'partial': return '#f0883e';
-    case 'major': return '#f85149';
-  }
+  if (w === 'operational') return alpha(STATUS_META.operational.color, 0.55);
+  if (w === 'maintenance') return STATUS_META.degraded.color;
+  return STATUS_META[w].color;
 }
 
 export default function StatusPageAdmin() {
@@ -57,6 +56,10 @@ export default function StatusPageAdmin() {
   };
   const setStatus = async (id: number, status: CompStatus) => {
     await api.patch(`/api/admin/components/${id}`, { status });
+    load();
+  };
+  const setOwner = async (id: number, v: string) => {
+    await api.patch(`/api/admin/components/${id}`, { ownerId: v === '' ? null : Number(v) });
     load();
   };
   const remove = async (c: Component) => {
@@ -92,16 +95,21 @@ export default function StatusPageAdmin() {
 
       {/* components table */}
       <Card style={{ padding: 0 }}>
-        <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px' }}>
+        <div className="row row-wrap" style={{ justifyContent: 'space-between', padding: '12px 16px', gap: 8 }}>
           <span className="card-title" style={{ margin: 0 }}>Components</span>
           {canEdit && <Button size="sm" onClick={() => setShowAdd(true)}>+ Add component</Button>}
         </div>
-        <TableScroll stickyFirst minWidth={780}>
+        <div className="text-2xs text-text3" style={{ padding: '0 16px 10px' }}>
+          Status follows the worst impact of open incidents — a manual change is
+          recomputed away on the next incident transition. Owner feeds auto-assign.
+        </div>
+        <TableScroll stickyFirst minWidth={940}>
         <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
           <span />
           <span>Name</span>
           <span>Group</span>
           <span>Status</span>
+          <span>Owner</span>
           <span>45-day uptime</span>
           <span style={{ textAlign: 'right' }}>Uptime</span>
         </div>
@@ -118,7 +126,12 @@ export default function StatusPageAdmin() {
               <span className="mono text-xs text-text2">{c.group}</span>
               <Select title="Component status" value={c.status} disabled={isAnalyst}
                 onChange={(v) => setStatus(c.id, v as CompStatus)}
-                options={COMP_STATUSES.map((s) => ({ value: s, label: s }))} />
+                options={COMP_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))} />
+              <Select title="Component owner" placeholder="— no owner" aria-label="Component owner"
+                value={c.ownerId ? String(c.ownerId) : ''} disabled={!canEdit}
+                onChange={(v) => setOwner(c.id, v)}
+                options={[{ value: '', label: '— no owner' },
+                  ...app.users.map((u) => ({ value: String(u.id), label: u.name }))]} />
               <UptimeStrip days={c.days} />
               <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <span className="mono text-sm text-text1">{pct}%</span>

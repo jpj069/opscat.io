@@ -8,6 +8,7 @@ const { now, sha256, clampInt, isStr, optStr, httpError, SseHub, RateLimiter } =
 const config = require('../config');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
+const inc = require('../lib/incidents');
 
 const router = express.Router();
 router.use(sec.requireSessionOrToken);
@@ -145,6 +146,7 @@ router.get('/cases', (req, res) => {
     id: c.id, label: `C-${1000 + c.id}`, eventId: c.event_id, name: c.name, device: c.device,
     severity: c.severity, status: c.status, assigned: assignedView(c.assigned_user_id),
     rootCause: c.root_cause, note: c.note, openedAt: c.opened_at, closedAt: c.closed_at,
+    incident: inc.incidentOfCase(c.id),
     durationMs: (c.closed_at || t) - c.opened_at,
   })));
 });
@@ -521,52 +523,35 @@ router.get('/assets', (req, res) => {
 });
 
 // ---- incidents ----
-function incidentView(i) {
-  const updates = db.prepare(
-    'SELECT ts, status, message FROM incident_updates WHERE incident_id = ? ORDER BY ts').all(i.id);
-  return {
-    id: i.id, label: `INC-${2000 + i.id}`, title: i.title, severity: i.severity, status: i.status,
-    published: !!i.published, startedAt: i.started_at, resolvedAt: i.resolved_at,
-    durationMs: (i.resolved_at || now()) - i.started_at,
-    updates,
-    rca: { summary: i.rca_summary, impact: i.rca_impact, rootCause: i.rca_root_cause,
-      resolution: i.rca_resolution, actions: i.rca_actions },
-  };
-}
+// All mutations go through lib/incidents — the one place that emits the
+// synthetic lifecycle events and recomputes derived component status
+// (docs/INCIDENTS-V2.md §3). Routes validate, audit and render.
 
 router.get('/incidents', (req, res) => {
-  res.json(db.prepare('SELECT * FROM incidents WHERE org_id = ? ORDER BY started_at DESC LIMIT 100').all(req.orgId).map(incidentView));
+  res.json(db.prepare('SELECT * FROM incidents WHERE org_id = ? ORDER BY started_at DESC LIMIT 100').all(req.orgId).map(inc.view));
 });
 
 router.post('/incidents', sec.requireRole('lead'), (req, res) => {
-  const { title, severity } = req.body || {};
-  if (!isStr(title, 200)) return httpError(res, 400, 'title required');
-  const t = now();
-  const info = db.prepare(`INSERT INTO incidents (org_id, title, severity, status, started_at, created_by)
-    VALUES (?, ?, ?, 'investigating', ?, ?)`)
-    .run(req.orgId, title, clampInt(severity, 0, 100, 50), t, req.user.id);
-  db.prepare(`INSERT INTO incident_updates (incident_id, ts, status, message, user_id)
-    VALUES (?, ?, 'investigating', ?, ?)`)
-    .run(info.lastInsertRowid, t, req.body.message || 'Incident opened.', req.user.id);
-  sec.audit(req.user.id, 'incident_create', title, req.orgId);
-  res.json(incidentView(db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(info.lastInsertRowid, req.orgId)));
+  const b = req.body || {};
+  if (!isStr(b.title, 200)) return httpError(res, 400, 'title required');
+  const components = inc.cleanComponents(req.orgId, b.components);
+  if (components === null) return httpError(res, 400, 'bad components');
+  const row = inc.create(req.orgId, req.user.id, {
+    title: b.title, severity: clampInt(b.severity, 0, 100, 50),
+    message: isStr(b.message, 2000) ? b.message : undefined,
+    components, assigneeId: Number.isInteger(b.assigneeId) ? b.assigneeId : null,
+  });
+  sec.audit(req.user.id, 'incident_create', b.title, req.orgId);
+  res.json(inc.view(row));
 });
 
 router.post('/incidents/:id/status', sec.requireRole('lead'), (req, res) => {
-  const i = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
-  if (!i) return httpError(res, 404, 'incident not found');
   const { status, message } = req.body || {};
-  if (!['investigating', 'identified', 'monitoring', 'resolved'].includes(status)) {
-    return httpError(res, 400, 'bad status');
-  }
-  const t = now();
-  db.prepare('UPDATE incidents SET status = ?, resolved_at = ? WHERE id = ? AND org_id = ?')
-    .run(status, status === 'resolved' ? t : null, i.id, req.orgId);
-  db.prepare(`INSERT INTO incident_updates (incident_id, ts, status, message, user_id)
-    VALUES (?, ?, ?, ?, ?)`)
-    .run(i.id, t, status, isStr(message, 2000) ? message : `Status changed to ${status}.`, req.user.id);
-  sec.audit(req.user.id, 'incident_status', `INC-${2000 + i.id} → ${status}`, req.orgId);
-  res.json(incidentView(db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, req.orgId)));
+  const row = inc.setStatus(req.orgId, req.user.id, Number(req.params.id), status,
+    isStr(message, 2000) ? message : undefined);
+  if (!row) return httpError(res, 404, 'incident not found or bad status');
+  sec.audit(req.user.id, 'incident_status', `${inc.label(row.id)} → ${status}`, req.orgId);
+  res.json(inc.view(row));
 });
 
 router.patch('/incidents/:id', sec.requireRole('lead'), (req, res) => {
@@ -576,6 +561,15 @@ router.patch('/incidents/:id', sec.requireRole('lead'), (req, res) => {
   const rca = b.rca || {};
   for (const f of ['summary', 'impact', 'rootCause', 'resolution', 'actions']) {
     if (!optStr(rca[f], 10000)) return httpError(res, 400, 'RCA field too long');
+  }
+  if ('assigneeId' in b) {
+    const r = inc.assign(req.orgId, req.user.id, i.id, Number.isInteger(b.assigneeId) ? b.assigneeId : null);
+    if (r && r.error) return httpError(res, 400, r.error);
+  }
+  if (b.components !== undefined) {
+    const components = inc.cleanComponents(req.orgId, b.components);
+    if (components === null || components === undefined) return httpError(res, 400, 'bad components');
+    inc.setComponents(req.orgId, i.id, components);
   }
   db.prepare(`UPDATE incidents SET
       title = COALESCE(?, title), severity = COALESCE(?, severity),
@@ -589,8 +583,27 @@ router.patch('/incidents/:id', sec.requireRole('lead'), (req, res) => {
       typeof b.published === 'boolean' ? (b.published ? 1 : 0) : null,
       rca.summary ?? null, rca.impact ?? null, rca.rootCause ?? null,
       rca.resolution ?? null, rca.actions ?? null, i.id, req.orgId);
-  sec.audit(req.user.id, 'incident_update', `INC-${2000 + i.id}`, req.orgId);
-  res.json(incidentView(db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, req.orgId)));
+  sec.audit(req.user.id, 'incident_update', inc.label(i.id), req.orgId);
+  res.json(inc.view(db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, req.orgId)));
+});
+
+// promote a case to an incident (docs/INCIDENTS-V2.md §3.1): prefills
+// title/severity from the case, links the case and its event, drops a case
+// note. Idempotent-ish: an open incident already linked to the case is
+// returned instead of a second one.
+router.post('/cases/:id/promote', sec.requireRole('lead'), (req, res) => {
+  const b = req.body || {};
+  if (b.title !== undefined && !isStr(b.title, 200)) return httpError(res, 400, 'bad title');
+  const components = inc.cleanComponents(req.orgId, b.components);
+  if (components === null) return httpError(res, 400, 'bad components');
+  const result = inc.promote(req.orgId, req.user.id, Number(req.params.id), {
+    title: b.title, severity: Number.isFinite(b.severity) ? clampInt(b.severity, 0, 100, 50) : undefined,
+    components, assigneeId: Number.isInteger(b.assigneeId) ? b.assigneeId : undefined,
+  });
+  if (!result) return httpError(res, 404, 'case not found');
+  if (result.already) return res.json({ ok: true, already: true, incident: result.already });
+  sec.audit(req.user.id, 'incident_create', `${result.incident.title} (promoted from C-${1000 + Number(req.params.id)})`, req.orgId);
+  res.json({ ok: true, already: false, incident: inc.view(result.incident) });
 });
 
 module.exports = router;

@@ -16,7 +16,7 @@ const RULE_COLS = '1fr 90px 140px 70px 80px 60px 165px';
 const NOTIF_COLS = '80px 1fr 90px 90px 70px';
 const DEFAULT_TRIGGERS = ['ddos', 'out_of_memory', 'synthetic_check_failed', 'snmp_unreachable',
   'agent_offline', 'host_disk_high', 'sentry_error', 'tls_cert_expiring', 'heartbeat_missed', 'container_down',
-  'bridge_insight'];
+  'bridge_insight', 'incident_created', 'incident_status_changed', 'incident_resolved'];
 
 export default function Rules() {
   const app = useApp();

@@ -90,11 +90,14 @@ export default function Cases() {
 
 function CaseEditor({ c, users, onClose, onSaved }:
   { c: CaseRow; users: UserRow[]; onClose: () => void; onSaved: () => void }) {
+  const app = useApp();
   const [status, setStatus] = useState<CaseRow['status']>(c.status);
   const [assignee, setAssignee] = useState<string>(c.assigned ? String(c.assigned.id) : '');
   const [rootCause, setRootCause] = useState(c.rootCause ?? '');
   const [note, setNote] = useState(c.note ?? '');
   const [saving, setSaving] = useState(false);
+  const [promoting, setPromoting] = useState(false);
+  const canPromote = app.user ? app.user.role !== 'analyst' : false; // lead+
 
   const save = async () => {
     setSaving(true);
@@ -108,12 +111,36 @@ function CaseEditor({ c, users, onClose, onSaved }:
       onSaved();
     } catch { setSaving(false); }
   };
+  // case → incident: prefills from the case, links case + event, drops a note
+  const promote = async () => {
+    setPromoting(true);
+    try {
+      await api.post(`/api/cases/${c.id}/promote`, {});
+      onSaved();
+      app.setNav('incidents');
+    } catch { setPromoting(false); }
+  };
 
   return (
     <Modal title={`Edit ${c.label}`} onClose={onClose} width={460}>
-      <div className="text-sm text-text2" style={{ marginBottom: 12 }}>
-        <span className="mono" style={{ color: sevColor(c.severity) }}>{c.name}</span>
-        <span className="mono text-text3"> · {c.device}</span>
+      <div className="row" style={{ marginBottom: 12, justifyContent: 'space-between', gap: 8 }}>
+        <span className="text-sm text-text2" style={{ minWidth: 0, overflow: 'hidden',
+          textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span className="mono" style={{ color: sevColor(c.severity) }}>{c.name}</span>
+          <span className="mono text-text3"> · {c.device}</span>
+        </span>
+        {c.incident ? (
+          <span className="pill mono text-xs" title="This case was promoted to an incident"
+            style={{ color: '#388bfd', background: 'rgba(56,139,253,0.1)',
+              border: '1px solid rgba(56,139,253,0.3)', flexShrink: 0 }}>
+            {c.incident.label}
+          </span>
+        ) : canPromote && (
+          <Button size="sm" onClick={promote} disabled={promoting}
+            title="Open an incident from this case — links the case and its event, prefills title and severity">
+            {promoting ? 'Promoting…' : 'Promote to Incident'}
+          </Button>
+        )}
       </div>
       <Field label="Status">
         <Select title="Status" value={status}

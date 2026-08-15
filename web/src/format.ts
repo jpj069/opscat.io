@@ -4,6 +4,21 @@ export const SEV = {
   green: '#3fb950', purple: '#bc8cff', cyan: '#38b6ff', teams: '#5865f2',
 };
 
+// The app-wide status scale — mirror of server/src/lib/status-scale.js
+// (docs/INCIDENTS-V2.md §2 "One status scale"). Insertion order = rank order;
+// `label` is the display spelling, stored values never carry a second one.
+export const STATUS_META = {
+  operational: { label: 'Operational', color: SEV.green, rank: 0 },
+  maintenance: { label: 'Maintenance', color: SEV.purple, rank: 1 },
+  degraded: { label: 'Degraded', color: SEV.medium, rank: 2 },
+  partial: { label: 'Partial Outage', color: SEV.high, rank: 3 },
+  major: { label: 'Major Outage', color: SEV.critical, rank: 4 },
+} as const;
+export type ScaleStatus = keyof typeof STATUS_META;
+// incident impact = the non-operational, non-maintenance levels of the scale
+export const IMPACTS = ['degraded', 'partial', 'major'] as const;
+export type Impact = typeof IMPACTS[number];
+
 export function sevBand(score: number): keyof typeof SEV {
   if (score >= 80) return 'critical';
   if (score >= 60) return 'high';

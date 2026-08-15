@@ -32,7 +32,7 @@ const MAX_INCIDENTS = 50;
 // event severity by vendor incident impact — 'minor' stays below the default
 // alert threshold (60) and the case threshold, majors page.
 const IMPACT_SEVERITY = { critical: 90, major: 82, partial: 75, degraded: 55, minor: 55, maintenance: 25, unknown: 65 };
-const MAPPABLE = new Set(['operational', 'degraded', 'partial', 'major', 'maintenance']);
+const MAPPABLE = new Set(require('../lib/status-scale').ORDER);
 
 function applyResult(vendor, parsed) {
   const t = now();

@@ -5,24 +5,24 @@ const { db, getOrgSetting } = require('../db');
 const config = require('../config');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
+const { RANK, rankCaseSql } = require('../lib/status-scale');
 
-const STATUS_RANK = { operational: 0, maintenance: 1, degraded: 2, partial: 3, major: 4 };
+// Worst-wins upsert for a *_days rollup table — the ordering comes from the
+// shared scale so it cannot drift from the rest of the app.
+const dayUpsertSql = (table, idCol) => `INSERT INTO ${table} (${idCol}, day, worst, down_seconds)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(${idCol}, day) DO UPDATE SET
+      worst = CASE WHEN excluded.worst != 'operational' AND
+        ${rankCaseSql(`${table}.worst`)} < ${rankCaseSql('excluded.worst')}
+        THEN excluded.worst ELSE ${table}.worst END,
+      down_seconds = ${table}.down_seconds + excluded.down_seconds`;
 
 function rollupComponentDay() {
   const day = new Date().toISOString().slice(0, 10);
   const comps = db.prepare('SELECT id, org_id, status FROM components').all();
-  const upsert = db.prepare(`INSERT INTO component_days (component_id, day, worst, down_seconds)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(component_id, day) DO UPDATE SET
-      worst = CASE WHEN excluded.worst != 'operational' AND
-        (CASE component_days.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
-          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END) <
-        (CASE excluded.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
-          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END)
-        THEN excluded.worst ELSE component_days.worst END,
-      down_seconds = component_days.down_seconds + excluded.down_seconds`);
+  const upsert = db.prepare(dayUpsertSql('component_days', 'component_id'));
   for (const c of comps) {
-    const degraded = STATUS_RANK[c.status] >= 2; // degraded/partial/major count as downtime
+    const degraded = RANK[c.status] >= RANK.degraded; // degraded/partial/major count as downtime
     upsert.run(c.id, day, c.status, degraded ? 60 : 0); // called every minute
   }
 }
@@ -32,19 +32,10 @@ function rollupComponentDay() {
 function rollupVendorDay() {
   const day = new Date().toISOString().slice(0, 10);
   const vendors = db.prepare('SELECT id, status FROM vendors WHERE enabled = 1').all();
-  const upsert = db.prepare(`INSERT INTO vendor_days (vendor_id, day, worst, down_seconds)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(vendor_id, day) DO UPDATE SET
-      worst = CASE WHEN excluded.worst != 'operational' AND
-        (CASE vendor_days.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
-          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END) <
-        (CASE excluded.worst WHEN 'operational' THEN 0 WHEN 'maintenance' THEN 1
-          WHEN 'degraded' THEN 2 WHEN 'partial' THEN 3 ELSE 4 END)
-        THEN excluded.worst ELSE vendor_days.worst END,
-      down_seconds = vendor_days.down_seconds + excluded.down_seconds`);
+  const upsert = db.prepare(dayUpsertSql('vendor_days', 'vendor_id'));
   for (const v of vendors) {
     const status = v.status === 'unknown' ? 'operational' : v.status;
-    const degraded = STATUS_RANK[status] >= 2;
+    const degraded = RANK[status] >= RANK.degraded;
     upsert.run(v.id, day, status, degraded ? 60 : 0);
   }
 }

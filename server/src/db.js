@@ -349,6 +349,37 @@ const MIGRATIONS = [
   () => {
     addColumn('login_tokens', 'purpose', "TEXT NOT NULL DEFAULT 'login'");
   },
+  // idx 14 -> version 15: incident primitives (docs/INCIDENTS-V2.md slice 1) —
+  // an incident gains an owner, affects status-page components (whose status is
+  // then DERIVED from open incidents), and keeps provenance links to the
+  // cases/events it grew out of. component_owners feeds auto-assign.
+  // The CREATE TABLE blocks mirror schema.sql exactly (fresh installs get them
+  // from there; this brings deployed databases forward).
+  () => {
+    addColumn('incidents', 'assignee_id', 'INTEGER REFERENCES users(id)');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS incident_components (
+        incident_id  INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+        component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+        impact       TEXT NOT NULL DEFAULT 'degraded'
+                     CHECK (impact IN ('degraded','partial','major')),
+        PRIMARY KEY (incident_id, component_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_inc_comp_component ON incident_components(component_id);
+      CREATE TABLE IF NOT EXISTS incident_links (
+        incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK (kind IN ('case','event')),
+        ref_id      INTEGER NOT NULL,
+        created_at  INTEGER NOT NULL,
+        PRIMARY KEY (incident_id, kind, ref_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_inc_links_ref ON incident_links(kind, ref_id);
+      CREATE TABLE IF NOT EXISTS component_owners (
+        component_id INTEGER PRIMARY KEY REFERENCES components(id) ON DELETE CASCADE,
+        user_id      INTEGER NOT NULL REFERENCES users(id)
+      );
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

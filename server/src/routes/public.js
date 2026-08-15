@@ -18,7 +18,7 @@ function resolveOrg(slugOrNull) {
   return db.prepare('SELECT * FROM organizations WHERE slug = ?').get(String(slugOrNull).toLowerCase());
 }
 
-const STATUS_RANK = { operational: 0, maintenance: 1, degraded: 2, partial: 3, major: 4 };
+const { RANK: STATUS_RANK } = require('../lib/status-scale');
 const STATUS_LABEL = {
   operational: 'All Systems Operational', maintenance: 'Scheduled Maintenance in Progress',
   degraded: 'Degraded Performance', partial: 'Partial Outage', major: 'Major Outage',

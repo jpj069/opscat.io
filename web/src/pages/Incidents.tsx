@@ -2,9 +2,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useApp } from '../state';
-import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime } from '../format';
+import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime, STATUS_META, IMPACTS } from '../format';
 import { Card, Button, SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
-import type { Incident } from '../types';
+import { Select, MultiSelect } from '../Select';
+import type { Incident, Impact, Component } from '../types';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
   investigating: '#f85149', identified: '#f0883e', monitoring: '#e3b341', resolved: '#3fb950',
@@ -27,9 +28,12 @@ function statusColor(s: string): string {
 }
 
 export default function Incidents() {
+  const app = useApp();
   const [incidents, setIncidents] = useState<Incident[] | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [comps, setComps] = useState<Component[]>([]);
+  const [who, setWho] = useState('');
 
   const load = async (selectId?: number) => {
     const rows = await api.get<Incident[]>('/api/incidents');
@@ -41,30 +45,42 @@ export default function Incidents() {
     });
   };
   useEffect(() => { load().catch(() => setIncidents([])); }, []);
+  useEffect(() => { api.get<Component[]>('/api/admin/components').then(setComps).catch(() => {}); }, []);
 
   const selected = useMemo(
     () => incidents?.find((i) => i.id === selectedId) ?? null,
     [incidents, selectedId],
   );
+  const shown = useMemo(() => {
+    if (!incidents) return null;
+    if (who === '') return incidents;
+    const id = who === 'me' ? app.user?.id : Number(who);
+    return incidents.filter((i) => i.assigneeId === id);
+  }, [incidents, who, app.user]);
 
   return (
-    <div className="page-console" style={{ display: 'flex', minHeight: 0 }}>
+    <div className="page-console split">
       {/* ---------------------------------------------------------- list */}
-      <div style={{ width: 340, flexShrink: 0, borderRight: '1px solid var(--bg3)',
-        display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div className="split-master">
         <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px',
           borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
           <span className="text-lg font-bold text-text0">Incidents</span>
           <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>+ New Incident</Button>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {incidents === null && <ListSkeleton rows={5} lines={3} />}
-          {incidents && incidents.length === 0 && (
+        <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
+          <Select title="Assignee filter" aria-label="Filter by assignee" value={who} onChange={setWho}
+            options={[{ value: '', label: 'Anyone' }, { value: 'me', label: 'Assigned to me' },
+              ...app.users.map((u) => ({ value: String(u.id), label: u.name }))]} />
+        </div>
+        <div className="split-master-scroll">
+          {shown === null && <ListSkeleton rows={5} lines={3} />}
+          {shown && shown.length === 0 && (
             <div className="text-text3 text-sm" style={{ padding: 24}}>
-              No incidents yet — declare one with “+ New Incident”.
+              {who === '' ? 'No incidents yet — declare one with “+ New Incident”.'
+                : 'No incidents for this assignee.'}
             </div>
           )}
-          {incidents?.map((inc) => {
+          {shown?.map((inc) => {
             const c = sevColor(inc.severity);
             const active = inc.id === selectedId;
             return (
@@ -80,6 +96,7 @@ export default function Incidents() {
                 <div className="text-base text-text0" style={{ marginBottom: 5, ...CLAMP2 }}>{inc.title}</div>
                 <div className="mono text-2xs text-text3">
                   started {fmtTime(inc.startedAt)} · {fmtDuration(inc.durationMs)}
+                  {inc.assignee ? ` · ${inc.assignee}` : ''}
                 </div>
               </div>
             );
@@ -88,23 +105,56 @@ export default function Incidents() {
       </div>
 
       {/* ---------------------------------------------------------- detail */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', minWidth: 0 }}>
+      <div className="split-detail">
         {incidents === null
           ? <TextSkeleton lines={6} />
           : !selected
           ? <div className="text-text3 text-base">Select an incident to view its timeline and RCA.</div>
-          : <IncidentDetail key={selected.id} incident={selected} reload={load} />}
+          : <IncidentDetail key={selected.id} incident={selected} comps={comps} reload={load} />}
       </div>
 
-      {showNew && <NewIncidentModal onClose={() => setShowNew(false)}
+      {showNew && <NewIncidentModal comps={comps} onClose={() => setShowNew(false)}
         onCreated={(id) => { setShowNew(false); load(id); }} />}
     </div>
   );
 }
 
+// ------------------------------------------------------------------ impact picker
+
+// Affected components with a per-component impact on the app-wide status
+// scale — the component's public status is DERIVED from these while the
+// incident is open (docs/INCIDENTS-V2.md §2).
+function ImpactPicker({ comps, value, onChange }: {
+  comps: Component[];
+  value: { id: number; impact: Impact }[];
+  onChange: (v: { id: number; impact: Impact }[]) => void;
+}) {
+  return (
+    <>
+      <MultiSelect title="Affected components" placeholder="No components affected"
+        value={value.map((c) => String(c.id))}
+        onChange={(ids) => onChange(ids.map((s) =>
+          value.find((v) => String(v.id) === s) ?? { id: Number(s), impact: 'degraded' as Impact }))}
+        options={comps.map((c) => ({ value: String(c.id), label: c.name }))} />
+      {value.map((v) => (
+        <div key={v.id} className="row" style={{ gap: 8, marginTop: 6 }}>
+          <span className="text-sm text-text1" style={{ flex: 1, minWidth: 0, overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {comps.find((c) => c.id === v.id)?.name ?? `#${v.id}`}</span>
+          <Select title="Impact" aria-label="Impact" value={v.impact}
+            style={{ width: 150, flexShrink: 0 }}
+            onChange={(imp) => onChange(value.map((x) => (x.id === v.id ? { ...x, impact: imp as Impact } : x)))}
+            options={IMPACTS.map((i) => ({ value: i, label: STATUS_META[i].label }))} />
+        </div>
+      ))}
+    </>
+  );
+}
+
 // ------------------------------------------------------------------ detail
 
-function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?: number) => Promise<void> }) {
+function IncidentDetail({ incident, comps, reload }:
+  { incident: Incident; comps: Component[]; reload: (id?: number) => Promise<void> }) {
   const app = useApp();
   const [draft, setDraft] = useState(() => ({
     summary: incident.rca?.summary ?? '',
@@ -119,6 +169,14 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
 
   const setStatus = async (status: Incident['status']) => {
     await api.post(`/api/incidents/${incident.id}/status`, { status });
+    await reload(incident.id);
+  };
+  const setAssignee = async (v: string) => {
+    await api.patch(`/api/incidents/${incident.id}`, { assigneeId: v === '' ? null : Number(v) });
+    await reload(incident.id);
+  };
+  const setComponents = async (v: { id: number; impact: Impact }[]) => {
+    await api.patch(`/api/incidents/${incident.id}`, { components: v });
     await reload(incident.id);
   };
   const togglePublish = async () => {
@@ -139,8 +197,8 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
 
   return (
     <>
-      {/* header */}
-      <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+      {/* header — a toolbar, so it wraps on phones instead of pushing sideways */}
+      <div className="row row-wrap" style={{ gap: 8, marginBottom: 8 }}>
         <span className="mono text-base" style={{ color: SEV.low }}>{incident.label}</span>
         <SevBadge score={incident.severity} />
         <StatusPill text={incident.status} color={STATUS_COLOR[incident.status]} />
@@ -172,6 +230,42 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
         })}
       </div>
 
+      {/* impact & ownership */}
+      <Card style={{ marginBottom: 18 }}>
+        <div className="card-title">Impact &amp; ownership</div>
+        <div className="row row-wrap" style={{ gap: 16, alignItems: 'flex-start' }}>
+          <div style={{ flex: '0 1 240px', minWidth: 200 }}>
+            <span className="micro text-2xs" style={{ display: 'block', marginBottom: 4 }}>Assignee</span>
+            <Select title="Assignee" placeholder="— unassigned" aria-label="Assignee"
+              value={incident.assigneeId ? String(incident.assigneeId) : ''} onChange={setAssignee}
+              options={[{ value: '', label: '— unassigned' },
+                ...app.users.map((u) => ({ value: String(u.id), label: u.name }))]} />
+          </div>
+          <div style={{ flex: '1 1 260px', minWidth: 220 }}>
+            <span className="micro text-2xs" style={{ display: 'block', marginBottom: 4 }}>
+              Affected components</span>
+            <ImpactPicker comps={comps} value={incident.components} onChange={setComponents} />
+            {incident.components.length > 0 && (
+              <div className="text-2xs text-text3" style={{ marginTop: 6 }}>
+                Component status on the public page follows the worst impact of open incidents.
+              </div>
+            )}
+          </div>
+        </div>
+        {incident.links.length > 0 && (
+          <div className="row row-wrap" style={{ gap: 6, marginTop: 12 }}>
+            <span className="micro text-2xs">Linked</span>
+            {incident.links.map((l) => (
+              <span key={`${l.kind}${l.refId}`} className="pill mono text-xs"
+                style={{ color: SEV.low, background: alpha(SEV.low, 0.1),
+                  border: `1px solid ${alpha(SEV.low, 0.3)}` }}>
+                {l.kind === 'case' ? l.label : `event ${l.label}`}
+              </span>
+            ))}
+          </div>
+        )}
+      </Card>
+
       {/* timeline */}
       <Card style={{ marginBottom: 18 }}>
         <div className="card-title">Timeline</div>
@@ -182,7 +276,10 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
             <span className="mono text-xs text-text3" style={{ width: 140, flexShrink: 0 }}>
               {fmtDateTime(u.ts)}</span>
             <StatusPill text={u.status} color={statusColor(u.status)} />
-            <span className="text-sm text-text1">{u.message}</span>
+            {/* min-width: 0 lets the flex item shrink below its content; the
+                message then wraps instead of pushing the page sideways */}
+            <span className="text-sm text-text1" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {u.message}</span>
           </div>
         ))}
       </Card>
@@ -210,17 +307,26 @@ function IncidentDetail({ incident, reload }: { incident: Incident; reload: (id?
 
 // ------------------------------------------------------------------ new modal
 
-function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id?: number) => void }) {
+function NewIncidentModal({ comps, onClose, onCreated }:
+  { comps: Component[]; onClose: () => void; onCreated: (id?: number) => void }) {
+  const app = useApp();
   const [title, setTitle] = useState('');
   const [severity, setSeverity] = useState(70);
   const [message, setMessage] = useState('');
+  // everything below is optional — declare-fast stays two fields
+  const [assignee, setAssignee] = useState(app.user ? String(app.user.id) : '');
+  const [impacted, setImpacted] = useState<{ id: number; impact: Impact }[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr('');
     try {
-      const inc = await api.post<Incident>('/api/incidents', { title, severity, message });
+      const inc = await api.post<Incident>('/api/incidents', {
+        title, severity, message,
+        assigneeId: assignee === '' ? null : Number(assignee),
+        components: impacted,
+      });
       onCreated(inc?.id);
     } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); setBusy(false); }
   };
@@ -240,6 +346,17 @@ function NewIncidentModal({ onClose, onCreated }: { onClose: () => void; onCreat
           <Textarea className="rca" value={message} onChange={(e) => setMessage(e.target.value)}
             placeholder="We are investigating reports of…" />
         </Field>
+        <Field label="Assignee">
+          <Select title="Assignee" placeholder="— unassigned" aria-label="Assignee"
+            value={assignee} onChange={setAssignee}
+            options={[{ value: '', label: '— unassigned' },
+              ...app.users.map((u) => ({ value: String(u.id), label: u.name }))]} />
+        </Field>
+        {comps.length > 0 && (
+          <Field label="Affected components">
+            <ImpactPicker comps={comps} value={impacted} onChange={setImpacted} />
+          </Field>
+        )}
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block
  disabled={busy || !title}>{busy ? '…' : 'Create incident'}</Button>

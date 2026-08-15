@@ -632,6 +632,16 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
 .fill-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .page-console { height: 100%; }
 
+/* Master-detail split (Incidents): two inner scrollers side by side on
+   desktop; below 720px it STACKS and flows into the document — a 340px list
+   next to a 50px detail is what a phone would otherwise get. The geometry
+   lives here (not inline) so the phone block can actually win. */
+.page-console.split { display: flex; min-height: 0; }
+.split-master { width: 340px; flex-shrink: 0; border-right: 1px solid var(--bg3);
+  display: flex; flex-direction: column; min-height: 0; }
+.split-master-scroll { overflow-y: auto; flex: 1; }
+.split-detail { flex: 1; overflow-y: auto; padding: 20px 24px; min-width: 0; }
+
 /* mobile */
 @media (max-width: 720px) {
   /* align-items: flex-start sizes children by CONTENT on the cross axis — once the
@@ -673,6 +683,13 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
   /* Consoles keep their own window. svh = the SMALL viewport, so the content is
      never cut off behind the (here permanently expanded) Safari toolbar. */
   .page-console { height: calc(100svh - 48px); }
+  /* …except the master-detail split: stacked panes have meaning as a document,
+     so it leaves the console window and the root scroller does the work. */
+  .page-console.split { display: block; height: auto; }
+  .split-master { width: auto; display: block; border-right: 0;
+    border-bottom: 1px solid var(--bg3); }
+  .split-master-scroll { overflow-y: visible; }
+  .split-detail { overflow-y: visible; padding: 16px; }
   .screen-center { height: auto; min-height: 100svh; overflow-y: visible; }
   /* A pill's × is only ~18px — fine with a mouse, too small for a thumb. Extend
      the hit area with a pseudo-element so the trigger keeps its dense size.

@@ -31,6 +31,7 @@ export interface CaseRow {
   id: number; label: string; eventId: number | null; name: string; device: string;
   severity: number; status: 'open' | 'assigned' | 'closed'; assigned: AssignedRef | null;
   rootCause: string | null; note: string | null; openedAt: number; closedAt: number | null;
+  incident: { id: number; label: string } | null;
   durationMs: number;
 }
 
@@ -83,10 +84,16 @@ export interface VendorCatalogEntry {
 }
 
 export interface IncidentUpdate { ts: number; status: string; message: string; }
+export type Impact = 'degraded' | 'partial' | 'major';
+export interface IncidentComponent { id: number; impact: Impact; name: string; }
+export interface IncidentLink { kind: 'case' | 'event'; refId: number; label: string; }
 export interface Incident {
   id: number; label: string; title: string; severity: number;
   status: 'investigating' | 'identified' | 'monitoring' | 'resolved';
   published: boolean; startedAt: number; resolvedAt: number | null; durationMs: number;
+  assigneeId: number | null; assignee: string | null;
+  components: IncidentComponent[];
+  links: IncidentLink[];
   updates: IncidentUpdate[];
   rca: { summary: string; impact: string; rootCause: string; resolution: string; actions: string };
 }
@@ -96,7 +103,8 @@ export interface StatusReportsResponse { total: number; reports: StatusReportRow
 
 export type CompStatus = 'operational' | 'degraded' | 'partial' | 'major' | 'maintenance';
 export interface Component {
-  id: number; name: string; group: string; status: CompStatus; uptimePct: string;
+  id: number; name: string; group: string; status: CompStatus; ownerId: number | null;
+  uptimePct: string;
   days: { day: string; worst: CompStatus }[];
 }
 

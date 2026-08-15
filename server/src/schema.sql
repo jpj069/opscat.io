@@ -462,7 +462,38 @@ CREATE TABLE IF NOT EXISTS incidents (
   resolved_at   INTEGER,
   rca_summary   TEXT DEFAULT '', rca_impact TEXT DEFAULT '', rca_root_cause TEXT DEFAULT '',
   rca_resolution TEXT DEFAULT '', rca_actions TEXT DEFAULT '',
-  created_by    INTEGER REFERENCES users(id)
+  created_by    INTEGER REFERENCES users(id),
+  assignee_id   INTEGER REFERENCES users(id)
+);
+
+-- which status-page components an incident affects, and how badly. `impact`
+-- uses the app-wide status scale (lib/status-scale.js) — the component status
+-- is DERIVED as the worst impact across open incidents, identity, no mapping.
+CREATE TABLE IF NOT EXISTS incident_components (
+  incident_id  INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  impact       TEXT NOT NULL DEFAULT 'degraded'
+               CHECK (impact IN ('degraded','partial','major')),
+  PRIMARY KEY (incident_id, component_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inc_comp_component ON incident_components(component_id);
+
+-- provenance: the events/cases this incident grew out of. Polymorphic on
+-- purpose (no FK on ref_id); rows disappear with the incident, not the target.
+CREATE TABLE IF NOT EXISTS incident_links (
+  incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL CHECK (kind IN ('case','event')),
+  ref_id      INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (incident_id, kind, ref_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inc_links_ref ON incident_links(kind, ref_id);
+
+-- who owns a component: read by auto-assign ("by_component"). Maps to a USER —
+-- there is no team object; see docs/INCIDENTS-V2.md §2.
+CREATE TABLE IF NOT EXISTS component_owners (
+  component_id INTEGER PRIMARY KEY REFERENCES components(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS incident_updates (

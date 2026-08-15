@@ -13,6 +13,7 @@ const automationEngine = require('../engine/automations');
 const scoutEngine = require('../engine/scout');
 const llm = require('../llm');
 const voice = require('../voice');
+const statusScale = require('../lib/status-scale');
 
 const plans = require('../plans');
 const invites = require('../lib/invites');
@@ -740,7 +741,9 @@ router.delete('/agents/:id', sec.requireRole('lead'), (req, res) => {
 
 // ---- status page components (lead+ to modify) ----
 router.get('/components', (req, res) => {
-  const comps = db.prepare('SELECT * FROM components WHERE org_id = ? ORDER BY sort, id').all(req.orgId);
+  const comps = db.prepare(`SELECT c.*, co.user_id AS owner_user_id FROM components c
+    LEFT JOIN component_owners co ON co.component_id = c.id
+    WHERE c.org_id = ? ORDER BY c.sort, c.id`).all(req.orgId);
   const since = new Date(now() - 45 * 86400000).toISOString().slice(0, 10);
   const days = db.prepare(`SELECT cd.* FROM component_days cd
     JOIN components c ON c.id = cd.component_id
@@ -756,6 +759,7 @@ router.get('/components', (req, res) => {
     const totalSecs = Math.max(1, cd.length) * 86400;
     return {
       id: c.id, name: c.name, group: c.grp, status: c.status,
+      ownerId: c.owner_user_id || null,
       uptimePct: (100 - (totalDown / totalSecs) * 100).toFixed(2),
       days: cd.map((d) => ({ day: d.day, worst: d.worst })),
     };
@@ -776,12 +780,23 @@ router.patch('/components/:id', sec.requireRole('lead'), (req, res) => {
   const c = db.prepare('SELECT * FROM components WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!c) return httpError(res, 404, 'component not found');
   const b = req.body || {};
-  const statuses = ['operational', 'degraded', 'partial', 'major', 'maintenance'];
-  if (b.status && !statuses.includes(b.status)) return httpError(res, 400, 'bad status');
+  if (b.status && !statusScale.ORDER.includes(b.status)) return httpError(res, 400, 'bad status');
   db.prepare(`UPDATE components SET name = COALESCE(?, name), grp = COALESCE(?, grp),
       status = COALESCE(?, status) WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null, isStr(b.group, 100) ? b.group : null,
       b.status || null, c.id, req.orgId);
+  // owner: an explicit null clears, a user id (org member) sets, absent = keep
+  if ('ownerId' in b) {
+    if (b.ownerId === null) {
+      db.prepare('DELETE FROM component_owners WHERE component_id = ?').run(c.id);
+    } else {
+      const u = db.prepare(`SELECT u.id FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.user_id = ? AND m.org_id = ? AND u.active = 1`).get(b.ownerId, req.orgId);
+      if (!u) return httpError(res, 400, 'owner must be a member of this organization');
+      db.prepare(`INSERT INTO component_owners (component_id, user_id) VALUES (?, ?)
+        ON CONFLICT(component_id) DO UPDATE SET user_id = excluded.user_id`).run(c.id, u.id);
+    }
+  }
   sec.audit(req.user.id, 'component_status', `${c.name} → ${b.status || c.status}`, req.orgId);
   res.json({ ok: true });
 });
