@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { alpha, relTime, STATUS_META } from '../format';
-import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
 
@@ -146,11 +146,84 @@ export default function StatusPageAdmin() {
         </TableScroll>
       </Card>
 
+      {canEdit && <Subscribers isAdmin={isAdmin} />}
       <UserReports isAdmin={isAdmin} />
 
       {showAdd && <AddComponentModal onClose={() => setShowAdd(false)}
         onAdded={() => { setShowAdd(false); load(); }} />}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ subscribers
+
+interface SubsData {
+  available: boolean; enabled: boolean; confirmed: number; pending: number;
+  rows: { id: number; email: string; confirmedAt: number | null; createdAt: number }[];
+}
+
+function Subscribers({ isAdmin }: { isAdmin: boolean }) {
+  const app = useApp();
+  const [data, setData] = useState<SubsData | null>(null);
+  const [enabled, setEnabled] = useState(app.settings.status_subscribers_enabled !== '0');
+  useEffect(() => { setEnabled(app.settings.status_subscribers_enabled !== '0'); },
+    [app.settings.status_subscribers_enabled]);
+
+  const load = () => api.get<SubsData>('/api/admin/status-subscribers')
+    .then(setData).catch(() => setData({ available: false, enabled: false, confirmed: 0, pending: 0, rows: [] }));
+  useEffect(() => { load(); }, []);
+
+  const toggle = async () => {
+    const next = !enabled;
+    setEnabled(next);
+    try { await api.patch('/api/admin/settings', { status_subscribers_enabled: next ? '1' : '0' }); }
+    catch { setEnabled(!next); }
+  };
+  const remove = async (id: number, email: string) => {
+    if (!window.confirm(`Remove subscriber ${email}?`)) return;
+    await api.del(`/api/admin/status-subscribers/${id}`);
+    load();
+  };
+
+  return (
+    <Card style={{ padding: 0 }}>
+      <div className="row row-wrap" style={{ justifyContent: 'space-between', padding: '12px 16px', gap: 10 }}>
+        <span className="card-title" style={{ margin: 0 }}>
+          E-mail subscribers{data ? ` (${data.confirmed} confirmed${data.pending ? `, ${data.pending} pending` : ''})` : ''}
+        </span>
+        {isAdmin && (
+          <span className="row" style={{ gap: 6 }}>
+            <Toggle on={enabled} onClick={toggle} />
+            <span className="micro text-2xs">Accept subscriptions</span>
+          </span>
+        )}
+      </div>
+      <div style={{ padding: '0 16px 12px' }}>
+        {data === null ? (
+          <ListSkeleton rows={3} lines={1} />
+        ) : !data.available ? (
+          <div className="text-sm text-text3" style={{ paddingBottom: 4 }}>
+            {data.enabled
+              ? 'no mail transport configured — the subscribe form is hidden on the public page until one is set up (Settings → Notifications)'
+              : 'subscriptions are switched off — the subscribe form is hidden on the public page'}
+          </div>
+        ) : data.rows.length === 0 ? (
+          <div className="text-sm text-text3" style={{ paddingBottom: 4 }}>
+            no subscribers yet — visitors can subscribe on the public status page (double-opt-in);
+            published incident updates go out by mail and via the Atom feed</div>
+        ) : data.rows.map((r) => (
+          <div key={r.id} className="row" style={{ gap: 8, padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
+            <span className="text-sm text-text1" style={{ minWidth: 0, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{r.email}</span>
+            <span className="mono text-xs" style={{ flexShrink: 0,
+              color: r.confirmedAt ? 'var(--text2)' : 'var(--text3)' }}>
+              {r.confirmedAt ? `confirmed ${relTime(r.confirmedAt)}` : 'pending'}</span>
+            <Button size="sm" variant="danger" title="Remove subscriber"
+              onClick={() => remove(r.id, r.email)}>×</Button>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

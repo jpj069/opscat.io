@@ -120,6 +120,117 @@ router.post('/status/report', (req, res) => handleReport(req, res, resolveOrg(nu
 router.post('/status/:slug/report', (req, res) =>
   handleReport(req, res, resolveOrg(req.params.slug), `/status/${encodeURIComponent(req.params.slug)}`));
 
+// ---- status-page subscribers (docs/INCIDENTS-V2.md slice 2) ------------------
+
+const subscribers = require('../lib/subscribers');
+const subLimiter = new RateLimiter({ perMinute: 3, burst: 3 });
+
+// Same posture as the report form: honeypot, rate limit, and a UNIFORM answer —
+// new, pending, already-confirmed and silently-dropped all look identical, so
+// the form cannot be used to probe an address book.
+function handleSubscribe(req, res, org, redirectTo) {
+  const done = () => (redirectTo
+    ? res.redirect(303, `${redirectTo}?subscribed=1`)
+    : res.json({ ok: true }));
+  if (!org || !published(org.id) || !subscribers.available(org.id)) {
+    return redirectTo ? res.redirect(303, redirectTo || '/status') : res.status(404).json({ error: 'not available' });
+  }
+  const b = req.body || {};
+  if (typeof b.website === 'string' && b.website.trim() !== '') return done(); // honeypot hit
+  if (!subLimiter.allow(`${org.id}|${clientIp(req)}`)) return done();
+  subscribers.subscribe(org.id, b.email);
+  return done();
+}
+
+router.post('/api/status/subscribe', (req, res) => handleSubscribe(req, res, resolveOrg(req.query.org), null));
+router.post('/status/subscribe', (req, res) => handleSubscribe(req, res, resolveOrg(null), '/status'));
+router.post('/status/:slug/subscribe', (req, res) =>
+  handleSubscribe(req, res, resolveOrg(req.params.slug), `/status/${encodeURIComponent(req.params.slug)}`));
+
+// small dark page in the status page's own style, for confirm/unsubscribe
+function miniPage(res, title, body, backUrl) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
+<style>body{margin:0;background:#0b0e14;color:#c9d1d9;font:14px/1.5 Inter,system-ui,sans-serif}
+.wrap{max-width:560px;margin:0 auto;padding:60px 20px}
+.card{padding:20px;border:1px solid #30363d;border-radius:8px;background:#161b22}
+h1{font-size:16px;color:#f0f6fc;margin:0 0 10px}
+a{color:#58a6ff;text-decoration:none}
+button{background:#238636;color:#fff;border:none;border-radius:6px;padding:9px 18px;
+font:600 13px Inter,system-ui,sans-serif;cursor:pointer}</style></head>
+<body><div class="wrap"><div class="card"><h1>${esc(title)}</h1>${body}${
+  backUrl ? `<p><a href="${esc(backUrl)}">← Back to the status page</a></p>` : ''}</div></div></body></html>`);
+}
+
+// NOTE: these are registered BEFORE the `/status/:slug` page route below —
+// otherwise "confirm"/"unsubscribe" would be read as org slugs.
+router.get('/status/confirm', (req, res) => {
+  const r = subscribers.confirm(req.query.token);
+  if (!r) return miniPage(res, 'Link invalid or expired',
+    '<p>This confirmation link is no longer valid. You can simply subscribe again on the status page.</p>');
+  miniPage(res, 'Subscription confirmed',
+    '<p>You will now receive an e-mail whenever a published incident changes. Every mail carries an unsubscribe link.</p>',
+    subscribers.statusUrl(r.orgId));
+});
+
+// Two-step on purpose: mail scanners GET every link, and a one-request GET
+// unsubscribe would let a corporate link-checker silently remove its users.
+router.get('/status/unsubscribe', (req, res) => {
+  const q = req.query;
+  const fields = q.token
+    ? `<input type="hidden" name="token" value="${esc(q.token)}">`
+    : `<input type="hidden" name="id" value="${esc(q.id || '')}"><input type="hidden" name="sig" value="${esc(q.sig || '')}">`;
+  miniPage(res, 'Unsubscribe from status updates',
+    `<form method="post" action="/status/unsubscribe">${fields}
+<p>No further status mails will be sent to your address.</p>
+<button type="submit">Unsubscribe</button></form>`);
+});
+router.post('/status/unsubscribe', (req, res) => {
+  const b = req.body || {};
+  const r = b.token ? subscribers.unsubscribe(b.token) : subscribers.unsubscribeById(b.id, b.sig);
+  if (!r) return miniPage(res, 'Link invalid', '<p>This unsubscribe link is no longer valid.</p>');
+  miniPage(res, 'Unsubscribed', '<p>Done — no further status mails will be sent.</p>',
+    subscribers.statusUrl(r.orgId));
+});
+
+// ---- Atom feed of published incidents ---------------------------------------
+// The feed derives from the SAME payload the page renders; its URL is the
+// page's own URL plus /feed.xml, mirroring the .json convention.
+function statusFeed(req, res, org, pagePath) {
+  if (!org || !published(org.id)) return res.status(404).send('not published');
+  const d = statusData(org.id);
+  const pageUrl = `${config.baseUrl}${pagePath}`;
+  const iso = (ts) => new Date(ts).toISOString();
+  const latest = d.incidents.reduce((m, i) =>
+    Math.max(m, ...i.updates.map((u) => u.ts)), d.incidents.length ? 0 : d.ts);
+  const entries = d.incidents.map((i) => {
+    const upd = Math.max(i.startedAt || 0, ...i.updates.map((u) => u.ts));
+    const content = i.updates.map((u) =>
+      `<p><strong>${esc(u.status)}</strong> — ${esc(u.message)} <em>(${iso(u.ts)})</em></p>`).join('');
+    return `  <entry>
+    <id>${esc(pageUrl)}#inc-${i.id}</id>
+    <title>${esc(`${i.label} — ${i.title} [${i.status}]`)}</title>
+    <link href="${esc(pageUrl)}"/>
+    <updated>${iso(upd)}</updated>
+    <content type="html">${esc(content)}</content>
+  </entry>`;
+  }).join('\n');
+  res.setHeader('Content-Type', 'application/atom+xml; charset=utf-8');
+  res.send(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>${esc(d.org)} Status</title>
+  <id>${esc(pageUrl)}</id>
+  <link href="${esc(pageUrl)}"/>
+  <link rel="self" href="${esc(`${pageUrl}/feed.xml`)}"/>
+  <updated>${iso(latest || d.ts)}</updated>
+${entries}
+</feed>`);
+}
+router.get('/status/feed.xml', (req, res) => statusFeed(req, res, resolveOrg(null), '/status'));
+router.get('/status/:slug/feed.xml', (req, res) =>
+  statusFeed(req, res, resolveOrg(req.params.slug), `/status/${encodeURIComponent(req.params.slug)}`));
+
 const DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341',
   partial: '#f0883e', major: '#f85149' };
 
@@ -134,6 +245,8 @@ function renderStatus(req, res, org) {
   }
   const d = statusData(org.id);
   const reported = req.query.reported === '1';
+  const subscribed = req.query.subscribed === '1';
+  const canSubscribe = subscribers.available(org.id);
   // Same payload this page renders, as JSON — linked in the footer so a visitor
   // can automate against the page without reading the docs. Derived from THIS
   // page's own URL (just append `.json`), so it stays correct for the default
@@ -166,6 +279,7 @@ function renderStatus(req, res, org) {
   res.send(`<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(d.org)} Status</title>
+<link rel="alternate" type="application/atom+xml" title="${esc(d.org)} status feed" href="${esc(`${base || '/status'}/feed.xml`)}">
 <style>
   body{margin:0;background:#0b0e14;color:#c9d1d9;font:14px/1.5 Inter,system-ui,sans-serif}
   .wrap{max-width:760px;margin:0 auto;padding:40px 20px}
@@ -210,6 +324,15 @@ ${esc(d.overallLabel)}${Number.isFinite(d.reports60m) ? `<span class="rcount">${
 ${compRows}
 ${incRows ? `<h2>Incidents</h2>${incRows}` : ''}
 ${reported ? '<div class="thanks">Thanks — your report has been recorded and our team can see it.</div>' : ''}
+${subscribed ? '<div class="thanks">Almost done — check your inbox and click the confirmation link.</div>' : ''}
+${canSubscribe && !subscribed ? `<details class="report"><summary>Get status updates by e-mail</summary>
+<form class="report-form" method="post" action="${esc(req.path.replace(/\/+$/, '') || '/status')}/subscribe">
+<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+<input type="email" name="email" required maxlength="200" placeholder="you@example.com"
+  style="background:#0b0e14;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font:12px Inter,system-ui,sans-serif">
+<button type="submit">Subscribe</button>
+<span style="font-size:11px;color:#8b949e">Double-opt-in — we send a confirmation link first. Unsubscribe in every mail.</span>
+</form></details>` : ''}
 ${d.reportsEnabled && !reported ? `<details class="report"><summary>Something not working for you? Report a problem</summary>
 <form class="report-form" method="post" action="${esc(req.path)}/report">
 <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
@@ -219,6 +342,7 @@ ${d.components.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).joi
 <button type="submit">Send report</button>
 </form></details>` : ''}
 <footer>Powered by OpsCat · Machine-readable: <a href="${esc(jsonUrl)}">${esc(jsonUrl)}</a> ·
+<a href="${esc(`${base || '/status'}/feed.xml`)}">Atom feed</a> ·
 ${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
 </div></body></html>`);
 }

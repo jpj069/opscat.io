@@ -16,6 +16,7 @@ const { db } = require('../db');
 const { now } = require('../util');
 const config = require('../config');
 const alerts = require('../engine/alerts');
+const subscribers = require('./subscribers');
 const { IMPACTS, worst } = require('./status-scale');
 
 const label = (id) => `INC-${2000 + id}`;
@@ -170,6 +171,22 @@ function setStatus(orgId, userId, id, status, message) {
   const row = q.byId.get(i.id, orgId);
   emit('incident_status_changed', row, `(${i.status} → ${status})`);
   if (status === 'resolved' && i.status !== 'resolved') emit('incident_resolved', row);
+  // published incidents additionally reach the status-page subscribers
+  if (row.published) subscribers.notifyIncident(row, 'update', message);
+  return row;
+}
+
+// publish/unpublish through the same single path as every other mutation —
+// the moment an incident FIRST becomes visible on the public page, confirmed
+// subscribers get the initial notification.
+function setPublished(orgId, userId, id, value) {
+  const i = q.byId.get(id, orgId);
+  if (!i) return null;
+  const next = value ? 1 : 0;
+  if (i.published === next) return i;
+  db.prepare('UPDATE incidents SET published = ? WHERE id = ? AND org_id = ?').run(next, i.id, orgId);
+  const row = q.byId.get(i.id, orgId);
+  if (next && !i.published) subscribers.notifyIncident(row, 'published');
   return row;
 }
 
@@ -227,6 +244,6 @@ function incidentOfCase(caseId) {
 }
 
 module.exports = {
-  view, label, STATUSES, create, setStatus, assign, setComponents, cleanComponents,
-  promote, incidentOfCase, recomputeComponents, emit,
+  view, label, STATUSES, create, setStatus, setPublished, assign, setComponents,
+  cleanComponents, promote, incidentOfCase, recomputeComponents, emit,
 };

@@ -496,6 +496,21 @@ CREATE TABLE IF NOT EXISTS component_owners (
   user_id      INTEGER NOT NULL REFERENCES users(id)
 );
 
+-- public status-page subscribers (docs/INCIDENTS-V2.md slice 2): double-opt-in
+-- by mail. The token (hashed at rest, mailed in links only) is the subscriber's
+-- one credential — it confirms while pending and unsubscribes once confirmed.
+CREATE TABLE IF NOT EXISTS status_subscribers (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id       INTEGER NOT NULL,
+  email        TEXT NOT NULL,
+  token_hash   TEXT NOT NULL,
+  confirmed_at INTEGER,              -- NULL = pending double-opt-in
+  created_at   INTEGER NOT NULL,
+  last_sent_at INTEGER,              -- confirm-mail resend throttle
+  UNIQUE (org_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
+
 CREATE TABLE IF NOT EXISTS incident_updates (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   incident_id   INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,

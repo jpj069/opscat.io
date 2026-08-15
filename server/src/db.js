@@ -380,6 +380,23 @@ const MIGRATIONS = [
       );
     `);
   },
+  // idx 15 -> version 16: status-page subscribers (docs/INCIDENTS-V2.md
+  // slice 2) — e-mail double-opt-in + Atom feed. Mirrors schema.sql.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS status_subscribers (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id       INTEGER NOT NULL,
+        email        TEXT NOT NULL,
+        token_hash   TEXT NOT NULL,
+        confirmed_at INTEGER,
+        created_at   INTEGER NOT NULL,
+        last_sent_at INTEGER,
+        UNIQUE (org_id, email)
+      );
+      CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

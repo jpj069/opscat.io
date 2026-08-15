@@ -573,16 +573,17 @@ router.patch('/incidents/:id', sec.requireRole('lead'), (req, res) => {
   }
   db.prepare(`UPDATE incidents SET
       title = COALESCE(?, title), severity = COALESCE(?, severity),
-      published = COALESCE(?, published),
       rca_summary = COALESCE(?, rca_summary), rca_impact = COALESCE(?, rca_impact),
       rca_root_cause = COALESCE(?, rca_root_cause), rca_resolution = COALESCE(?, rca_resolution),
       rca_actions = COALESCE(?, rca_actions)
     WHERE id = ? AND org_id = ?`)
     .run(isStr(b.title, 200) ? b.title : null,
       Number.isFinite(b.severity) ? clampInt(b.severity, 0, 100, 50) : null,
-      typeof b.published === 'boolean' ? (b.published ? 1 : 0) : null,
       rca.summary ?? null, rca.impact ?? null, rca.rootCause ?? null,
       rca.resolution ?? null, rca.actions ?? null, i.id, req.orgId);
+  // published goes through the verb AFTER title/rca land, so the first
+  // subscriber mail carries the final wording
+  if (typeof b.published === 'boolean') inc.setPublished(req.orgId, req.user.id, i.id, b.published);
   sec.audit(req.user.id, 'incident_update', inc.label(i.id), req.orgId);
   res.json(inc.view(db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, req.orgId)));
 });

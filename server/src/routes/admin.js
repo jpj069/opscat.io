@@ -234,7 +234,8 @@ router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {
 const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'retention_logs_days', 'onboarding_done'];
 const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal', 'onboarding_source',
   'alert_email_from', 'auth_email_from', 'teams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers',
-  'status_reports_enabled', 'status_reports_public', 'status_reports_threshold'];
+  'status_reports_enabled', 'status_reports_public', 'status_reports_threshold',
+  'status_subscribers_enabled'];
 
 router.get('/settings', (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
@@ -804,6 +805,22 @@ router.patch('/components/:id', sec.requireRole('lead'), (req, res) => {
 router.delete('/components/:id', sec.requireRole('lead'), (req, res) => {
   db.prepare('DELETE FROM components WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'component_delete', `component ${req.params.id}`, req.orgId);
+  res.json({ ok: true });
+});
+
+// ---- status-page subscribers (lead+: addresses are PII, same gate as users) --
+const subscribersLib = require('../lib/subscribers');
+
+router.get('/status-subscribers', sec.requireRole('lead'), (req, res) => {
+  res.json({ available: subscribersLib.available(req.orgId),
+    enabled: subscribersLib.enabled(req.orgId), ...subscribersLib.adminList(req.orgId) });
+});
+
+router.delete('/status-subscribers/:id', sec.requireRole('lead'), (req, res) => {
+  if (!subscribersLib.adminDelete(req.orgId, Number(req.params.id))) {
+    return httpError(res, 404, 'subscriber not found');
+  }
+  sec.audit(req.user.id, 'status_subscriber_delete', `subscriber ${req.params.id}`, req.orgId);
   res.json({ ok: true });
 });
 

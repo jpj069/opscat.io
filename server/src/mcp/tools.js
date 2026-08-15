@@ -502,13 +502,13 @@ const TOOLS = [
       }
       db.prepare(`UPDATE incidents SET
           title = COALESCE(?, title), severity = COALESCE(?, severity),
-          published = COALESCE(?, published),
           rca_summary = COALESCE(?, rca_summary), rca_resolution = COALESCE(?, rca_resolution)
         WHERE id = ? AND org_id = ?`)
         .run(a.title ?? null, Number.isFinite(a.severity) ? a.severity : null,
-          a.published === undefined ? null : (a.published ? 1 : 0),
           a.rcaSummary ?? null, a.rcaResolution ?? null, i.id, p.orgId);
-      auditTool(p, 'incident_update', `INC-${1000 + i.id}${a.published === true ? ' published' : ''}`);
+      // through the verb: first-publish notifies the status-page subscribers
+      if (a.published !== undefined) incidents.setPublished(p.orgId, p.user.id, i.id, a.published);
+      auditTool(p, 'incident_update', `${incidents.label(i.id)}${a.published === true ? ' published' : ''}`);
       const after = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, p.orgId);
       return ok({ id: after.id, title: after.title, published: !!after.published });
     },
