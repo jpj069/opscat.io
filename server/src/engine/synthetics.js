@@ -8,7 +8,7 @@ const net = require('net');
 const tls = require('tls');
 const { db } = require('../db');
 const config = require('../config');
-const { now } = require('../util');
+const { now, DEFAULT_ORG_ID } = require('../util');
 const pipeline = require('./pipeline');
 
 const insResult = db.prepare(`INSERT INTO synthetic_results
@@ -27,7 +27,7 @@ const lastFails = db.prepare(`SELECT ok FROM synthetic_results
 // One local probe location per org — results always link to a location the
 // owning org can actually see (tenant isolation).
 const localLocByOrg = new Map();
-function ensureLocalLocation(orgId = 1) {
+function ensureLocalLocation(orgId = DEFAULT_ORG_ID) {
   let id = localLocByOrg.get(orgId);
   if (!id) {
     const row = db.prepare("SELECT id FROM synthetic_locations WHERE kind = 'local' AND org_id = ?").get(orgId);

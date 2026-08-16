@@ -107,7 +107,7 @@ function CaseEditor({ c, users, onClose, onSaved }:
     try {
       await api.patch(`/api/cases/${c.id}`, {
         status,
-        assignedUserId: assignee === '' ? null : Number(assignee),
+        assignedUserId: assignee === '' ? null : assignee,
         rootCause: rootCause.trim() || null,
         note: note.trim() || null,
       });

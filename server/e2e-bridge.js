@@ -38,7 +38,7 @@ process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 require('./src/index.js'); // boots the app on :3117
 
 const { db, addMembership } = require('./src/db');
-const { hashPassword, now } = require('./src/util');
+const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const config = require('./src/config');
 const plans = require('./src/plans');
 const { AccessToken } = require('livekit-server-sdk');
@@ -50,12 +50,13 @@ const decodeJwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').to
 
 function mkUser(email, role, orgId) {
   const { salt, hash } = hashPassword(PASS);
-  const r = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  const uid = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
-    VALUES (?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
-    .run(orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(r.lastInsertRowid, orgId, role);
-  return { id: Number(r.lastInsertRowid), email };
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
+    .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
+  addMembership(uid, orgId, role);
+  return { id: uid, email };
 }
 
 async function login(email) {
@@ -108,13 +109,14 @@ async function main() {
   chk('server boots and answers /api/health', await waitForServer());
 
   // ── fixtures ──────────────────────────────────────────────────────────────
+  const otherOrgId = newId();
   db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
-    VALUES (2, 'Other Org', 'other', 'enterprise', 'active', ?)`).run(now());
-  const lead = mkUser('lead@e2e.test', 'lead', 1);
-  const member = mkUser('member@e2e.test', 'analyst', 1); // analyst = lowest role
-  mkUser('outsider@e2e.test', 'admin', 2);
+    VALUES (?, 'Other Org', 'other', 'enterprise', 'active', ?)`).run(otherOrgId, now());
+  const lead = mkUser('lead@e2e.test', 'lead', DEFAULT_ORG_ID);
+  const member = mkUser('member@e2e.test', 'analyst', DEFAULT_ORG_ID); // analyst = lowest role
+  mkUser('outsider@e2e.test', 'admin', otherOrgId);
   const incId = Number(db.prepare(`INSERT INTO incidents (org_id, title, severity, status, started_at)
-    VALUES (1, 'Checkout API 500s', 85, 'investigating', ?)`).run(now()).lastInsertRowid);
+    VALUES (?, 'Checkout API 500s', 85, 'investigating', ?)`).run(DEFAULT_ORG_ID, now()).lastInsertRowid);
   const L = await login('lead@e2e.test');
   const M = await login('member@e2e.test');
   const O = await login('outsider@e2e.test');
@@ -147,7 +149,7 @@ async function main() {
   chk('lead opens the bridge', opened.status === 200 && !!roomId, `got ${opened.status}`);
   chk('room state shape', opened.j?.room?.status === 'open' && opened.j?.room?.transcription === true
     && Array.isArray(opened.j?.groups) && Array.isArray(opened.j?.participants), JSON.stringify(opened.j?.room));
-  chk('livekit pointer uses br-<org>-<id>', opened.j?.livekit?.room === `br-1-${roomId}`
+  chk('livekit pointer uses br-<org>-<id>', opened.j?.livekit?.room === `br-${DEFAULT_ORG_ID}-${roomId}`
     && opened.j?.livekit?.url === 'wss://rt.e2e.test', JSON.stringify(opened.j?.livekit));
 
   const again = await call(L, 'POST', `/api/incidents/${incId}/room`);
@@ -156,8 +158,8 @@ async function main() {
   chk('exactly one "opened the Bridge" feed line',
     feed0.j?.items.filter((i) => /opened the Bridge/.test(i.body)).length === 1);
   chk('audit row bridge_open names the incident',
-    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = 1 AND user_id = ? AND action = 'bridge_open'
-      AND detail LIKE ?`).get(lead.id, `%INC-${2000 + incId}%`));
+    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_open'
+      AND detail LIKE ?`).get(DEFAULT_ORG_ID, lead.id, `%INC-${2000 + incId}%`));
 
   const peek = await call(M, 'GET', `/api/incidents/${incId}/room`);
   chk('member peek sees the room', peek.j?.room?.id === roomId);
@@ -172,7 +174,7 @@ async function main() {
   const claims = tok.j?.token ? decodeJwt(tok.j.token) : {};
   chk('token identity is the user id', claims.sub === String(member.id), JSON.stringify(claims.sub));
   chk('token grants join+publish on exactly this room',
-    claims.video?.room === `br-1-${roomId}` && claims.video?.roomJoin === true
+    claims.video?.room === `br-${DEFAULT_ORG_ID}-${roomId}` && claims.video?.roomJoin === true
     && claims.video?.canPublish === true && claims.video?.canSubscribe === true,
     JSON.stringify(claims.video));
   // the SDK signs exp but no iat — measure against the wall clock instead
@@ -254,7 +256,7 @@ async function main() {
   const noProv = await postAudio(M, `/api/room/${roomId}/transcribe`, audio);
   chk('transcribe without provider -> 503', noProv.status === 503, `got ${noProv.status}`);
 
-  voiceMod.saveOrgConfig(1, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
+  voiceMod.saveOrgConfig(DEFAULT_ORG_ID, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
     model: 'whisper-e2e', apiKey: 'stt-key' });
   const postStt = await call(M, 'GET', `/api/room/${roomId}`);
   chk('roomState.stt flips true once configured', postStt.j?.stt === true, JSON.stringify(postStt.j?.stt));
@@ -273,7 +275,7 @@ async function main() {
 
   const vLead = await call(L, 'GET', '/api/admin/voice');
   chk('lead is below admin for voice settings', vLead.status === 403, `got ${vLead.status}`);
-  mkUser('orgadmin@e2e.test', 'admin', 1);
+  mkUser('orgadmin@e2e.test', 'admin', DEFAULT_ORG_ID);
   const A = await login('orgadmin@e2e.test');
   const vGet = await call(A, 'GET', '/api/admin/voice');
   chk('admin voice status: config visible, key masked',
@@ -301,7 +303,7 @@ async function main() {
   chk('test-fire on unknown rule -> 404', tfMissing.status === 404, `got ${tfMissing.status}`);
 
   // ── phase 3: insight analyzer (LLM stub behind the same local server) ─────
-  require('./src/llm').saveOrgConfig(1, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
+  require('./src/llm').saveOrgConfig(DEFAULT_ORG_ID, { baseUrl: `http://127.0.0.1:${sttStub.address().port}`,
     model: 'llm-e2e', apiKey: 'llm-key' });
   insightGroupId = g1.j.group.id;
   await postAudio(M, `/api/room/${roomId}/transcribe?dur=900`, audio); // 2nd transcript -> above the quiet gate
@@ -326,7 +328,7 @@ async function main() {
     JSON.stringify((notifBI.j || [])[0]));
 
   // ── webhook -> presence mirror ────────────────────────────────────────────
-  const evJoin = { event: 'participant_joined', room: { name: `br-1-${roomId}` },
+  const evJoin = { event: 'participant_joined', room: { name: `br-${DEFAULT_ORG_ID}-${roomId}` },
     participant: { identity: String(member.id) } };
   const wj = await webhook(evJoin);
   chk('signed participant_joined accepted', wj.status === 200 && wj.j?.ok === true, `got ${wj.status}`);
@@ -336,13 +338,13 @@ async function main() {
   feed = await call(M, 'GET', `/api/room/${roomId}/feed`);
   chk('feed line: connected', feed.j.items.some((i) => /member connected/.test(i.body)));
 
-  const ws = await webhook({ event: 'track_published', room: { name: `br-1-${roomId}` },
+  const ws = await webhook({ event: 'track_published', room: { name: `br-${DEFAULT_ORG_ID}-${roomId}` },
     participant: { identity: String(member.id) }, track: { source: 'SCREEN_SHARE' } });
   chk('track_published (screen share) accepted', ws.status === 200);
   feed = await call(M, 'GET', `/api/room/${roomId}/feed`);
   chk('feed line: started sharing', feed.j.items.some((i) => /member started sharing/.test(i.body)));
 
-  const wl = await webhook({ event: 'participant_left', room: { name: `br-1-${roomId}` },
+  const wl = await webhook({ event: 'participant_left', room: { name: `br-${DEFAULT_ORG_ID}-${roomId}` },
     participant: { identity: String(member.id) } });
   chk('participant_left accepted', wl.status === 200);
   conn = db.prepare('SELECT connected, left_at FROM bridge_participants WHERE room_id = ? AND user_id = ?')
@@ -379,8 +381,8 @@ async function main() {
   chk('close is idempotent (one feed line)',
     feed.j.items.filter((i) => /closed the Bridge/.test(i.body)).length === 1);
   chk('audit row bridge_close exists',
-    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = 1 AND user_id = ? AND action = 'bridge_close'`)
-      .get(lead.id));
+    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_close'`)
+      .get(DEFAULT_ORG_ID, lead.id));
 
   // ── browser-side headers: CSP + Permissions-Policy must carry the Bridge ──
   // The class of bug nothing else catches: server green, browser refuses the

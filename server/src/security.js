@@ -2,7 +2,7 @@
 const { db, getMembership, anyMembership } = require('./db');
 const config = require('./config');
 const edition = require('./edition');
-const { now, sha256, randHex, RateLimiter, httpError } = require('./util');
+const { now, sha256, randHex, RateLimiter, httpError, isOrgId, DEFAULT_ORG_ID } = require('./util');
 
 const ROLE_RANK = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 
@@ -98,8 +98,8 @@ function requireSession(req, res, next) {
   // X-OpsCat-Org header (platform console) — no membership required there.
   let superOverride = false;
   if (user.is_super_admin) {
-    const requested = parseInt(req.headers['x-opscat-org'] || req.query.org, 10);
-    if (Number.isInteger(requested) && requested > 0) { orgId = requested; superOverride = true; }
+    const requested = String(req.headers['x-opscat-org'] || req.query.org || '').trim();
+    if (isOrgId(requested)) { orgId = requested; superOverride = true; }
   }
 
   // Everyone else must hold a membership in the active org. If the session's
@@ -316,7 +316,7 @@ function securityHeaders(req, res, next) {
   next();
 }
 
-function audit(userId, action, detail, orgId = 1) {
+function audit(userId, action, detail, orgId = DEFAULT_ORG_ID) {
   db.prepare('INSERT INTO audit_log (org_id, ts, user_id, action, detail) VALUES (?, ?, ?, ?, ?)')
     .run(orgId || 1, now(), userId || null, action, detail ? String(detail).slice(0, 1000) : null);
 }

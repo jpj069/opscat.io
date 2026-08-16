@@ -61,6 +61,8 @@ async function migrationCarriesOver() {
   d.exec(fs.readFileSync(path.join(__dirname, 'src', 'schema.sql'), 'utf8'));
   // v10 had no reputation tables at all
   d.exec('DROP TABLE reputation_listings; DROP TABLE reputation_runs; DROP TABLE reputation_assets;');
+  // Integer ids on purpose: this fixture reconstructs a v10-era database, and the
+  // uuid migration converting them is part of what the chain has to survive.
   d.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
     VALUES (1, 'e2e', 'e2e', 'enterprise', 'active', ?)`).run(Date.now());
   const cid = d.prepare(`INSERT INTO synthetic_checks

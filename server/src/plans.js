@@ -2,7 +2,8 @@
 // OpsCat plan tiers, per-organization limits and feature flags. Used by the
 // cloud edition (billing/limit enforcement). The self-hosted Community edition
 // unlocks everything (see edition.js).
-const { db } = require('./db');
+const { db, getOrgSetting } = require('./db');
+const config = require('./config');
 
 // -1 means unlimited.
 //
@@ -125,6 +126,39 @@ function checkIngestVolume(orgId) {
   return { ok: used < limit, limit, used };
 }
 
+/**
+ * How long an org's LOGS are actually kept, in days.
+ *
+ * Two inputs, and the direction matters: the plan sets the CEILING, the org's own
+ * `retention_logs_days` may only shorten it. Shortening is a real request ("keep
+ * three days, we do not want more of our customers' log lines lying around");
+ * lengthening past the tier is the thing that is sold, so it cannot be a text
+ * field. On the community edition there is no ceiling — `enforce` is off and the
+ * operator owns the disk.
+ *
+ * This exists because the number was defined per plan and read by NOBODY: the
+ * cleanup used org 1's setting for every tenant, so a Business customer paying for
+ * 90 days got whatever our own org had set. `retentionDays` was decoration on the
+ * pricing page.
+ */
+function retentionDaysFor(orgId) {
+  const raw = parseInt(getOrgSetting(orgId, 'retention_logs_days', ''), 10);
+  const own = Number.isFinite(raw) && raw > 0 ? raw : null;
+  if (!enforce) return own ?? config.retentionLogsDays;
+  const org = orgPlanStmt.get(orgId);
+  const cap = limitFor(org ? org.plan : 'free', 'retentionDays');
+  const ceiling = cap === -1 ? Number.MAX_SAFE_INTEGER : cap;
+  return Math.min(own ?? ceiling, ceiling);
+}
+
+// The ceiling alone — what the UI shows next to the field, and what the settings
+// endpoint validates against.
+function retentionCapFor(orgId) {
+  if (!enforce) return -1;
+  const org = orgPlanStmt.get(orgId);
+  return limitFor(org ? org.plan : 'free', 'retentionDays');
+}
+
 function publicPlans() {
   return Object.values(PLANS).map((p) => ({
     key: p.key, name: p.name, priceMonthly: p.priceMonthly, priceYearly: p.priceYearly,
@@ -141,4 +175,4 @@ function minIntervalFor(planKey) {
 }
 
 module.exports = { PLANS, planFor, hasFeature, checkLimit, limitFor, setEnforce, publicPlans,
-  minIntervalFor, checkIngestVolume, ingestLinesToday };
+  minIntervalFor, checkIngestVolume, ingestLinesToday, retentionDaysFor, retentionCapFor };

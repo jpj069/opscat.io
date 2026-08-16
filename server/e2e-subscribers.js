@@ -49,12 +49,14 @@ global.fetch = (url, opts) => {
   return realFetch(url, opts);
 };
 
-require('./src/index.js'); // boots the app on :3123
+require('./src/index.js');
+
+const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util'); // boots the app on :3123
 
 const { db } = require('./src/db');
 const subs = require('./src/lib/subscribers');
 const statusPages = require('./src/lib/status-pages');
-const defaultPage = () => statusPages.defaultPage(1);
+const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);
 const inc = require('./src/lib/incidents');
 
 const BASE = 'http://127.0.0.1:3123';
@@ -264,13 +266,13 @@ async function main() {
     (await call(admin, 'DELETE', `/api/admin/status-subscribers/${pendingId}`)).status === 404);
 
   const { addMembership } = require('./src/db');
-  const { hashPassword, now } = require('./src/util');
   const { salt, hash } = hashPassword('analyst-password-1');
-  const a = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  const aId = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
-    VALUES (1, 'analyst@e2e.test', 'analyst', 'analyst', 0, ?, ?, '#388bfd', 1, 0, ?)`)
-    .run(salt, hash, now());
-  addMembership(a.lastInsertRowid, 1, 'analyst');
+    VALUES (?, ?, 'analyst@e2e.test', 'analyst', 'analyst', 0, ?, ?, '#388bfd', 1, 0, ?)`)
+    .run(aId, DEFAULT_ORG_ID, salt, hash, now());
+  addMembership(aId, DEFAULT_ORG_ID, 'analyst');
   const analyst = await login('analyst@e2e.test', 'analyst-password-1');
   chk('an analyst cannot read subscriber addresses',
     (await call(analyst, 'GET', '/api/admin/status-subscribers')).status === 403);

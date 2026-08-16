@@ -57,13 +57,15 @@ process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
-require('./src/index.js'); // boots the app on :3129
+require('./src/index.js');
+
+const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util'); // boots the app on :3129
 
 const { db } = require('./src/db');
 const branding = require('./src/lib/status-branding');
 const statusDomains = require('./src/lib/status-domains');
 const statusPages = require('./src/lib/status-pages');
-const defaultPage = () => statusPages.defaultPage(1);
+const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);
 
 const BASE = 'http://127.0.0.1:3129';
 
@@ -135,7 +137,7 @@ async function waitForServer() {
   }
   return false;
 }
-const setPlan = (p) => db.prepare('UPDATE organizations SET plan = ? WHERE id = 1').run(p);
+const setPlan = (p) => db.prepare('UPDATE organizations SET plan = ? WHERE id = ?').run(p, DEFAULT_ORG_ID);
 const upload = (sess, pageId, kind, buf) =>
   call(sess, 'PUT', `/api/admin/status-pages/${pageId}/asset/${kind}`, { data: buf.toString('base64') });
 const patchPage = (sess, pageId, body) => call(sess, 'PATCH', `/api/admin/status-pages/${pageId}`, body);
@@ -327,7 +329,7 @@ async function main() {
   chk('…and the old one stops working', (await raw(`/status/partners?k=${secret}`)).status === 404);
 
   // component subset
-  const comps = db.prepare('SELECT id, name FROM components WHERE org_id = 1 ORDER BY id').all();
+  const comps = db.prepare('SELECT id, name FROM components WHERE org_id = ? ORDER BY id').all(DEFAULT_ORG_ID);
   chk('the org has components to choose from', comps.length >= 2, String(comps.length));
   await patchPage(admin, PARTNER, { componentIds: [comps[0].id] });
   const partnerPg = await raw(`/status/partners?k=${rotated.j.accessToken}`);
@@ -391,12 +393,13 @@ async function main() {
 
   // ── role gating ───────────────────────────────────────────────────────────
   const { addMembership } = require('./src/db');
-  const { hashPassword, now } = require('./src/util');
   const { salt, hash } = hashPassword('lead-password-1');
-  const lead = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  const leadId = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
-    VALUES (1, 'lead@e2e.test', 'lead', 'lead', 0, ?, ?, '#388bfd', 1, 0, ?)`).run(salt, hash, now());
-  addMembership(lead.lastInsertRowid, 1, 'lead');
+    VALUES (?, ?, 'lead@e2e.test', 'lead', 'lead', 0, ?, ?, '#388bfd', 1, 0, ?)`)
+    .run(leadId, DEFAULT_ORG_ID, salt, hash, now());
+  addMembership(leadId, DEFAULT_ORG_ID, 'lead');
   const leadSess = await login('lead@e2e.test', 'lead-password-1');
   chk('a lead may READ the pages (they are public anyway)',
     (await call(leadSess, 'GET', '/api/admin/status-pages')).status === 200);
@@ -429,11 +432,11 @@ async function main() {
     !!db.prepare('SELECT * FROM status_subscribers WHERE email = ?').get('pending-before-full@e2e.test'));
 
   const ins = db.prepare(`INSERT INTO status_subscribers (org_id, page_id, email, token_hash, confirmed_at, created_at)
-    VALUES (1, ?, ?, ?, ?, ?)`);
-  for (let i = 0; i < 50; i++) ins.run(MAIN, `filler${i}@e2e.test`, `hash${i}`, now(), now());
+    VALUES (?, ?, ?, ?, ?, ?)`);
+  for (let i = 0; i < 50; i++) ins.run(DEFAULT_ORG_ID, MAIN, `filler${i}@e2e.test`, `hash${i}`, now(), now());
   chk('the org now sits at its free allowance',
-    db.prepare('SELECT COUNT(*) c FROM status_subscribers WHERE org_id = 1 AND confirmed_at IS NOT NULL')
-      .get().c >= 50);
+    db.prepare('SELECT COUNT(*) c FROM status_subscribers WHERE org_id = ? AND confirmed_at IS NOT NULL')
+      .get(DEFAULT_ORG_ID).c >= 50);
   await subs.subscribe(defaultPage(), 'too-late@e2e.test');
   chk('a NEW address is turned away once the plan is full',
     !db.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('too-late@e2e.test'));
@@ -460,8 +463,8 @@ async function main() {
   // the check passes while testing nothing. (Verified by breaking esc on
   // purpose: empty grid = green, seeded grid = 500.)
   db.prepare(`INSERT INTO vendors (org_id, slug, name, feed_type, feed_url, page_url, status, enabled, created_at)
-    VALUES (1, 'github', 'GitHub', 'statuspage', 'https://x.example/api/v2/summary.json',
-            'https://x.example', 'operational', 1, ?)`).run(now());
+    VALUES (?, 'github', 'GitHub', 'statuspage', 'https://x.example/api/v2/summary.json',
+            'https://x.example', 'operational', 1, ?)`).run(DEFAULT_ORG_ID, now());
   const grid = await raw('/vendor-grid');
   chk('the vendor grid renders (it shares helpers with the status page)',
     grid.status === 200, `HTTP ${grid.status}`);

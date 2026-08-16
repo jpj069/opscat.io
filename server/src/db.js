@@ -567,6 +567,126 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_node_timeline ON node_timeline(location_id, ts);
     `);
   },
+
+  // idx 19 -> version 20: per-minute ingest counters. The hourly ingest_stats
+  // cannot answer "what is the peak the ingest has to survive" — a burst inside an
+  // hour is averaged away, and an hourly average is the one number nobody should
+  // size a pipeline on. Kept for 48h only (retention.js), so the table stays small:
+  // 1440 rows per org per day. Mirrors schema.sql.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ingest_minutes (
+        org_id        INTEGER NOT NULL,
+        bucket        INTEGER NOT NULL,
+        lines         INTEGER NOT NULL DEFAULT 0,
+        bytes         INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (org_id, bucket)
+      ) WITHOUT ROWID;
+    `);
+  },
+
+  // idx 20 -> version 21: users and organizations get UUID primary keys, and every
+  // column referencing them follows. 56 columns across 40 tables.
+  //
+  // Why the whole thing is generated rather than hand-written: SQLite cannot alter
+  // a column's type, so each affected table has to be rebuilt (create → copy →
+  // drop → rename → reindex). Writing that out 40 times is where a migration
+  // forgets a CHECK constraint or an index. So the new CREATE statement is derived
+  // from the table's OWN stored SQL with only the column type rewritten — every
+  // default, check, collation and foreign key comes along untouched, and the
+  // indexes are replayed verbatim from sqlite_master.
+  //
+  // The old integer ids are mapped, not discarded: org 1 becomes the fixed
+  // DEFAULT_ORG_ID (see util.js) so a single-tenant install keeps a recognisable
+  // id, everything else gets a fresh uuid. Both maps live in temp tables so the
+  // copy is a plain SQL join instead of a row-by-row round trip.
+  () => {
+    const { randomUUID } = require('crypto');
+    const DEFAULT_ORG_ID = '00000000-0000-4000-8000-000000000001';
+
+    const ORG_COLS = ['org_id', 'active_org_id'];
+    const USER_COLS = ['user_id', 'created_by', 'assignee_id', 'assigned_user_id', 'finished_by'];
+
+    db.exec(`CREATE TEMP TABLE _org_map (old INTEGER PRIMARY KEY, new TEXT NOT NULL);
+             CREATE TEMP TABLE _user_map (old INTEGER PRIMARY KEY, new TEXT NOT NULL);`);
+    const insOrgMap = db.prepare('INSERT INTO _org_map (old, new) VALUES (?, ?)');
+    const insUserMap = db.prepare('INSERT INTO _user_map (old, new) VALUES (?, ?)');
+    for (const r of db.prepare('SELECT id FROM organizations').all()) {
+      // String(), not `=== 1`: on a FRESH install schema.sql already declares the
+      // column TEXT, so migration idx 1's `VALUES (1, …)` is stored as the string
+      // '1' by text affinity — and `'1' === 1` is false. That mismatch handed the
+      // default org a random uuid, and the seed's user insert (which references
+      // DEFAULT_ORG_ID) then died on a foreign key. An old database really does
+      // hold the integer 1 here, so both spellings have to map to the same place.
+      insOrgMap.run(r.id, String(r.id) === '1' ? DEFAULT_ORG_ID : randomUUID());
+    }
+    for (const r of db.prepare('SELECT id FROM users').all()) insUserMap.run(r.id, randomUUID());
+
+    // Rewrite one column's declared type inside a CREATE TABLE statement. Anchored
+    // to the column name at the start of its line so `org_id` cannot match inside
+    // `REFERENCES organizations(id)` or a comment.
+    const retype = (sql, col) => sql.replace(
+      new RegExp(`(^|\\n)(\\s*)"?${col}"?(\\s+)INTEGER\\b`, 'g'),
+      (_m, lead, indent, gap) => `${lead}${indent}${col}${gap}TEXT`);
+
+    const tableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?");
+    const idxSql = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL");
+
+    // cols: [{name, map}] — map is the temp table holding old→new for that column
+    function convert(table, cols, pk) {
+      const row = tableSql.get(table);
+      if (!row) return;                                   // table absent on this install
+      let create = row.sql;
+      for (const c of cols) create = retype(create, c.name);
+      if (pk) {
+        // AUTOINCREMENT is only legal on INTEGER PRIMARY KEY, so it goes with it.
+        // NOT NULL is explicit: SQLite only implies it for an INTEGER primary
+        // key, so without it a TEXT key accepts NULL and the foreign keys break
+        // elsewhere. (Found by e2e-invite, which inserts an org without an id.)
+        create = create.replace(/(^|\n)(\s*)"?id"?\s+INTEGER PRIMARY KEY AUTOINCREMENT/,
+          (_m, lead, indent) => `${lead}${indent}id            TEXT PRIMARY KEY NOT NULL`);
+      }
+      const indexes = idxSql.all(table).map((r) => r.sql);
+      const tmp = `${table}__uuid`;
+      db.exec(create.replace(
+        new RegExp(`CREATE TABLE (IF NOT EXISTS )?"?${table}"?`), `CREATE TABLE ${tmp}`));
+
+      const names = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      const all = pk ? [...cols, { name: 'id', map: pk }] : cols;
+      const select = names.map((n) => {
+        const c = all.find((x) => x.name === n);
+        // LEFT-JOIN semantics via subselect: a NULL stays NULL, and a dangling id
+        // (possible — several of these columns carry no foreign key) becomes NULL
+        // rather than a string that references nothing.
+        return c ? `(SELECT new FROM ${c.map} WHERE old = t.${n}) AS ${n}` : `t.${n}`;
+      }).join(', ');
+      db.exec(`INSERT INTO ${tmp} (${names.join(', ')}) SELECT ${select} FROM ${table} t`);
+      db.exec(`DROP TABLE ${table}`);
+      db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+      for (const s of indexes) db.exec(s);
+    }
+
+    // Walk every table and convert whatever it carries — no hand-kept list to fall
+    // out of date with the schema.
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    for (const { name } of tables) {
+      if (name === 'users' || name === 'organizations') continue;   // done last, below
+      const cols = db.prepare(`PRAGMA table_info(${name})`).all()
+        .filter((c) => ORG_COLS.includes(c.name) || USER_COLS.includes(c.name))
+        .map((c) => ({ name: c.name, map: ORG_COLS.includes(c.name) ? '_org_map' : '_user_map' }));
+      if (cols.length) convert(name, cols, null);
+    }
+    // users references organizations, so organizations is rebuilt last.
+    convert('users', [{ name: 'org_id', map: '_org_map' }], '_user_map');
+    convert('organizations', [], '_org_map');
+
+    // sqlite_sequence rows for the two tables are meaningless now — an AUTOINCREMENT
+    // counter for a key nothing counts.
+    db.exec("DELETE FROM sqlite_sequence WHERE name IN ('users', 'organizations')");
+    db.exec('DROP TABLE _org_map; DROP TABLE _user_map;');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

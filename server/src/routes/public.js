@@ -5,7 +5,7 @@
 // customer's own domain, and this file owns `/` for the marketing site.
 const express = require('express');
 const { db, getOrgSetting, getSetting } = require('../db');
-const { now, sha256, RateLimiter, clampInt, escapeHtml: esc } = require('../util');
+const { now, sha256, RateLimiter, clampInt, escapeHtml: esc, DEFAULT_ORG_ID } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
 
@@ -36,14 +36,14 @@ function gridData() {
   const byVendorDays = new Map();
   for (const d of db.prepare(`SELECT d.vendor_id, d.day, d.worst, d.down_seconds
       FROM vendor_days d JOIN vendors v ON v.id = d.vendor_id
-      WHERE v.org_id = 1 AND d.day >= ? ORDER BY d.day`).all(since)) {
+      WHERE v.org_id = ? AND d.day >= ? ORDER BY d.day`).all(DEFAULT_ORG_ID, since)) {
     if (!byVendorDays.has(d.vendor_id)) byVendorDays.set(d.vendor_id, []);
     byVendorDays.get(d.vendor_id).push(d);
   }
   const vendors = db.prepare(`SELECT v.id, v.slug, v.name, v.status, v.page_url, v.last_checked_at,
       (SELECT COUNT(*) FROM vendor_incidents i WHERE i.vendor_id = v.id AND i.resolved_at IS NULL) AS active
-    FROM vendors v WHERE v.org_id = 1 AND v.enabled = 1
-      AND v.slug NOT LIKE 'custom-%' ORDER BY v.name`).all()
+    FROM vendors v WHERE v.org_id = ? AND v.enabled = 1
+      AND v.slug NOT LIKE 'custom-%' ORDER BY v.name`).all(DEFAULT_ORG_ID)
     .map((v) => {
       const days = byVendorDays.get(v.id) || [];
       const totalDown = days.reduce((a, d) => a + d.down_seconds, 0);

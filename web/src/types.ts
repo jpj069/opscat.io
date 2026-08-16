@@ -2,7 +2,7 @@
 
 export type Role = 'admin' | 'cto' | 'lead' | 'analyst';
 export interface User {
-  id: number; email: string; name: string; role: Role;
+  id: string; email: string; name: string; role: Role;
   color: string; mustChangePassword?: boolean; isSuperAdmin?: boolean;
   // false for a link-invited account that has not set one yet — the app then
   // offers to set a password instead of asking for the current one.
@@ -10,10 +10,10 @@ export interface User {
 }
 // one organization the signed-in user belongs to (multi-org switcher)
 export interface OrgMembership {
-  orgId: number; name: string; slug: string; plan: string; role: Role; onboardingDone: boolean;
+  orgId: string; name: string; slug: string; plan: string; role: Role; onboardingDone: boolean;
 }
-export interface OrgsResponse { activeOrgId: number; orgs: OrgMembership[]; }
-export interface AssignedRef { id: number; n: string; i: string; c: string; }
+export interface OrgsResponse { activeOrgId: string; orgs: OrgMembership[]; }
+export interface AssignedRef { id: string; n: string; i: string; c: string; }
 
 export interface EventRow {
   id: number; name: string; device: string; ip: string | null; target: string | null;
@@ -265,7 +265,7 @@ export interface ReputationOverview {
 }
 
 export interface UserRow {
-  id: number; email: string; name: string; role: string; color: string; active: boolean;
+  id: string; email: string; name: string; role: string; color: string; active: boolean;
   lastSeenAt: number | null;
   // invited but never activated — an unused, unexpired activation link is out there
   pending?: boolean;
@@ -304,6 +304,12 @@ export interface PipelineStats {
   range: '24h' | '7d' | '30d'; step: number;
   buckets: PipelineBucket[];
   totals: { lines: number; bytes: number; events: number };
+  // Busiest MINUTE in the range, from the 48h-deep ingest_minutes counters — the
+  // burst the ingest has to survive. `source: 'hour'` means those counters do not
+  // reach into this range (7d/30d), so there is no honest per-second figure and the
+  // UI must say so rather than divide an hourly average by 60.
+  peak: { source: 'minute' | 'hour'; lines: number; bytes: number;
+    at: number | null; perSecond: number; coveredFrom: number | null };
 }
 // custom rule as stored (org_settings key 'classifiers'); builtin rows use the same shape.
 // `enabled: false` = DRAFT: stored, listed and dry-runnable, but out of the chain.
@@ -326,6 +332,8 @@ export interface DryRun {
 export interface ClassifiersResponse { builtin: ClassifierRule[]; custom: ClassifierRule[]; }
 export interface ScoutTemplate {
   id: number; template: string; count: number; sample: string | null;
+  /** longest literal run of the template — what to search the raw logs for */
+  filter?: string;
   status: 'pending' | 'approved' | 'dismissed';
   suggestion: { name: string; severity: number; skip: boolean; reason: string } | null;
   firstSeen: number; lastSeen: number;
@@ -400,12 +408,12 @@ export interface BridgeGroup {
   created_by: number | null; created_at: number; closed_at: number | null;
 }
 export interface BridgeParticipant {
-  user_id: number; group_id: number | null; connected: number;
+  user_id: string; group_id: number | null; connected: number;
   joined_at: number; last_seen: number;
   name: string | null; email: string; color: string | null;
 }
 export interface BridgeFeedItem {
-  id: number; room_id: number; group_id: number | null; user_id: number | null;
+  id: number; room_id: number; group_id: number | null; user_id: string | null;
   kind: 'system' | 'transcript' | 'insight';
   severity: 'info' | 'notable' | 'critical';
   body: string; meta: Record<string, unknown>; created_at: number;

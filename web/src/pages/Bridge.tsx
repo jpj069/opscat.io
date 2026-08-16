@@ -132,7 +132,7 @@ function useTranscriber(active: boolean, roomRef: React.MutableRefObject<Room | 
 
 export default function Bridge() {
   const app = useApp();
-  const me = app.user?.id ?? 0;
+  const me = app.user?.id ?? '';
   const canLead = ['lead', 'cto', 'admin'].includes(app.user?.role || '');
   const incidentId = app.bridgeIncident;
 
@@ -171,7 +171,7 @@ export default function Bridge() {
     const p = participants.find((x) => String(x.user_id) === identity);
     return p ? p.group_id : null;
   };
-  const nameOf = (userId: number | null): string => {
+  const nameOf = (userId: string | null): string => {
     if (userId == null) return 'AI analysis';
     const p = participants.find((x) => x.user_id === userId);
     if (p) return p.name || p.email;
@@ -624,7 +624,7 @@ export default function Bridge() {
                             <ShareVideo track={s.track} />
                             <span className="mono text-2xs" style={{ position: 'absolute', left: 5, bottom: 5,
                               padding: '1px 5px', borderRadius: 3, background: 'rgba(4,6,9,.72)', color: 'var(--text2)' }}>
-                              {nameOf(Number(s.identity))}
+                              {nameOf(s.identity)}
                             </span>
                           </div>
                         ))}
@@ -668,7 +668,7 @@ export default function Bridge() {
                     <ShareVideo track={focus.track} />
                     <span className="mono text-xs" style={{ position: 'absolute', left: 8, top: 8, padding: '2px 7px',
                       borderRadius: 3, background: 'rgba(4,6,9,.72)', color: 'var(--text1)' }}>
-                      {nameOf(Number(focus.identity))} — sharing
+                      {nameOf(focus.identity)} — sharing
                     </span>
                     <button aria-label="Toggle fullscreen" title="Fullscreen"
                       onClick={() => {

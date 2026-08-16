@@ -15,7 +15,7 @@
 // restore it on the way back up.
 const crypto = require('crypto');
 const { db } = require('../db');
-const { now } = require('../util');
+const { now, DEFAULT_ORG_ID } = require('../util');
 const config = require('../config');
 const plans = require('../plans');
 
@@ -97,7 +97,7 @@ function resolvePage(req, slug) {
   const byDomain = pageByDomain(req.hostname || req.headers.host);
   if (byDomain) return byDomain;
   if (slug) return pageBySlug(slug);
-  const org = db.prepare('SELECT id FROM organizations WHERE id = 1').get();
+  const org = db.prepare('SELECT id FROM organizations WHERE id = ?').get(DEFAULT_ORG_ID);
   return org ? defaultPage(org.id) : null;
 }
 

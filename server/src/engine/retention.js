@@ -1,8 +1,9 @@
 'use strict';
 // Retention + housekeeping: prune old rows, roll up component uptime days,
 // mark agents offline, expire stale sessions.
-const { db, getOrgSetting } = require('../db');
+const { db } = require('../db');
 const config = require('../config');
+const plans = require('../plans');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
 const { RANK, rankCaseSql } = require('../lib/status-scale');
@@ -52,11 +53,38 @@ function markStaleAgents() {
   }
 }
 
+/**
+ * Log cleanup, PER ORGANIZATION.
+ *
+ * It used to read org 1's `retention_logs_days` and then delete across the whole
+ * `logs` table — no `org_id` anywhere. On a single-tenant box that is invisible;
+ * in the cloud it meant every tenant inherited our own org's setting, a Business
+ * customer paying for 90 days kept 7, and the per-plan `retentionDays` was a
+ * number the code never read. A tenant changing the field saw it saved and
+ * nothing happen.
+ *
+ * Now each org is pruned with its own effective retention (`plans.retentionDaysFor`
+ * — the plan's ceiling, which the org may only shorten). Orgs are counted in
+ * dozens, not thousands, and each DELETE is indexed on (org_id, ts).
+ */
+function pruneLogs(t) {
+  for (const { id } of db.prepare('SELECT id FROM organizations').all()) {
+    const days = plans.retentionDaysFor(id);
+    // A broken setting must not silently switch the cleanup off: parseInt('abc')
+    // is NaN, `ts < NaN` matches no row, and the table grows unnoticed. The helper
+    // already falls back, this is the second line of defence.
+    if (!Number.isFinite(days) || days <= 0) continue;
+    db.prepare('DELETE FROM logs WHERE org_id = ? AND ts < ?').run(id, t - days * 86400000);
+  }
+}
+
 function prune() {
   const t = now();
-  // retention days: use the default org's setting as the platform default
-  const logDays = parseInt(getOrgSetting(1, 'retention_logs_days', config.retentionLogsDays), 10);
-  db.prepare('DELETE FROM logs WHERE ts < ?').run(t - logDays * 86400000);
+  pruneLogs(t);
+  // 48h, not the log retention: these rows only serve the throughput page's peak
+  // figure, and keeping a minute-resolution table for a month would be 43k rows per
+  // org for a number nobody reads that far back.
+  db.prepare('DELETE FROM ingest_minutes WHERE bucket < ?').run(t - 48 * 3600000);
   db.prepare('DELETE FROM agent_metrics WHERE ts < ?').run(t - config.retentionMetricsDays * 86400000);
   db.prepare('DELETE FROM agent_containers WHERE ts < ?').run(t - config.retentionMetricsDays * 86400000);
   db.prepare('DELETE FROM maintenance_windows WHERE ends_at < ?').run(t - 30 * 86400000);
@@ -104,4 +132,4 @@ function start() {
   try { prune(); } catch (e) { console.error('retention error', e.message); }
 }
 
-module.exports = { start, prune, rollupVendorDay };
+module.exports = { start, prune, pruneLogs, rollupVendorDay };

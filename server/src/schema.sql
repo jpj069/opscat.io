@@ -4,7 +4,12 @@
 -- inherit their org through their parent FK.
 
 CREATE TABLE IF NOT EXISTS organizations (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- TEXT uuid, minted by the app (util.newId). SQLite has neither a uuid type nor
+  -- a generator, so there is no DEFAULT here — every insert names its own id.
+  -- NOT NULL is not redundant: SQLite keeps a legacy quirk where only an INTEGER
+  -- PRIMARY KEY implies it, so a TEXT primary key happily stores NULL and every
+  -- foreign key pointing at it then fails somewhere else entirely.
+  id            TEXT PRIMARY KEY NOT NULL,
   name          TEXT NOT NULL,
   slug          TEXT NOT NULL UNIQUE,
   plan          TEXT NOT NULL DEFAULT 'free',   -- free|pro|business|enterprise
@@ -20,8 +25,8 @@ CREATE TABLE IF NOT EXISTS organizations (
 CREATE INDEX IF NOT EXISTS idx_org_stripe_cust ON organizations(stripe_customer_id);
 
 CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  id            TEXT PRIMARY KEY NOT NULL,   -- see organizations.id on the NOT NULL
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES organizations(id) ON DELETE CASCADE,
   email         TEXT NOT NULL UNIQUE,
   name          TEXT NOT NULL,
   role          TEXT NOT NULL DEFAULT 'analyst' CHECK (role IN ('admin','cto','lead','analyst')),
@@ -40,8 +45,8 @@ CREATE TABLE IF NOT EXISTS users (
 -- per org. users.org_id stays the user's "home" org (default active org on login);
 -- memberships is the authority for "who is in org X" and "what can they do there".
 CREATE TABLE IF NOT EXISTS memberships (
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   role          TEXT NOT NULL DEFAULT 'analyst' CHECK (role IN ('admin','cto','lead','analyst')),
   created_at    INTEGER NOT NULL,
   PRIMARY KEY (user_id, org_id)
@@ -50,8 +55,8 @@ CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(org_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id            TEXT PRIMARY KEY,            -- random 64 hex
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  active_org_id INTEGER,                     -- org the session is currently acting in
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  active_org_id TEXT,                     -- org the session is currently acting in
   csrf          TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL,
@@ -63,7 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- single-use magic-link login tokens (sent via Resend)
 CREATE TABLE IF NOT EXISTS login_tokens (
   token_hash    TEXT PRIMARY KEY,            -- sha256(token)
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at    INTEGER NOT NULL,
   expires_at    INTEGER NOT NULL,
   used_at       INTEGER,
@@ -85,21 +90,21 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES organizations(id) ON DELETE CASCADE,
   name          TEXT NOT NULL,
   prefix        TEXT NOT NULL,               -- first 12 chars for display
   key_hash      TEXT NOT NULL UNIQUE,        -- sha256(full key)
   scopes        TEXT NOT NULL DEFAULT 'ingest',  -- csv: ingest,agent,probe,api
   role          TEXT NOT NULL DEFAULT 'analyst', -- role an `api`-scoped key acts with
   active        INTEGER NOT NULL DEFAULT 1,
-  created_by    INTEGER REFERENCES users(id),
+  created_by    TEXT REFERENCES users(id),
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS logs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   ts            INTEGER NOT NULL,            -- unix ms
   device        TEXT NOT NULL,
   line          TEXT NOT NULL,
@@ -110,7 +115,7 @@ CREATE TABLE IF NOT EXISTS logs (
 
 CREATE TABLE IF NOT EXISTS events (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   dedupe_key    TEXT NOT NULL,
   name          TEXT NOT NULL,
   device        TEXT NOT NULL,
@@ -120,11 +125,11 @@ CREATE TABLE IF NOT EXISTS events (
   severity      INTEGER NOT NULL,            -- 0..100
   hits          INTEGER NOT NULL DEFAULT 1,
   status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','finished','downgraded')),
-  assigned_user_id INTEGER REFERENCES users(id),
+  assigned_user_id TEXT REFERENCES users(id),
   first_seen    INTEGER NOT NULL,
   last_seen     INTEGER NOT NULL,
   finished_at   INTEGER,
-  finished_by   INTEGER REFERENCES users(id)
+  finished_by   TEXT REFERENCES users(id)
 );
 -- dedupe is per-org: same event name on different orgs must not collide
 CREATE INDEX IF NOT EXISTS idx_events_last_seen ON events(last_seen);
@@ -139,13 +144,13 @@ CREATE TABLE IF NOT EXISTS event_buckets (
 
 CREATE TABLE IF NOT EXISTS cases (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,   -- displayed as C-<1000+id>
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   event_id      INTEGER REFERENCES events(id) ON DELETE SET NULL,
   name          TEXT NOT NULL,
   device        TEXT NOT NULL,
   severity      INTEGER NOT NULL,
   status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','assigned','closed')),
-  assigned_user_id INTEGER REFERENCES users(id),
+  assigned_user_id TEXT REFERENCES users(id),
   root_cause    TEXT,
   note          TEXT,
   opened_at     INTEGER NOT NULL,
@@ -159,10 +164,10 @@ CREATE TABLE IF NOT EXISTS cases (
 -- user_id NULL = the platform did it (detection, automation), not a person.
 CREATE TABLE IF NOT EXISTS event_timeline (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   ts            INTEGER NOT NULL,
-  user_id       INTEGER REFERENCES users(id),
+  user_id       TEXT REFERENCES users(id),
   action        TEXT NOT NULL,          -- assign | downgrade | finish | note | reopen
   detail        TEXT                    -- the note body, or "90 → 65"
 );
@@ -170,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_event_timeline ON event_timeline(event_id, ts);
 
 CREATE TABLE IF NOT EXISTS agents (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL UNIQUE,
   grp           TEXT NOT NULL DEFAULT 'default',   -- workspace/group label
   hostname      TEXT,
@@ -200,7 +205,7 @@ CREATE TABLE IF NOT EXISTS agent_metrics (
 -- node (sensor_nodes) are separate so a VPS swap keeps history + probe key.
 CREATE TABLE IF NOT EXISTS synthetic_locations (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER,                     -- NULL for managed locations
+  org_id        TEXT,                     -- NULL for managed locations
   city          TEXT NOT NULL,
   cc            TEXT NOT NULL,
   kind          TEXT NOT NULL DEFAULT 'customer' CHECK (kind IN ('local','customer','managed')),
@@ -245,7 +250,7 @@ CREATE TABLE IF NOT EXISTS node_timeline (
   location_id   INTEGER NOT NULL,       -- no FK on purpose, see above
   label         TEXT,                   -- "Frankfurt DE" as it was at the time
   ts            INTEGER NOT NULL,
-  user_id       INTEGER REFERENCES users(id),
+  user_id       TEXT REFERENCES users(id),
   action        TEXT NOT NULL,          -- provisioned | instance_created | online |
                                         -- visibility | premium | teardown | teardown_failed
   detail        TEXT
@@ -257,19 +262,19 @@ CREATE INDEX IF NOT EXISTS idx_node_timeline ON node_timeline(location_id, ts);
 -- encrypted with the app secret and are never returned by the API.
 CREATE TABLE IF NOT EXISTS cloud_credentials (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER,                     -- NULL = platform credential
+  org_id        TEXT,                     -- NULL = platform credential
   provider      TEXT NOT NULL,               -- 'aws'|'gcp'
   label         TEXT NOT NULL,
   key_enc       TEXT NOT NULL,               -- encrypted JSON payload (per provider)
   key_hint      TEXT,                        -- e.g. last 4 chars of the key id
-  created_by    INTEGER,
+  created_by    TEXT,
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER
 );
 
 -- Which org subscribed which managed location (plan quota or add-on).
 CREATE TABLE IF NOT EXISTS org_location_access (
-  org_id        INTEGER NOT NULL,
+  org_id        TEXT NOT NULL,
   location_id   INTEGER NOT NULL REFERENCES synthetic_locations(id) ON DELETE CASCADE,
   source        TEXT NOT NULL DEFAULT 'plan' CHECK (source IN ('plan','addon')),
   created_at    INTEGER NOT NULL,
@@ -286,7 +291,7 @@ CREATE TABLE IF NOT EXISTS check_locations (
 
 CREATE TABLE IF NOT EXISTS synthetic_checks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   type          TEXT NOT NULL CHECK (type IN ('http','icmp','dns','tcp','traceroute','reputation')),
   target        TEXT NOT NULL,
   interval_s    INTEGER NOT NULL DEFAULT 60,
@@ -317,7 +322,7 @@ CREATE INDEX IF NOT EXISTS idx_synth_results ON synthetic_results(check_id, loca
 -- escalation is argued with.
 CREATE TABLE IF NOT EXISTS reputation_assets (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   target        TEXT NOT NULL,               -- IP or domain, stored normalised
   kind          TEXT NOT NULL CHECK (kind IN ('ip','domain')),
   rdns          TEXT,                        -- last known PTR — names the asset in operator terms
@@ -375,7 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_rep_listing_zone ON reputation_listings(zone, res
 
 CREATE TABLE IF NOT EXISTS snmp_targets (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   host          TEXT NOT NULL,
   port          INTEGER NOT NULL DEFAULT 161,
@@ -400,7 +405,7 @@ CREATE TABLE IF NOT EXISTS snmp_targets (
 -- suppressed (events still record; the notification log shows "suppressed").
 CREATE TABLE IF NOT EXISTS maintenance_windows (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   starts_at     INTEGER NOT NULL,
   ends_at       INTEGER NOT NULL,
@@ -424,7 +429,7 @@ CREATE TABLE IF NOT EXISTS agent_containers (
 -- than interval+grace raises a heartbeat_missed event.
 CREATE TABLE IF NOT EXISTS heartbeats (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   token_hash    TEXT NOT NULL UNIQUE,
   interval_s    INTEGER NOT NULL DEFAULT 3600,
@@ -445,7 +450,7 @@ CREATE TABLE IF NOT EXISTS snmp_results (
 
 -- hourly ingest counters per org (pipeline throughput: lines/bytes/events)
 CREATE TABLE IF NOT EXISTS ingest_stats (
-  org_id        INTEGER NOT NULL,
+  org_id        TEXT NOT NULL,
   bucket        INTEGER NOT NULL,            -- hour start (ms since epoch)
   lines         INTEGER NOT NULL DEFAULT 0,
   bytes         INTEGER NOT NULL DEFAULT 0,
@@ -453,9 +458,21 @@ CREATE TABLE IF NOT EXISTS ingest_stats (
   PRIMARY KEY (org_id, bucket)
 ) WITHOUT ROWID;
 
+-- per-MINUTE ingest counters, kept for 48h only (retention.js). The hourly table
+-- above cannot answer "what burst must the ingest survive": a 30-second spike of
+-- 5k lines/s disappears almost completely into an hour's average, and that average
+-- is exactly the number nobody should size a pipeline on.
+CREATE TABLE IF NOT EXISTS ingest_minutes (
+  org_id        TEXT NOT NULL,
+  bucket        INTEGER NOT NULL,            -- minute start (ms since epoch)
+  lines         INTEGER NOT NULL DEFAULT 0,
+  bytes         INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (org_id, bucket)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS alert_rules (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   enabled       INTEGER NOT NULL DEFAULT 1,
   channel       TEXT NOT NULL CHECK (channel IN
@@ -469,7 +486,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
 
 CREATE TABLE IF NOT EXISTS notifications (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   ts            INTEGER NOT NULL,
   rule_id       INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
   rule_name     TEXT,
@@ -489,7 +506,7 @@ CREATE TABLE IF NOT EXISTS rule_fires (
 
 CREATE TABLE IF NOT EXISTS incidents (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,  -- displayed as INC-<2000+id>
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   title         TEXT NOT NULL,
   severity      INTEGER NOT NULL DEFAULT 50,
   status        TEXT NOT NULL DEFAULT 'investigating'
@@ -499,8 +516,8 @@ CREATE TABLE IF NOT EXISTS incidents (
   resolved_at   INTEGER,
   rca_summary   TEXT DEFAULT '', rca_impact TEXT DEFAULT '', rca_root_cause TEXT DEFAULT '',
   rca_resolution TEXT DEFAULT '', rca_actions TEXT DEFAULT '',
-  created_by    INTEGER REFERENCES users(id),
-  assignee_id   INTEGER REFERENCES users(id)
+  created_by    TEXT REFERENCES users(id),
+  assignee_id   TEXT REFERENCES users(id)
 );
 
 -- which status-page components an incident affects, and how badly. `impact`
@@ -530,7 +547,7 @@ CREATE INDEX IF NOT EXISTS idx_inc_links_ref ON incident_links(kind, ref_id);
 -- there is no team object; see docs/INCIDENTS-V2.md §2.
 CREATE TABLE IF NOT EXISTS component_owners (
   component_id INTEGER PRIMARY KEY REFERENCES components(id) ON DELETE CASCADE,
-  user_id      INTEGER NOT NULL REFERENCES users(id)
+  user_id      TEXT NOT NULL REFERENCES users(id)
 );
 
 -- public status-page subscribers (docs/INCIDENTS-V2.md slice 2): double-opt-in
@@ -542,7 +559,7 @@ CREATE TABLE IF NOT EXISTS component_owners (
 -- quota, admin list and rate limit is still an org-level question.
 CREATE TABLE IF NOT EXISTS status_subscribers (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id       INTEGER NOT NULL,
+  org_id       TEXT NOT NULL,
   page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
   email        TEXT NOT NULL,
   token_hash   TEXT NOT NULL,
@@ -565,7 +582,7 @@ CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, con
 -- ever served once `domain_verified_at` is set (see lib/status-domains.js).
 CREATE TABLE IF NOT EXISTS status_pages (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id             INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   slug               TEXT NOT NULL UNIQUE,
   name               TEXT NOT NULL,
   is_default         INTEGER NOT NULL DEFAULT 0,
@@ -616,13 +633,13 @@ CREATE TABLE IF NOT EXISTS incident_updates (
   ts            INTEGER NOT NULL,
   status        TEXT NOT NULL,
   message       TEXT NOT NULL,
-  user_id       INTEGER REFERENCES users(id)
+  user_id       TEXT REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_inc_updates ON incident_updates(incident_id, ts);
 
 CREATE TABLE IF NOT EXISTS components (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   grp           TEXT NOT NULL DEFAULT 'Core',
   status        TEXT NOT NULL DEFAULT 'operational'
@@ -644,7 +661,7 @@ CREATE TABLE IF NOT EXISTS component_days (
 -- org to one vendor's official status feed (statuspage/instatus/... JSON, RSS).
 CREATE TABLE IF NOT EXISTS vendors (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES organizations(id) ON DELETE CASCADE,
   slug          TEXT NOT NULL,               -- catalog slug or custom-<name>
   name          TEXT NOT NULL,
   feed_type     TEXT NOT NULL CHECK (feed_type IN ('statuspage','instatus','slack','gcp','aws','heroku','statusio','rss')),
@@ -691,7 +708,7 @@ CREATE INDEX IF NOT EXISTS idx_vendor_incidents ON vendor_incidents(vendor_id, u
 -- reaches the org's threshold (org setting status_reports_threshold).
 CREATE TABLE IF NOT EXISTS status_reports (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES organizations(id) ON DELETE CASCADE,
   ts            INTEGER NOT NULL,
   component_id  INTEGER REFERENCES components(id) ON DELETE SET NULL,
   message       TEXT,
@@ -727,7 +744,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- per-organization settings (org_name, backend_label, status_published, ...)
 CREATE TABLE IF NOT EXISTS org_settings (
-  org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   key           TEXT NOT NULL,
   value         TEXT NOT NULL,
   PRIMARY KEY (org_id, key)
@@ -738,7 +755,7 @@ CREATE TABLE IF NOT EXISTS org_settings (
 -- classifier rule) or dismissed (kept so it is never suggested again).
 CREATE TABLE IF NOT EXISTS scout_templates (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   template      TEXT NOT NULL,               -- masked line, variable parts as <TAG>/<*>
   count         INTEGER NOT NULL DEFAULT 1,
   sample        TEXT,                        -- one raw example line
@@ -757,13 +774,13 @@ CREATE INDEX IF NOT EXISTS idx_scout_org_status ON scout_templates(org_id, statu
 -- audit_log (action 'automation_run', user_id NULL = system actor).
 CREATE TABLE IF NOT EXISTS automations (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   enabled       INTEGER NOT NULL DEFAULT 1,
   trigger_json  TEXT NOT NULL,               -- {"event":"...", "severityMin":0}
   actions_json  TEXT NOT NULL,               -- [{"type":"close_event"|"assign_case"|"webhook", ...}]
   cooldown_m    INTEGER NOT NULL DEFAULT 15,
-  created_by    INTEGER REFERENCES users(id),
+  created_by    TEXT REFERENCES users(id),
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_automations_org ON automations(org_id);
@@ -778,9 +795,9 @@ CREATE TABLE IF NOT EXISTS automation_fires (
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   ts            INTEGER NOT NULL,
-  user_id       INTEGER,
+  user_id       TEXT,
   action        TEXT NOT NULL,
   detail        TEXT
 );
@@ -804,8 +821,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 CREATE TABLE IF NOT EXISTS oauth_codes (
   code_hash      TEXT PRIMARY KEY,           -- sha256(code)
   client_id      TEXT NOT NULL,
-  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  org_id         INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id         TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   redirect_uri   TEXT NOT NULL,
   code_challenge TEXT NOT NULL,              -- S256 only
   scopes         TEXT NOT NULL,
@@ -819,8 +836,8 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   token_hash    TEXT NOT NULL UNIQUE,        -- sha256(token)
   kind          TEXT NOT NULL CHECK (kind IN ('access','refresh')),
   client_id     TEXT NOT NULL,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id        TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   scopes        TEXT NOT NULL,
   resource      TEXT,                        -- RFC 8707 audience this token may drive
   expires_at    INTEGER NOT NULL,
@@ -838,7 +855,7 @@ CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
 -- so pure new tables need no migration entry.
 CREATE TABLE IF NOT EXISTS bridges (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        INTEGER NOT NULL DEFAULT 1,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   incident_id   INTEGER NOT NULL UNIQUE REFERENCES incidents(id) ON DELETE CASCADE,
   status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
   -- default ON (docs §7.2); org opts out via org setting bridge_transcription='0',
@@ -846,7 +863,7 @@ CREATE TABLE IF NOT EXISTS bridges (
   transcription INTEGER NOT NULL DEFAULT 1,
   -- highest bridge_feed.id the insight analyzer has read (phase 3)
   analyzed_feed_id INTEGER NOT NULL DEFAULT 0,
-  created_by    INTEGER REFERENCES users(id),
+  created_by    TEXT REFERENCES users(id),
   created_at    INTEGER NOT NULL,
   closed_at     INTEGER
 );
@@ -857,7 +874,7 @@ CREATE TABLE IF NOT EXISTS bridge_groups (
   name          TEXT NOT NULL,
   color         TEXT NOT NULL DEFAULT '',
   sort          INTEGER NOT NULL DEFAULT 0,
-  created_by    INTEGER REFERENCES users(id),
+  created_by    TEXT REFERENCES users(id),
   created_at    INTEGER NOT NULL,
   closed_at     INTEGER
 );
@@ -867,7 +884,7 @@ CREATE INDEX IF NOT EXISTS idx_bridge_groups ON bridge_groups(room_id, closed_at
 -- group_id NULL = the lobby.
 CREATE TABLE IF NOT EXISTS bridge_participants (
   room_id       INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   group_id      INTEGER REFERENCES bridge_groups(id) ON DELETE SET NULL,
   connected     INTEGER NOT NULL DEFAULT 0,
   joined_at     INTEGER NOT NULL,
@@ -880,7 +897,7 @@ CREATE TABLE IF NOT EXISTS bridge_feed (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id       INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
   group_id      INTEGER REFERENCES bridge_groups(id) ON DELETE SET NULL,
-  user_id       INTEGER REFERENCES users(id),    -- speaker/actor; NULL = AI or system
+  user_id       TEXT REFERENCES users(id),    -- speaker/actor; NULL = AI or system
   kind          TEXT NOT NULL CHECK (kind IN ('system','transcript','insight')),
   severity      TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info','notable','critical')),
   body          TEXT NOT NULL,

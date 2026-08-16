@@ -301,11 +301,25 @@ export function StackedArea({ data, w = 460, h = 140 }:
  * back is decoration. `tips` carries the full label per point (the `labels` array
  * is deliberately sparse so the axis stays legible).
  */
-export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h = 140, fmt }:
+export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h = 140, fmt,
+  onSelect, selectLabel = 'Selection' }:
   { points: number[] | null; labels?: string[]; tips?: string[]; color?: string;
-    w?: number; h?: number; fmt?: (v: number) => string }) {
+    w?: number; h?: number; fmt?: (v: number) => string;
+    /** drag across the plot to pick a bucket span; called with inclusive indices */
+    onSelect?: (from: number, to: number) => void;
+    selectLabel?: string }) {
   const { ref, width, charW } = useBoxWidth<HTMLDivElement>(w);
   const [hi, setHi] = React.useState<number | null>(null);
+  // [anchor, current] while dragging, then the settled span until it is used or
+  // dismissed. Null means "no selection", which is also what a plain click leaves.
+  const [sel, setSel] = React.useState<[number, number] | null>(null);
+  const [dragging, setDragging] = React.useState(false);
+  // The anchor lives in a REF, not in the state the move handler closes over.
+  // Measured: with state alone the drag produced no span at all — mousedown sets
+  // it, but the moves that follow still run the handler from the PREVIOUS render,
+  // read `dragging === false` and drop every point, so mouseup saw a one-bucket
+  // "selection" and cleared it. A ref is current the moment it is written.
+  const anchor = React.useRef<number | null>(null);
   if (points == null) return <ChartSkeleton h={h} />;
   if (!points.length) return <div className="text-text3 text-sm">no data yet</div>;
   const padB = labels ? CHART_PAD.b : 6;
@@ -323,16 +337,42 @@ export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h 
   const base = CHART_PAD.t + innerH;
   // touch as well as mouse: the readout is the only way to get a number off the
   // chart, and a NOC's second screen is a phone
-  const at = (el: SVGRectElement, clientX: number) => {
+  const idxAt = (el: SVGRectElement, clientX: number) => {
     const r = el.getBoundingClientRect();
     const i = Math.round(((clientX - r.left) / (innerW || 1)) * (points.length - 1));
-    setHi(Math.max(0, Math.min(points.length - 1, i)));
+    return Math.max(0, Math.min(points.length - 1, i));
+  };
+  const at = (el: SVGRectElement, clientX: number) => {
+    const i = idxAt(el, clientX);
+    setHi(i);
+    if (anchor.current !== null) setSel([anchor.current, i]);
   };
   const onMouse = (e: React.MouseEvent<SVGRectElement>) => at(e.currentTarget, e.clientX);
   const onTouch = (e: React.TouchEvent<SVGRectElement>) =>
     at(e.currentTarget, e.touches[0].clientX);
+  // press-and-drag starts a span; a press that never moves is just a readout, so
+  // the single-bucket case is dropped on release rather than opening a menu on
+  // every click
+  const startDrag = (e: React.MouseEvent<SVGRectElement>) => {
+    if (!onSelect) return;
+    const i = idxAt(e.currentTarget, e.clientX);
+    anchor.current = i;
+    setDragging(true); setSel([i, i]);
+  };
+  const endDrag = () => {
+    if (anchor.current === null) return;
+    anchor.current = null;
+    setDragging(false);
+    // a press that never moved is a readout, not a selection
+    setSel((cur) => (cur && cur[0] !== cur[1] ? cur : null));
+  };
+  const span = sel ? [Math.min(sel[0], sel[1]), Math.max(sel[0], sel[1])] as const : null;
   return (
-    <div ref={ref} style={{ width: '100%', minWidth: 0, position: 'relative' }}>
+    // userSelect off while the chart is draggable: dragging across an SVG otherwise
+    // highlights the axis labels and the selection bar's own text, so a drag ends up
+    // looking like a botched text selection.
+    <div ref={ref} style={{ width: '100%', minWidth: 0, position: 'relative',
+      ...(onSelect ? { userSelect: 'none' as const } : {}) }}>
       <svg width={width} height={h} style={{ display: 'block', maxWidth: '100%' }}>
         {ticks.map((t) => (
           <g key={t}>
@@ -349,6 +389,10 @@ export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h 
         {points.length <= 40 && points.map((v, i) => (
           <circle key={i} cx={px(i)} cy={py(v)} r={2} fill={color} />
         ))}
+        {span && (
+          <rect x={px(span[0])} y={CHART_PAD.t} width={Math.max(2, px(span[1]) - px(span[0]))}
+            height={innerH} fill={alpha(color, 0.16)} stroke={alpha(color, 0.5)} strokeWidth={1} />
+        )}
         {hi !== null && (
           <g>
             <line x1={px(hi)} x2={px(hi)} y1={CHART_PAD.t} y2={base}
@@ -362,16 +406,33 @@ export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h 
             style={AXIS_TEXT} fill="var(--text3)">{l}</text>
         ) : null))}
         <rect x={padL} y={0} width={innerW} height={h} fill="transparent"
-          onMouseMove={onMouse} onMouseLeave={() => setHi(null)}
+          style={onSelect ? { cursor: 'col-resize' } : undefined}
+          onMouseMove={onMouse} onMouseLeave={() => { setHi(null); endDrag(); }}
+          onMouseDown={startDrag} onMouseUp={endDrag}
           onTouchStart={onTouch} onTouchMove={onTouch} onTouchEnd={() => setHi(null)} />
       </svg>
-      {hi !== null && (
+      {hi !== null && !span && (
         <div className="chart-tip mono text-2xs"
           style={{ left: Math.min(Math.max(px(hi), 44), Math.max(44, width - 44)) }}>
           <b style={{ color }}>{fv(points[hi])}</b>
           {(tips?.[hi] || labels?.[hi]) && (
             <span className="text-text3"> · {tips?.[hi] || labels?.[hi]}</span>
           )}
+        </div>
+      )}
+      {/* The action sits ON the chart rather than in a toolbar: the span it applies
+          to is what the reader just drew, and a button somewhere else would have to
+          re-explain which span it means. */}
+      {span && !dragging && onSelect && (
+        <div className="row chart-sel-bar">
+          <span className="mono text-2xs text-text2">
+            {selectLabel}: {tips?.[span[0]] || labels?.[span[0]] || span[0]}
+            {' — '}{tips?.[span[1]] || labels?.[span[1]] || span[1]}
+          </span>
+          <Button size="sm" onClick={() => { onSelect(span[0], span[1]); setSel(null); }}>
+            Show in logs</Button>
+          <button className="text-2xs text-text3" onClick={() => setSel(null)}
+            aria-label="Clear selection">clear</button>
         </div>
       )}
     </div>

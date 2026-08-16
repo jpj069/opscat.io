@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { db, getOrgSetting, setOrgSetting,
   getMembership, addMembership, removeMembership, listMemberships } = require('../db');
 const config = require('../config');
-const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt } = require('../util');
+const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt, newId, isId } = require('../util');
 const sec = require('../security');
 const pipelineEngine = require('../engine/pipeline');
 const automationEngine = require('../engine/automations');
@@ -85,10 +85,10 @@ router.post('/users', sec.requireRole('admin'), async (req, res) => {
   // the login route refuses it for every password (see auth.js).
   const password = byLink ? null : crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = password ? hashPassword(password) : { salt: '', hash: '' };
-  const info = db.prepare(`INSERT INTO users (org_id, email, name, role, pass_salt, pass_hash, color, active,
-    must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-    .run(req.orgId, email.toLowerCase(), name, role, salt, hash, color, byLink ? 0 : 1, now());
-  const id = info.lastInsertRowid;
+  const id = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, pass_salt, pass_hash, color, active,
+    must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .run(id, req.orgId, email.toLowerCase(), name, role, salt, hash, color, byLink ? 0 : 1, now());
   addMembership(id, req.orgId, role);
   sec.audit(req.user.id, 'user_create', `${email} (${role})`, req.orgId);
 
@@ -249,6 +249,13 @@ router.get('/settings', (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
   const out = {};
   for (const k of keys) out[k] = getOrgSetting(req.orgId, k, '');
+  // Not a setting — the plan's ceiling for the retention field, so the form can
+  // say what the limit is instead of letting someone type 365 and find out from a
+  // 400 (or, before this, from nothing happening at all). '' = no ceiling
+  // (community edition, or an unlimited tier).
+  const cap = plans.retentionCapFor(req.orgId);
+  out.retention_logs_days_max = cap === -1 ? '' : String(cap);
+  out.retention_logs_days_effective = String(plans.retentionDaysFor(req.orgId));
   res.json(out);
 });
 
@@ -264,6 +271,22 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
       if (!Array.isArray(arr)) throw new Error();
       for (const c of arr) new RegExp(c.pattern, c.flags || 'i');
     } catch { return httpError(res, 400, 'classifiers must be a JSON array of valid patterns'); }
+  }
+  // Log retention: a number, and never longer than the plan sells. Shortening is
+  // the org's own business ("keep three days"); lengthening is what the tier is
+  // for, so it cannot be a free text field. Rejected loudly rather than clamped
+  // silently — a field that quietly stores something other than what was typed is
+  // how the old "saved, no effect" behaviour felt.
+  if (b.retention_logs_days !== undefined) {
+    const d = Number(b.retention_logs_days);
+    if (!Number.isInteger(d) || d < 1 || d > 3650) {
+      return httpError(res, 400, 'retention_logs_days must be a whole number of days (1-3650)');
+    }
+    const cap = plans.retentionCapFor(req.orgId);
+    if (cap !== -1 && d > cap) {
+      return httpError(res, 400,
+        `your plan keeps logs for up to ${cap} days — upgrade for longer retention`);
+    }
   }
   for (const [k, v] of Object.entries(b)) setOrgSetting(req.orgId, k, v);
   // `status_published` is the DEFAULT page's publish flag. Kept as a setting for
@@ -571,7 +594,20 @@ router.get('/pipeline/stats', (req, res) => {
   for (let b = since; b <= t; b += step) {
     buckets.push({ bucket: b, ...(byBucket.get(b) || { lines: 0, bytes: 0, events: 0 }) });
   }
-  res.json({ range, step, buckets, totals });
+  // Peak throughput — the number someone sizes the ingest on, so it must not be an
+  // average wearing a per-second label. `ingest_minutes` only reaches back 48h, so
+  // for 7d/30d there is no honest minute figure and we say so (`peak.source`)
+  // rather than dividing the busiest hour by 60 and calling it a peak.
+  const minuteSince = Math.max(since, t - 48 * 3600000);
+  const pm = db.prepare(`SELECT bucket, lines, bytes FROM ingest_minutes
+    WHERE org_id = ? AND bucket >= ? ORDER BY lines DESC LIMIT 1`).get(req.orgId, minuteSince);
+  const covers = db.prepare('SELECT MIN(bucket) mn FROM ingest_minutes WHERE org_id = ?')
+    .get(req.orgId).mn;
+  const peak = pm
+    ? { source: 'minute', lines: pm.lines, bytes: pm.bytes, at: pm.bucket,
+        perSecond: pm.lines / 60, coveredFrom: Math.max(minuteSince, covers ?? minuteSince) }
+    : { source: 'hour', lines: 0, bytes: 0, at: null, perSecond: 0, coveredFrom: null };
+  res.json({ range, step, buckets, totals, peak });
 });
 
 router.get('/pipeline/classifiers', (req, res) => {
@@ -658,7 +694,10 @@ router.get('/scout', (req, res) => {
     let suggestion = null;
     try { suggestion = r.suggestion ? JSON.parse(r.suggestion) : null; } catch { /* noop */ }
     return { id: r.id, template: r.template, count: r.count, sample: r.sample,
-      status: r.status, suggestion, firstSeen: r.first_seen, lastSeen: r.last_seen };
+      status: r.status, suggestion, firstSeen: r.first_seen, lastSeen: r.last_seen,
+      // what to search the raw logs for — derived here, next to the masking that
+      // produced the template, so the two cannot drift apart
+      filter: scoutEngine.templateFilter(r.template) };
   }));
 });
 
@@ -795,8 +834,8 @@ function validateAutomation(b, res) {
       if (!isStr(a.raiseEvent, 100)) return httpError(res, 400, 'close_event needs raiseEvent (the event name it resolves)');
       cleanActions.push({ type: 'close_event', raiseEvent: a.raiseEvent, matchTarget: a.matchTarget !== false });
     } else if (a?.type === 'assign_case') {
-      const userId = clampInt(a.userId, 1, 1e9, 0);
-      if (!userId) return httpError(res, 400, 'assign_case needs userId');
+      const userId = String(a.userId || '');
+      if (!isId(userId)) return httpError(res, 400, 'assign_case needs a userId');
       cleanActions.push({ type: 'assign_case', userId });
     } else if (a?.type === 'webhook') {
       if (!isStr(a.url, 500) || !/^https?:\/\//.test(a.url)) return httpError(res, 400, 'webhook needs an http(s) url');

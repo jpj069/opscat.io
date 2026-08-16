@@ -655,6 +655,18 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   background: var(--bg0); border: 1px solid var(--bg3); color: var(--text1);
 }
 
+/* Selection bar of a <LineChart> with onSelect — it belongs ON the chart, because a
+   button in a toolbar would have to re-explain which span it means.
+   Top-RIGHT and nowrap, both measured: centred at the bottom it covered the x-axis
+   and the drawn span itself, and letting it wrap turned "Show in logs" into three
+   stacked words. The label truncates instead — the span is also drawn on the plot. */
+.chart-sel-bar {
+  position: absolute; top: 2px; right: 2px; max-width: calc(100% - 4px);
+  gap: 8px; padding: 3px 6px; border-radius: 6px; flex-wrap: nowrap; white-space: nowrap;
+  background: var(--bg0); border: 1px solid var(--bg3);
+}
+.chart-sel-bar > span:first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
 /* filter chips */
 .chip {
   padding: 3px 10px; border-radius: 12px; font-size: var(--t-xs); font-weight: 600;

@@ -4,7 +4,7 @@
 // Discord, ntfy, Pushover or a generic webhook, records every attempt.
 const { db, getOrgSetting } = require('../db');
 const config = require('../config');
-const { now } = require('../util');
+const { now, DEFAULT_ORG_ID } = require('../util');
 const mailer = require('../mailer');
 const pipeline = require('./pipeline');
 
@@ -21,7 +21,7 @@ function severityLabel(s) {
   return s >= 80 ? 'Critical' : s >= 60 ? 'High' : s >= 40 ? 'Medium' : s >= 20 ? 'Low' : 'Info';
 }
 
-async function sendEmail(recipients, subject, html, orgId = 1) {
+async function sendEmail(recipients, subject, html, orgId = DEFAULT_ORG_ID) {
   if (!mailer.mailConfigured()) throw new Error('no mail transport configured (RESEND_API_KEY or SMTP_HOST)');
   const from = getOrgSetting(orgId, 'alert_email_from', 'OpsCat <onboarding@resend.dev>');
   await mailer.sendMail({ from, to: recipients, subject, html });

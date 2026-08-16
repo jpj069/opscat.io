@@ -58,7 +58,7 @@ global.fetch = (url, opts) => {
 require('./src/index.js'); // boots the app on :3119
 
 const { db, addMembership } = require('./src/db');
-const { hashPassword, now, sha256 } = require('./src/util');
+const { hashPassword, now, sha256, newId, DEFAULT_ORG_ID } = require('./src/util');
 const config = require('./src/config');
 
 const BASE = 'http://127.0.0.1:3119';
@@ -70,12 +70,13 @@ const tokensFor = (id) => db.prepare('SELECT * FROM login_tokens WHERE user_id =
 
 function mkUser(email, role, orgId) {
   const { salt, hash } = hashPassword(PASS);
-  const r = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  const uid = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
-    VALUES (?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
-    .run(orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(r.lastInsertRowid, orgId, role);
-  return { id: Number(r.lastInsertRowid), email };
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
+    .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
+  addMembership(uid, orgId, role);
+  return { id: uid, email };
 }
 
 // The auth limiter is real (10/min per IP) and this harness signs in more often than
@@ -251,7 +252,7 @@ async function main() {
   config.resendApiKey = keepKey;
 
   // ── 7. reset by link ──────────────────────────────────────────────────────
-  const victim = mkUser('victim@e2e.test', 'analyst', 1);
+  const victim = mkUser('victim@e2e.test', 'analyst', DEFAULT_ORG_ID);
   const V = await login('victim@e2e.test');
   chk('the user has a session before the reset', V.status === 200);
   const reset = await call(admin, 'PATCH', `/api/admin/users/${victim.id}`, { resetPassword: true });
@@ -357,7 +358,7 @@ async function main() {
   chk('and the browser is told to force a change', oIn.user.mustChangePassword === true);
 
   // ── 12. gating and the multi-org path are untouched ───────────────────────
-  const grunt = mkUser('grunt@e2e.test', 'analyst', 1);
+  const grunt = mkUser('grunt@e2e.test', 'analyst', DEFAULT_ORG_ID);
   const G = await login('grunt@e2e.test');
   const denied = await call(G, 'POST', '/api/admin/users',
     { email: 'sneak@e2e.test', name: 'Sneak', role: 'admin' });
@@ -366,8 +367,9 @@ async function main() {
 
   // no hard-coded id: earlier sections now create organizations of their own, and a
   // fixture that pins a primary key breaks the moment something is added above it.
-  const otherOrgId = Number(db.prepare(`INSERT INTO organizations (name, slug, plan, status, created_at)
-    VALUES ('Other Org', 'other', 'enterprise', 'active', ?)`).run(now()).lastInsertRowid);
+  const otherOrgId = newId();
+  db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+    VALUES (?, 'Other Org', 'other', 'enterprise', 'active', ?)`).run(otherOrgId, now());
   const outsider = mkUser('outsider@e2e.test', 'admin', otherOrgId);
   const addExisting = await call(admin, 'POST', '/api/admin/users',
     { email: 'outsider@e2e.test', name: 'Out Sider', role: 'lead' });

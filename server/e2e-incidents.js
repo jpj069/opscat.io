@@ -54,20 +54,21 @@ const stub = http.createServer((req, res) => {
 require('./src/index.js'); // boots the app on :3121
 
 const { db, addMembership } = require('./src/db');
-const { hashPassword, now } = require('./src/util');
+const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const scale = require('./src/lib/status-scale');
 
 const BASE = 'http://127.0.0.1:3121';
 const PASS = 'e2e-user-password-1';
 
-function mkUser(email, role, orgId = 1) {
+function mkUser(email, role, orgId = DEFAULT_ORG_ID) {
   const { salt, hash } = hashPassword(PASS);
-  const r = db.prepare(`INSERT INTO users (org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  const uid = newId();
+  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
-    VALUES (?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
-    .run(orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(r.lastInsertRowid, orgId, role);
-  return { id: Number(r.lastInsertRowid), email };
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
+    .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
+  addMembership(uid, orgId, role);
+  return { id: uid, email };
 }
 
 async function login(email, password = PASS) {
@@ -251,8 +252,8 @@ async function main() {
   // ── promote: case → incident ──────────────────────────────────────────────
   const pipeline = require('./src/engine/pipeline');
   pipeline.ingestEvent({ name: 'ddos', device: 'edge-01', severity: 85,
-    description: 'volumetric attack' }, 'e2e', false, 1);
-  const kase = db.prepare(`SELECT * FROM cases WHERE org_id = 1 ORDER BY id DESC LIMIT 1`).get();
+    description: 'volumetric attack' }, 'e2e', false, DEFAULT_ORG_ID);
+  const kase = db.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(DEFAULT_ORG_ID);
   chk('a high-severity event opened a case to promote', !!kase, 'no case row');
 
   const roProm = await call(analyst, 'POST', `/api/cases/${kase.id}/promote`, {});

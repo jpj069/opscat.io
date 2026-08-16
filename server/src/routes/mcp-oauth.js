@@ -20,7 +20,7 @@ const config = require('../config');
 const { db, getMembership, listMemberships } = require('../db');
 const sec = require('../security');
 const oauth = require('../lib/oauth');
-const { now, httpError, RateLimiter } = require('../util');
+const { now, httpError, RateLimiter, isOrgId } = require('../util');
 
 const router = Router();
 
@@ -284,8 +284,8 @@ router.post('/oauth/authorize/consent', (req, res) => {
 
   // Membership is re-checked here rather than trusted from the ticket: it may
   // have been revoked between rendering the consent screen and submitting it.
-  const orgId = parseInt(b.org_id, 10);
-  const membership = Number.isInteger(orgId) ? getMembership(ctx.user.id, orgId) : null;
+  const orgId = String(b.org_id || '').trim();
+  const membership = isOrgId(orgId) ? getMembership(ctx.user.id, orgId) : null;
   if (!membership) {
     return renderPage(res, 403, 'Not a member',
       '<h1>Not a member</h1><p class="err">You are not a member of the selected organization.</p>');

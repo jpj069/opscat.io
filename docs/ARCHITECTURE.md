@@ -698,6 +698,17 @@ because they answer three different questions:
 | which page | `/app/<page>` | `setNav` (`state.tsx`) |
 | which tab of that page | `/app/<page>/<tab>` | `useTab` (`state.tsx`) |
 | which **overlay** is open on top | `?event=<id>`, `?node=<id>` | `setSelectedEvent` / `useOverlayParam` (`state.tsx`) |
+| which **filter/window** a page shows | `?q=…&from=…&to=…` | `useQueryState` (`state.tsx`) |
+
+The filter row is the newest of the four and follows the same argument: "the four
+minutes where ingest spiked" is a place, and a place has an address. It differs from the
+other three in its history shape — it **replaces** rather than pushes, because a filter
+is refined by typing and one entry per keystroke turns the back button into an undo
+buffer for a text field. The entry worth having was already pushed by whoever navigated
+there: `setNav('logs', '?from=…&to=…')` carries the filter INTO the page, which is how
+Scout opens the lines behind a template and how the throughput chart opens the lines
+under a dragged-over span. Both go through `setNav` rather than an `<a href>` so the
+jump stays a SPA navigation.
 
 The event slide-over is the overlay case. It is rendered by the shell, not by a page —
 it floats over whatever is behind it — so it cannot own a path segment: the path already
@@ -872,6 +883,88 @@ derived, never hand-drawn.**
 - **Guard:** `web/scripts/check-loading-states.mjs` (runs in `npm run build`, therefore
   in the Docker build and the deploy) fails on any new ad-hoc `loading…` text outside
   `ui.tsx`. A deliberate text-only case opts out with a `skeleton-exempt` comment.
+
+## Identity keys: users and organizations are UUIDs
+
+`users.id` and `organizations.id` are `TEXT PRIMARY KEY NOT NULL` holding a v4
+uuid, minted by the app (`util.newId`). Every column referencing them is TEXT too —
+56 of them across 40 tables. Everything else (events, cases, checks, vendors,
+incidents…) keeps its `INTEGER PRIMARY KEY AUTOINCREMENT`: those ids never leave
+the tenant that owns them and are joined against constantly, where 1–2 bytes beat
+36.
+
+Four consequences worth knowing before touching this code:
+
+- **There is no `lastInsertRowid`.** SQLite only reports one for INTEGER keys, so
+  an insert mints its id first (`const id = newId()`) and names it. That also means
+  the caller knows the id before the write, which several call sites wanted anyway.
+- **`NOT NULL` is not redundant on those two keys.** SQLite keeps a legacy quirk
+  where only an INTEGER primary key implies it — a TEXT primary key accepts NULL,
+  and the failure then surfaces as a foreign-key error somewhere else entirely.
+- **The default organization has a FIXED id**, `DEFAULT_ORG_ID` in `util.js`
+  (`00000000-0000-4000-8000-000000000001`). A dozen platform paths mean "the org" —
+  the single-tenant community edition, the vendor grid, the default status page,
+  every `orgId = …` parameter default. Those used to say `1`, which is exactly the
+  magic number a uuid migration turns into a silent bug: an integer `1` now matches
+  no row, and "no rows" is a legal answer everywhere. Naming it also keeps the
+  migration deterministic — the old org 1 lands there on every install.
+- **`ORDER BY id` no longer means "newest first"** for these two tables. Uuids do
+  not count, so ordering by them is arbitrary; the platform org list orders by
+  `created_at`.
+
+Migration 21 does the conversion generically rather than by hand: SQLite cannot
+alter a column's type, so each affected table is rebuilt, and the new CREATE
+statement is derived from the table's OWN stored SQL with only the column type
+rewritten — every CHECK, DEFAULT and foreign key comes along untouched, and the
+indexes are replayed from `sqlite_master`. Old integer ids are mapped through temp
+tables, so the copy is one SQL join per table. Verified by `e2e-reputation.js`,
+which builds a v10-era database by hand and migrates it all the way through.
+
+## Log retention (per org, ceiling per plan)
+
+How long a tenant's log lines survive is `min(the org's own setting, the plan's
+ceiling)` — `plans.retentionDaysFor(orgId)`, applied per organization by
+`retention.pruneLogs()`.
+
+The direction is the point. **Shortening is the org's own business** — "keep three days,
+we do not want more of our customers' lines lying around" is a normal request, and a
+GDPR-shaped one. **Lengthening is what the tier sells** (Free 7 · Pro 30 · Business 90 ·
+Enterprise 365), so it cannot be a text field; the settings endpoint refuses an over-plan
+value with a 400 that names the ceiling rather than clamping it silently. A field that
+stores something other than what was typed is how the previous behaviour felt.
+
+What it replaced, because the failure mode is worth remembering: the cleanup read
+`getOrgSetting(1, 'retention_logs_days')` — **org 1's** setting — and then ran
+`DELETE FROM logs WHERE ts < ?` with **no `org_id`**. On a single-tenant box that is
+invisible. In the cloud it meant every tenant inherited our own org's 7 days, a Business
+customer paying for 90 kept 7, a tenant changing the field saw it saved and nothing
+happen, and `plans.retentionDays` was a per-plan number that no code path ever read while
+the pricing page sold it. Guarded by `e2e-retention.js`.
+
+Two adjacent numbers are deliberately NOT per plan: metrics (`agent_metrics`,
+`agent_containers`) and check results (`synthetic_results`, `snmp_results`,
+`reputation_runs`) age out at flat 30 days for everyone (`config.retentionMetricsDays` /
+`retentionResultsDays`). They are fixed-size samples rather than customer content, and
+the pricing page now names them as their own row instead of folding them into "log &
+metric retention".
+
+## Ingest throughput: why there are two counter tables
+
+`ingest_stats` counts per HOUR and answers "how much did we take in". It cannot answer
+the question a NOC actually sizes hardware on — *what burst does the ingest have to
+survive* — because a 30-second spike of 5 000 lines/s divided over its hour reads as
+~42 lines/s. Measured on a seeded burst: 16 lines/s from the minute counter against
+0.27 lines/s from the same data averaged over the hour, a factor of 60.
+
+So `ingest_minutes` counts per MINUTE, is written in the same transaction as the hourly
+row, and is pruned to **48 hours** by `retention.js` — 1 440 rows per org per day, for a
+number nobody reads back further than a day or two.
+
+The consequence the UI has to carry: at 7d and 30d those counters do not span the range,
+so `stats.peak.source` comes back as `'hour'` and the card says *"minute counters only
+cover the last 48h"* instead of showing a per-second figure it cannot honestly compute.
+An average wearing a per-second label is worse than an empty cell, because nobody
+double-checks a number that looks precise.
 
 ## Classifier drafts and the dry run
 

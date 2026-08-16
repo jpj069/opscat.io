@@ -214,8 +214,14 @@ function GeneralTab({ d, isAdmin }: { d: SettingsDraft; isAdmin: boolean }) {
             <TextRow d={d} isAdmin={isAdmin} k="org_name" label="Organization name" />
             <TextRow d={d} isAdmin={isAdmin} k="backend_label" label="Backend label"
               hint="Free-text label for this deployment, e.g. nbg1 · PRIMARY" />
+            {/* The hint states the PLAN's ceiling, because that is the number the
+                field is actually bounded by. Leaving it blank is how the old field
+                looked while it silently did nothing at all. */}
             <TextRow d={d} isAdmin={isAdmin} k="retention_logs_days" label="Log retention (days)"
-              type="number" hint="Logs older than this are dropped by the nightly cleanup" />
+              type="number" placeholder={d.val('retention_logs_days_effective') || undefined}
+              hint={d.val('retention_logs_days_max')
+                ? `Logs older than this are dropped by the hourly cleanup. Your plan keeps up to ${d.val('retention_logs_days_max')} days — set a shorter value to keep less.`
+                : 'Logs older than this are dropped by the hourly cleanup.'} />
             <ToggleRow d={d} isAdmin={isAdmin} k="status_published" label="Status page published"
               hint="Serves the public status page at /status" />
           </>

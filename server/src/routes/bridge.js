@@ -31,7 +31,7 @@ const config = require('../config');
 const plans = require('../plans');
 const sec = require('../security');
 const voice = require('../voice');
-const { now, isStr, optStr, clampInt, httpError, RateLimiter } = require('../util');
+const { now, isStr, optStr, clampInt, httpError, RateLimiter, isId } = require('../util');
 const { hub } = require('./ops'); // org-scoped SSE hub (module cache, no cycle)
 
 const router = express.Router();
@@ -308,12 +308,18 @@ router.post('/hooks/livekit', async (req, res) => {
   } catch (e) {
     return httpError(res, 401, 'bad webhook signature');
   }
-  const m = /^br-(\d+)-(\d+)$/.exec((ev.room && ev.room.name) || '');
+  // The room name is `br-<orgUuid>-<roomId>` (see roomName above) and the
+  // participant identity IS the user's uuid. Both used to be integers, and both
+  // failure modes are silent: a non-matching name answers "not one of ours" and a
+  // parseInt'd uuid is NaN, so presence would simply never mirror while every
+  // webhook still returned 200.
+  const m = /^br-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(\d+)$/i
+    .exec((ev.room && ev.room.name) || '');
   if (!m) return res.json({ ok: true }); // not one of ours
-  const room = q.roomByName.get(parseInt(m[1], 10), parseInt(m[2], 10));
+  const room = q.roomByName.get(m[1], parseInt(m[2], 10));
   if (!room) return res.json({ ok: true });
-  const userId = parseInt((ev.participant && ev.participant.identity) || '', 10);
-  const user = Number.isFinite(userId) ? q.user.get(userId) : null;
+  const identity = (ev.participant && ev.participant.identity) || '';
+  const user = isId(identity) ? q.user.get(identity) : null;
   const ts = now();
 
   if (ev.event === 'participant_joined' && user) {

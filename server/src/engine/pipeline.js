@@ -2,7 +2,7 @@
 // Log → event pipeline: classify lines, score severity, dedupe into events,
 // auto-open cases, notify the alert engine and SSE stream.
 const { db, getOrgSetting } = require('../db');
-const { now } = require('../util');
+const { now, DEFAULT_ORG_ID } = require('../util');
 
 // Built-in classifiers, evaluated in order; first match wins.
 // Custom classifiers are per-organization (org_settings key 'classifiers',
@@ -63,7 +63,7 @@ function loadClassifiers(orgId) {
 // lines create events even without a pattern match.
 const SYSLOG_FLOOR = [92, 88, 82, 55, 35, 15, 0, 0];
 
-function classify(line, syslogSev, orgId = 1) {
+function classify(line, syslogSev, orgId = DEFAULT_ORG_ID) {
   for (const [source, list] of [['custom', customClassifiersFor(orgId)], ['builtin', BUILTIN_CLASSIFIERS]]) {
     for (const c of list) {
       const m = c.re.exec(line);
@@ -119,7 +119,16 @@ const bumpStats = db.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, b
   VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(org_id, bucket) DO UPDATE SET lines = lines + excluded.lines,
     bytes = bytes + excluded.bytes, events = events + excluded.events`);
+// Second counter, one minute wide. It exists because an hourly average is not a
+// peak: a 30s burst of 5k lines/s shows up as ~42 lines/s once divided over its
+// hour, and that is the number someone would size the ingest on. Pruned to 48h
+// (retention.js) — 1440 rows per org per day.
+const bumpMinutes = db.prepare(`INSERT INTO ingest_minutes (org_id, bucket, lines, bytes)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = lines + excluded.lines,
+    bytes = bytes + excluded.bytes`);
 const hourBucket = (t) => Math.floor(t / 3600000) * 3600000;
+const minuteBucket = (t) => Math.floor(t / 60000) * 60000;
 
 const CASE_THRESHOLD = 60;
 
@@ -137,7 +146,7 @@ function emit(type, payload) {
  * @param {number} orgId owning organization
  * @returns {{accepted:number, events:number}}
  */
-function ingestLogs(entries, source, orgId = 1) {
+function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
   const t = now();
   let accepted = 0;
   let bytes = 0;
@@ -182,7 +191,10 @@ function ingestLogs(entries, source, orgId = 1) {
       bumpBucket.run(ev.id, Math.floor(ts / 60000));
       touchedEvents.push(ev);
     }
-    if (accepted) bumpStats.run(orgId, hourBucket(t), accepted, bytes, touchedEvents.length);
+    if (accepted) {
+      bumpStats.run(orgId, hourBucket(t), accepted, bytes, touchedEvents.length);
+      bumpMinutes.run(orgId, minuteBucket(t), accepted, bytes);
+    }
   })();
 
   for (const l of emittedLogs) emit('log', l);
@@ -191,7 +203,7 @@ function ingestLogs(entries, source, orgId = 1) {
 }
 
 // Direct event ingestion (webhooks, Sentry, engines) — bypasses log storage optionally.
-function ingestEvent({ name, device, target, description, severity, ip, ts }, source, alsoLog = true, orgId = 1) {
+function ingestEvent({ name, device, target, description, severity, ip, ts }, source, alsoLog = true, orgId = DEFAULT_ORG_ID) {
   const entryLine = description || `${name} ${target || ''}`.trim();
   if (alsoLog) {
     return ingestLogs([{
@@ -246,7 +258,7 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
 const DRYRUN_MAX_LINES = 20000;
 const DRYRUN_BUDGET_MS = 2000;
 
-function backtest({ orgId = 1, pattern, flags = 'i', name = 'rule', severity = 50,
+function backtest({ orgId = DEFAULT_ORG_ID, pattern, flags = 'i', name = 'rule', severity = 50,
   targetGroup = null, hours = 24 }) {
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { throw new Error(`invalid pattern: ${e.message}`); }

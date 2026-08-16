@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
-import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
+import { SEV, alpha, fmtBytes, fmtHistory, relTime, sevColor } from '../format';
 import { Card, Button, ChartSkeleton, Toggle,
   KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs, Segmented,
   PageHeader, COL } from '../ui';
@@ -42,6 +42,7 @@ const RANGES = [['24h', '24h'], ['7d', '7d'], ['30d', '30d']] as const;
 const CHART_H = 160;
 
 function Throughput() {
+  const app = useApp();
   const [range, setRange] = useState<Range>('24h');
   const [stats, setStats] = useState<PipelineStats | null>(null);
   const [err, setErr] = useState('');
@@ -72,6 +73,16 @@ function Throughput() {
   const peak = useMemo(() => stats ? Math.max(0, ...stats.buckets.map((b) => b.lines)) : 0, [stats]);
   const fmtCount = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
+  // Drag over a span, land on the lines that made it. The bucket START of the first
+  // and the END of the last, so the window covers the whole span the reader drew —
+  // taking bucket[to] as the end would silently drop its own hour (or day).
+  const showInLogs = (a: number, b: number) => {
+    if (!stats) return;
+    const from = stats.buckets[a].bucket;
+    const to = Math.min(Date.now(), stats.buckets[b].bucket + stats.step);
+    app.setNav('logs', `?from=${from}&to=${to}`);
+  };
+
   if (err) return <Card className="text-base" style={{ color: SEV.critical}}>{err}</Card>;
 
   // No loading branch: KpiCard and LineChart render their own placeholder when
@@ -79,6 +90,12 @@ function Throughput() {
   const lines = stats?.totals.lines ?? 0;
   const hitRate = stats && lines ? Math.round((stats.totals.events / lines) * 100) : 0;
   const perStep = stats && stats.buckets.length ? Math.round(lines / stats.buckets.length) : 0;
+  const bytesPerStep = stats && stats.buckets.length
+    ? Math.round(stats.totals.bytes / stats.buckets.length) : 0;
+  // The capacity number. Only real when the minute counters reach into the range —
+  // otherwise the card says so instead of dressing an hourly average up as a
+  // per-second rate (see PipelineStats.peak).
+  const peakMin = stats?.peak?.source === 'minute' ? stats.peak : null;
   return (
     <>
       <div className="row row-wrap" style={{ justifyContent: 'space-between' }}>
@@ -92,27 +109,36 @@ function Throughput() {
         <KpiCard label="LOG LINES" value={stats ? fmtCount(lines) : null} color={SEV.cyan}
           spark={stats?.buckets.map((b) => b.lines)}
           sub={stats ? `≈ ${fmtCount(perStep)} per ${stepLabel}` : null} />
-        <KpiCard label="VOLUME" value={stats ? fmtBytes(stats.totals.bytes) : null} color={SEV.purple}
+        <KpiCard label={`VOLUME / ${stepLabel.toUpperCase()}`}
+          value={stats ? fmtBytes(bytesPerStep) : null} color={SEV.purple}
           spark={stats?.buckets.map((b) => b.bytes)}
-          sub={stats ? `${fmtBytes(lines ? Math.round(stats.totals.bytes / lines) : 0)} per line` : null} />
+          sub={stats ? `${fmtBytes(stats.totals.bytes)} total · ${fmtBytes(lines ? Math.round(stats.totals.bytes / lines) : 0)}/line` : null} />
         <KpiCard label="CLASSIFIED HITS" value={stats ? fmtCount(stats.totals.events) : null} color={SEV.medium}
           spark={stats?.buckets.map((b) => b.events)}
           sub={stats ? `${hitRate}% of lines matched a rule` : null} />
         <KpiCard label={`PEAK / ${stepLabel.toUpperCase()}`} value={stats ? fmtCount(peak) : null}
           color={SEV.green} sub={stats ? `busiest ${stepLabel} in range` : null} />
+        <KpiCard label="PEAK / MIN" color={SEV.high}
+          value={!stats ? null : peakMin ? fmtCount(peakMin.lines) : '—'}
+          sub={!stats ? null : peakMin
+            ? `≈ ${peakMin.perSecond.toFixed(peakMin.perSecond < 10 ? 1 : 0)} lines/s · ${fmtHistory(peakMin.at!)}`
+            : 'minute counters only cover the last 48h'} />
       </div>
       <div style={{ display: 'grid', gap: 14,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))' }}>
         <Card title={`Log lines per ${stepLabel}`}>
           <LineChart points={stats?.buckets.map((b) => b.lines) ?? null} labels={labels} tips={tips}
+            onSelect={showInLogs} selectLabel="Span"
             color={SEV.cyan} fmt={fmtCount} h={CHART_H} />
         </Card>
         <Card title={`Volume per ${stepLabel}`}>
           <LineChart points={stats?.buckets.map((b) => b.bytes) ?? null} labels={labels} tips={tips}
+            onSelect={showInLogs} selectLabel="Span"
             color={SEV.purple} fmt={fmtBytes} h={CHART_H} />
         </Card>
         <Card title={`Classified hits per ${stepLabel}`}>
           <LineChart points={stats?.buckets.map((b) => b.events) ?? null} labels={labels} tips={tips}
+            onSelect={showInLogs} selectLabel="Span"
             color={SEV.medium} fmt={fmtCount} h={CHART_H} />
         </Card>
       </div>
@@ -461,6 +487,15 @@ function Scout() {
     } catch (ex) { setErr(ex instanceof ApiError ? ex.message : 'network error'); }
     finally { setBusyId(null); }
   };
+  // The template is masked, so it matches no raw line — the server hands us the
+  // longest LITERAL run to search for instead, and the row's own first/last seen
+  // becomes the window. Clamped to now so a clock skew cannot produce a future
+  // window that matches nothing.
+  const showLogs = (t: ScoutTemplate) => {
+    const to = Math.min(Date.now(), t.lastSeen + 60000);
+    const from = Math.min(t.firstSeen, to - 3600000);
+    app.setNav('logs', `?q=${encodeURIComponent(t.filter || '')}&from=${from}&to=${to}`);
+  };
   const dismiss = async (t: ScoutTemplate) => {
     setBusyId(t.id);
     try { await api.post(`/api/admin/scout/${t.id}/dismiss`, {}); load(); }
@@ -517,6 +552,10 @@ function Scout() {
                 ) : <span className="text-text3">—</span>}
               </span>
               <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                {/* Not admin-only: reading the lines a template stands for is what
+                    everyone does first, and it only opens a filtered log view. */}
+                <Button size="sm" disabled={!t.filter} onClick={() => showLogs(t)}
+                  title="Open the log lines this template was mined from">Logs</Button>
                 {isAdmin && <>
                   <Button size="sm" disabled={busyId === t.id} onClick={() => suggest(t)}
  title="Ask the org's LLM for a name + severity">

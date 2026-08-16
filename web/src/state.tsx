@@ -10,16 +10,16 @@ export interface AppState {
   user: User | null;
   setUser: (u: User | null, csrf?: string) => void;
   orgs: OrgMembership[];
-  activeOrgId: number | null;
-  switchOrg: (orgId: number) => Promise<void>;
-  createOrg: (orgName: string) => Promise<number>;
+  activeOrgId: string | null;
+  switchOrg: (orgId: string) => Promise<void>;
+  createOrg: (orgName: string) => Promise<string>;
   reloadOrgs: () => Promise<void>;
   edition: string | null;
   // this instance can send mail — invitations go out as a link, not a password
   mailConfigured: boolean;
   theme: string; setTheme: (t: string) => void;
   density: string; setDensity: (d: string) => void;
-  nav: string; setNav: (n: string) => void;
+  nav: string; setNav: (n: string, search?: string) => void;
   events: EventRow[];
   logs: LogRow[];
   // first load per org still in flight — consumers show skeletons instead of
@@ -122,6 +122,45 @@ export function useOverlayParam(key: string): [number | null, (id: number | null
 }
 
 /**
+ * A page's FILTER, in the URL — `/app/logs?q=billingd&from=…&to=…`.
+ *
+ * Same argument as tabs and overlays: a filtered view is a place, and a place has an
+ * address. "The 4 minutes where ingest spiked" is unshareable while it lives in
+ * useState, and it is exactly what someone pastes into a handover.
+ *
+ * **replace**, not push — unlike a tab or an overlay. A filter is refined by typing,
+ * and pushing per keystroke turns the back button into an undo buffer for a text
+ * field. The entry that matters was already pushed by whoever navigated here.
+ *
+ * `keys` must be a stable (module-level) array: it is a hook dependency.
+ */
+export function useQueryState(keys: readonly string[]):
+  [Record<string, string>, (patch: Record<string, string | null>) => void] {
+  const read = React.useCallback(() => {
+    const sp = new URLSearchParams(location.search);
+    const out: Record<string, string> = {};
+    for (const k of keys) { const v = sp.get(k); if (v) out[k] = v; }
+    return out;
+  }, [keys]);
+  const [params, setParams] = useState(read);
+  useEffect(() => {
+    const onPop = () => setParams(read());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [read]);
+  const set = React.useCallback((patch: Record<string, string | null>) => {
+    const url = new URL(location.href);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === '') url.searchParams.delete(k);
+      else url.searchParams.set(k, v);
+    }
+    history.replaceState(history.state, '', url.pathname + url.search);
+    setParams(read());
+  }, [read]);
+  return [params, set];
+}
+
+/**
  * A page's tab, in the URL — `/app/pipeline/classifiers` rather than state nobody
  * can link to. Every tabbed page uses this; a tab that lives only in useState
  * cannot be shared, bookmarked, or reached by the back button, and reloading the
@@ -164,7 +203,7 @@ export function useTab<T extends string>(ids: readonly T[], fallback?: T): [T, (
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [orgs, setOrgs] = useState<OrgMembership[]>([]);
-  const [activeOrgId, setActiveOrgId] = useState<number | null>(null);
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
   const [edition, setEdition] = useState<string | null>(null);
   const [mailConfigured, setMailConfigured] = useState(false);
   const [theme, setThemeState] = useState(lsGet('opscat-theme', 'dark'));
@@ -188,12 +227,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .then((r) => { setEdition(r.edition); setMailConfigured(!!r.auth?.mail); }).catch(() => {});
   }, []);
 
-  const setNav = (n: string) => {
+  // `search` carries a filter to the page being opened ('?q=…&from=…'): Scout links
+  // to the lines behind a template, the throughput chart to the lines under a
+  // dragged-over spike. It goes through THIS function rather than an <a href>, so
+  // the jump stays a SPA navigation and keeps the session's state.
+  const setNav = (n: string, search = '') => {
     setNavState(n);
     // the new URL carries no ?event, so the slide-over cannot stay open over the
     // page it was not opened from — the URL is the truth, both ways
     setSelectedEventState(null);
-    history.pushState(null, '', `/app/${n}`);
+    history.pushState(null, '', `/app/${n}${search}`);
   };
 
   /**
@@ -229,7 +272,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     .catch(() => { /* session gone */ });
 
   // switch the org this session acts in; the data effect below reloads for it
-  const switchOrg = async (orgId: number) => {
+  const switchOrg = async (orgId: string) => {
     if (orgId === activeOrgId) return;
     await api.post('/api/auth/switch-org', { orgId });
     setActiveOrgId(orgId);
@@ -238,7 +281,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // self-service: create a new org and land in it (server switches the session)
   const createOrg = async (orgName: string) => {
-    const r = await api.post<{ orgId: number }>('/api/orgs', { orgName });
+    const r = await api.post<{ orgId: string }>('/api/orgs', { orgName });
     await reloadOrgs();
     setActiveOrgId(r.orgId);
     setUserState((u) => (u ? { ...u, role: 'admin' } : u));
@@ -261,7 +304,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setLogsLoading(false));
     // lightweight roster for assignee pickers (works for every role; the full
     // user table with emails stays behind lead+ on the Users page).
-    api.get<{ id: number; name: string; color: string; role: string }[]>('/api/team')
+    api.get<{ id: string; name: string; color: string; role: string }[]>('/api/team')
       .then((team) => setUsers(team.map((u) => ({
         id: u.id, name: u.name, color: u.color, role: u.role,
         email: '', active: true, lastSeenAt: null,

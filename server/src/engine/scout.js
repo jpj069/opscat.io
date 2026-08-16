@@ -94,6 +94,21 @@ function templateToPattern(template, targetIndex = 0) {
   return { pattern, captureGroup: targetIndex >= 1 && targetIndex <= idx ? 1 : null };
 }
 
+/**
+ * The most selective SUBSTRING of a template — what to hand the Logs page so it
+ * can narrow server-side before its own regex filter runs.
+ *
+ * The template itself is useless as a search string: `<IP>` and `<NUM>` appear in
+ * no raw log line, so searching for the masked text finds exactly nothing. The
+ * literal runs between the placeholders are the parts that really occur, and the
+ * longest of them is the one that narrows most.
+ */
+function templateFilter(template) {
+  const literals = String(template).split(/<[A-Z*]+>/).map((p) => p.trim()).filter(Boolean);
+  if (!literals.length) return '';
+  return literals.reduce((a, b) => (b.length > a.length ? b : a)).slice(0, 120);
+}
+
 // ---- mining buffer ----
 
 const MAX_TEMPLATES_PER_ORG = 500;
@@ -175,4 +190,4 @@ function start() {
   flushTimer.unref();
 }
 
-module.exports = { start, flush, mask, templateToPattern, MASK_VALUE };
+module.exports = { start, flush, mask, templateToPattern, templateFilter, MASK_VALUE };

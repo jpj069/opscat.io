@@ -3,7 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { db, getSetting, getOrgSetting, listMemberships, getMembership } = require('../db');
 const config = require('../config');
-const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError } = require('../util');
+const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError, isOrgId } = require('../util');
 const sec = require('../security');
 const edition = require('../edition');
 const mailer = require('../mailer');
@@ -156,8 +156,8 @@ router.get('/orgs', sec.requireSession, (req, res) => {
 router.post('/switch-org', sec.requireSession, (req, res) => {
   // Switching organizations is a Cloud-edition feature; community is single-org.
   if (!edition.isCloud()) return httpError(res, 403, 'switching organizations is a Cloud feature');
-  const orgId = parseInt(req.body && req.body.orgId, 10);
-  if (!Number.isInteger(orgId) || orgId <= 0) return httpError(res, 400, 'orgId required');
+  const orgId = String((req.body && req.body.orgId) || '').trim();
+  if (!isOrgId(orgId)) return httpError(res, 400, 'orgId required');
   // Only orgs the user is a member of. (Super-admins target other orgs through
   // the platform console's X-OpsCat-Org header, not this endpoint.)
   if (!getMembership(req.user.id, orgId)) return httpError(res, 403, 'not a member of that organization');

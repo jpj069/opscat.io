@@ -1,29 +1,47 @@
 // LogsPage — historical log search with regex filter and live tail for short windows.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useQueryState } from '../state';
 import { api } from '../api';
-import { fmtDateTime, logSevColor } from '../format';
+import { SEV, alpha, fmtDateTime, fmtHistory, logSevColor } from '../format';
 import { Card, Button, TableSkeleton, PageHeader, Input, COL} from '../ui';
 import { Select } from '../Select';
 import type { LogRow } from '../types';
 
 const HOURS = [1, 2, 6, 12, 24];
+// q = the regex/substring filter, from/to = an ABSOLUTE window a link can name
+// (Scout's template, a spike dragged over on the throughput chart)
+const LOG_PARAMS = ['q', 'from', 'to', 'hours'] as const;
 // Time | Device | Line
 const COLS = [COL.time, COL.text, COL.textWide].join(' ');
 
 export default function LogsPage() {
   const app = useApp();
-  const [hours, setHours] = useState(2);
-  const [filter, setFilter] = useState('');
+  const [params, setParams] = useQueryState(LOG_PARAMS);
+  const filter = params.q || '';
+  const from = Number(params.from) || 0;
+  const to = Number(params.to) || 0;
+  const windowed = from > 0;
+  const hours = Number(params.hours) || 2;
   const [fetched, setFetched] = useState<LogRow[] | null>(null);
 
   useEffect(() => {
     setFetched(null);
-    api.get<LogRow[]>(`/api/logs?hours=${hours}&limit=1000`).then(setFetched).catch(() => setFetched([]));
-  }, [hours]);
+    // The server narrows by substring; the client then applies the same string as a
+    // REGEX over what came back. Sending it as `q` too is what makes a filtered deep
+    // link work at all — without it the window's first 1000 lines are fetched and
+    // the interesting ones may not be among them.
+    const qs = windowed
+      ? `from=${from}&to=${to || Date.now()}`
+      : `hours=${hours}`;
+    const search = filter.trim() ? `&q=${encodeURIComponent(filter.trim())}` : '';
+    api.get<LogRow[]>(`/api/logs?${qs}&limit=1000${search}`)
+      .then(setFetched).catch(() => setFetched([]));
+  }, [hours, from, to, windowed, filter]);
 
-  // For short windows with no active filter, merge in the live stream.
-  const liveMerge = hours <= 2 && !filter.trim();
+  // Live tail only for a short RELATIVE window with no filter — a named window in
+  // the past cannot grow, and merging the live stream into it would show lines from
+  // outside the very span the link was about.
+  const liveMerge = !windowed && hours <= 2 && !filter.trim();
 
   const base = useMemo(() => {
     const src = fetched || [];
@@ -58,11 +76,22 @@ export default function LogsPage() {
       <PageHeader title="Logs" />
 
       <div className="row row-wrap" style={{ gap: 10 }}>
-        <Select title="Time range" value={String(hours)} onChange={(v) => setHours(Number(v))}
-          options={HOURS.map((h) => ({ value: String(h), label: `${h} h` }))} />
-        <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter (regex)…"
-          style={{ flex: '1 1 150px', maxWidth: 400 }} />
-        <Button size="sm" onClick={() => setFilter('')}>Clear</Button>
+        {windowed ? (
+          <span className="row" style={{ gap: 8 }}>
+            <span className="pill mono text-xs" style={{ color: SEV.cyan,
+              background: alpha(SEV.cyan, 0.12), border: `1px solid ${alpha(SEV.cyan, 0.3)}` }}>
+              {fmtHistory(from)} — {to ? fmtHistory(to) : 'now'}
+            </span>
+            <Button size="sm" onClick={() => setParams({ from: null, to: null })}>Clear window</Button>
+          </span>
+        ) : (
+          <Select title="Time range" value={String(hours)}
+            onChange={(v) => setParams({ hours: v })}
+            options={HOURS.map((h) => ({ value: String(h), label: `${h} h` }))} />
+        )}
+        <Input value={filter} onChange={(e) => setParams({ q: e.target.value })}
+          placeholder="filter (regex)…" style={{ flex: '1 1 150px', maxWidth: 400 }} />
+        <Button size="sm" onClick={() => setParams({ q: null })}>Clear</Button>
         <div style={{ flex: 1 }} />
         <span className="mono text-xs text-text3">{rows.length} lines</span>
       </div>
@@ -83,6 +112,15 @@ export default function LogsPage() {
           ) : rows.length === 0 ? (
             <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
               {filter.trim() ? 'no matching log lines' : 'no logs in window'}
+              {/* A named window in the past can be empty simply because the lines
+                  aged out — log retention defaults to 7 days. Saying so beats an
+                  empty table that reads like a broken link. */}
+              {windowed && from < Date.now() - 86400000 && (
+                <div className="text-xs" style={{ marginTop: 6 }}>
+                  This window is older than a day — the lines may have passed the
+                  retention period.
+                </div>
+              )}
             </div>
           ) : rows.map((l, i) => (
             <div key={`${l.ts}-${i}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 8,

@@ -4,7 +4,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { db } = require('../db');
-const { now, sha256, clampInt, isStr, optStr, httpError, SseHub, RateLimiter } = require('../util');
+const { now, sha256, clampInt, isStr, optStr, httpError, SseHub, RateLimiter, isId } = require('../util');
 const config = require('../config');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
@@ -247,21 +247,28 @@ router.patch('/cases/:id', (req, res) => {
 });
 
 // ---- logs ----
+// `hours` is the relative window the page has always used. `from`/`to` are an
+// ABSOLUTE window, which is what a link from elsewhere needs: "the lines behind
+// this Scout template" and "the lines in the spike you dragged over on the
+// throughput chart" both name a fixed span in the past, and re-deriving it as
+// "hours ago" turns stale the moment the tab is left open.
 router.get('/logs', (req, res) => {
-  const hours = clampInt(req.query.hours, 1, 168, 2);
   const limit = clampInt(req.query.limit, 1, 1000, 300);
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
-  const since = now() - hours * 3600000;
-  let rows;
-  if (q) {
+  const t = now();
+  const from = clampInt(req.query.from, 0, Number.MAX_SAFE_INTEGER, 0);
+  const to = clampInt(req.query.to, 0, Number.MAX_SAFE_INTEGER, 0);
+  const since = from || t - clampInt(req.query.hours, 1, 720, 2) * 3600000;
+  const until = to || Number.MAX_SAFE_INTEGER;
+  const where = 'ts >= ? AND ts <= ? AND org_id = ?';
+  const args = [since, until, req.orgId];
+  const rows = q
     // plain substring match (safe); regex filtering happens client-side
-    rows = db.prepare(`SELECT ts, device, line, sev FROM logs
-      WHERE ts >= ? AND org_id = ? AND (line LIKE ? OR device LIKE ?) ORDER BY ts DESC LIMIT ?`)
-      .all(since, req.orgId, `%${q}%`, `%${q}%`, limit);
-  } else {
-    rows = db.prepare('SELECT ts, device, line, sev FROM logs WHERE ts >= ? AND org_id = ? ORDER BY ts DESC LIMIT ?')
-      .all(since, req.orgId, limit);
-  }
+    ? db.prepare(`SELECT ts, device, line, sev FROM logs
+        WHERE ${where} AND (line LIKE ? OR device LIKE ?) ORDER BY ts DESC LIMIT ?`)
+      .all(...args, `%${q}%`, `%${q}%`, limit)
+    : db.prepare(`SELECT ts, device, line, sev FROM logs
+        WHERE ${where} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
   res.json(rows);
 });
 
@@ -614,7 +621,7 @@ router.post('/incidents', sec.requireRole('lead'), (req, res) => {
   const row = inc.create(req.orgId, req.user.id, {
     title: b.title, severity: clampInt(b.severity, 0, 100, 50),
     message: isStr(b.message, 2000) ? b.message : undefined,
-    components, assigneeId: Number.isInteger(b.assigneeId) ? b.assigneeId : null,
+    components, assigneeId: isId(b.assigneeId) ? b.assigneeId : null,
   });
   sec.audit(req.user.id, 'incident_create', b.title, req.orgId);
   res.json(inc.view(row));
@@ -674,7 +681,7 @@ router.post('/cases/:id/promote', sec.requireRole('lead'), (req, res) => {
   if (components === null) return httpError(res, 400, 'bad components');
   const result = inc.promote(req.orgId, req.user.id, Number(req.params.id), {
     title: b.title, severity: Number.isFinite(b.severity) ? clampInt(b.severity, 0, 100, 50) : undefined,
-    components, assigneeId: Number.isInteger(b.assigneeId) ? b.assigneeId : undefined,
+    components, assigneeId: isId(b.assigneeId) ? b.assigneeId : undefined,
   });
   if (!result) return httpError(res, 404, 'case not found');
   if (result.already) return res.json({ ok: true, already: true, incident: result.already });
