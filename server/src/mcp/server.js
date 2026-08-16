@@ -63,13 +63,16 @@ function registerResources(server, principal) {
     },
     async (uri) => {
       // Reuse the exact payload the public page renders, so the agent and the
-      // public see the same thing.
-      const { statusData } = require('../routes/public');
+      // public see the same thing. Since schema v18 that payload is per PAGE,
+      // and the org's default page is the one this resource has always meant.
+      const { statusData } = require('../routes/status');
+      const statusPages = require('../lib/status-pages');
+      const page = statusPages.defaultPage(principal.orgId);
       return {
         contents: [{
           uri: uri.href,
           mimeType: 'application/json',
-          text: JSON.stringify(statusData(principal.orgId), null, 2),
+          text: JSON.stringify(page ? statusData(page) : { error: 'no status page' }, null, 2),
         }],
       };
     },

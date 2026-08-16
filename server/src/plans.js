@@ -11,34 +11,49 @@ const { db } = require('./db');
 // + the workspace switcher) — is enabled on EVERY cloud plan on purpose: multi-org is a
 // baseline cloud capability, not an Enterprise-only upsell. This features array is the
 // single place to change that per plan (drop it from a tier to gate multi-org there).
+//
+// STATUS PAGE: there is deliberately no `status_page` flag. The page itself, and
+// its identity — logo, favicon, accent colour, light/dark, description, links —
+// are ungated on every plan including Free. A status page is public, so a Free
+// one is a shop window: making it wear a generic OpsCat mark advertises us badly
+// and pressures nobody into upgrading. What is paid for is DISTANCE from OpsCat
+// and the things that cost us to run:
+//   status_domain      (pro+)        status.acme.com — cert issuance + host mapping
+//   status_whitelabel  (business+)   hide the "Powered by OpsCat" footer
+//   status_css         (business+)   arbitrary CSS — unbounded support surface
+//   status_pages_multi (enterprise)  several pages / private audience pages
+// `statusSubscribers` is a limit rather than a flag: it grows with the customer's
+// own success, which is the fairest axis to charge on (and the one Statuspage
+// monetises hardest).
 const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
     limits: { users: 3, retentionDays: 7, checks: 3, managedLocations: 5, minIntervalS: 60, snmpTargets: 2,
-      agents: 2, apiKeys: 2, ingestLinesPerDay: 50000 },
-    features: ['status_page', 'email_alerts', 'multi_org'],
+      agents: 2, apiKeys: 2, ingestLinesPerDay: 50000, statusSubscribers: 50 },
+    features: ['email_alerts', 'multi_org'],
   },
   pro: {
     key: 'pro', name: 'Pro', priceMonthly: 29, priceYearly: 290,
     limits: { users: 10, retentionDays: 30, checks: 25, managedLocations: 10, minIntervalS: 30, snmpTargets: 20,
-      agents: 25, apiKeys: 10, ingestLinesPerDay: 1000000 },
-    features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
-      'sentry', 'multi_org'],
+      agents: 25, apiKeys: 10, ingestLinesPerDay: 1000000, statusSubscribers: 500 },
+    features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
+      'sentry', 'multi_org', 'status_domain'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
     limits: { users: 30, retentionDays: 90, checks: 100, managedLocations: 25, minIntervalS: 15, snmpTargets: -1,
-      agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000 },
-    features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
-      'sentry', 'priority_support', 'sensor_autoprovision', 'bridge', 'multi_org'],
+      agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000, statusSubscribers: 5000 },
+    features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
+      'sentry', 'priority_support', 'sensor_autoprovision', 'bridge', 'multi_org',
+      'status_domain', 'status_whitelabel', 'status_css'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
     limits: { users: -1, retentionDays: 365, checks: -1, managedLocations: -1, minIntervalS: 15, snmpTargets: -1,
-      agents: -1, apiKeys: -1, ingestLinesPerDay: -1 },
-    features: ['status_page', 'email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
+      agents: -1, apiKeys: -1, ingestLinesPerDay: -1, statusSubscribers: -1 },
+    features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
       'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla',
-      'bridge', 'multi_org'],
+      'bridge', 'multi_org', 'status_domain', 'status_whitelabel', 'status_css', 'status_pages_multi'],
   },
 };
 
@@ -57,6 +72,11 @@ const COUNTERS = {
   snmpTargets: (orgId) => db.prepare('SELECT COUNT(*) c FROM snmp_targets WHERE org_id = ?').get(orgId).c,
   agents: (orgId) => db.prepare('SELECT COUNT(*) c FROM agents WHERE org_id = ?').get(orgId).c,
   apiKeys: (orgId) => db.prepare('SELECT COUNT(*) c FROM api_keys WHERE org_id = ? AND active = 1').get(orgId).c,
+  // Only CONFIRMED subscribers count. A pending double-opt-in may never be
+  // completed, and letting unconfirmed rows consume the allowance would let a
+  // stranger exhaust someone else's quota by typing addresses into the form.
+  statusSubscribers: (orgId) => db.prepare(
+    'SELECT COUNT(*) c FROM status_subscribers WHERE org_id = ? AND confirmed_at IS NOT NULL').get(orgId).c,
 };
 
 // module-level to allow the cloud edition to force limit enforcement; the

@@ -415,6 +415,141 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_event_timeline ON event_timeline(event_id, ts);
     `);
   },
+  // idx 17 -> version 18: the status PAGE becomes a first-class row.
+  //
+  // (This shipped alongside a v17 that created `status_assets` keyed by org.
+  // That step was folded in here when it turned out never to have been merged:
+  // no database exists in that intermediate state, schema.sql builds the table
+  // in its final page-keyed shape, and the rebuild below is guarded on the old
+  // column so a branch checkout that DID run it still migrates cleanly.)
+  //
+  // Until now "the status page" was implicit — one per org, its settings spread
+  // through org_settings, addressed by the ORG's slug. Three features need it to
+  // be a thing you can have several of: a custom domain (which points at one
+  // page, not at an org), a private audience page, and per-page branding. So the
+  // page gets a table, its branding moves out of org_settings into COLUMNS (the
+  // set is fixed and small — a KV table would buy nothing), and every org gets a
+  // default page seeded from what it already had. `/status` and `/status/:slug`
+  // keep working because the default page inherits the org's slug.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS status_pages (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id             INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        slug               TEXT NOT NULL UNIQUE,
+        name               TEXT NOT NULL,
+        is_default         INTEGER NOT NULL DEFAULT 0,
+        published          INTEGER NOT NULL DEFAULT 1,
+        visibility         TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','private')),
+        access_token       TEXT,
+        domain             TEXT,
+        domain_token       TEXT,
+        domain_verified_at INTEGER,
+        accent             TEXT NOT NULL DEFAULT '',
+        theme              TEXT NOT NULL DEFAULT 'dark',
+        description        TEXT NOT NULL DEFAULT '',
+        support_url        TEXT NOT NULL DEFAULT '',
+        legal_url          TEXT NOT NULL DEFAULT '',
+        hide_powered       INTEGER NOT NULL DEFAULT 0,
+        custom_css         TEXT NOT NULL DEFAULT '',
+        created_at         INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_status_pages_org ON status_pages(org_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_status_pages_domain
+        ON status_pages(domain) WHERE domain IS NOT NULL AND domain <> '';
+
+      -- which components a page shows. NO rows for a page = every component of
+      -- the org, which is what the default page wants and saves backfilling it.
+      CREATE TABLE IF NOT EXISTS status_page_components (
+        page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+        component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+        PRIMARY KEY (page_id, component_id)
+      );
+    `);
+
+    // one default page per org, carrying over everything it had. Guarded like
+    // every migration here: on a FRESH install schema.sql has already built the
+    // v18 shape and this still runs, so it must be a no-op the second time.
+    const orgs = db.prepare(`SELECT id, slug FROM organizations o
+      WHERE NOT EXISTS (SELECT 1 FROM status_pages p WHERE p.org_id = o.id AND p.is_default = 1)`).all();
+    const setting = db.prepare('SELECT value FROM org_settings WHERE org_id = ? AND key = ?');
+    const get = (orgId, key, dflt) => {
+      const r = setting.get(orgId, key);
+      return r === undefined ? dflt : r.value;
+    };
+    const ins = db.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published,
+        accent, theme, description, support_url, legal_url, hide_powered, created_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const t = Date.now();
+    for (const o of orgs) {
+      ins.run(o.id, o.slug, get(o.id, 'org_name', 'OpsCat'),
+        get(o.id, 'status_published', '1') === '1' ? 1 : 0,
+        get(o.id, 'status_accent', ''),
+        get(o.id, 'status_theme', 'dark') === 'light' ? 'light' : 'dark',
+        get(o.id, 'status_description', ''),
+        get(o.id, 'status_support_url', ''),
+        get(o.id, 'status_legal_url', ''),
+        get(o.id, 'status_hide_powered', '0') === '1' ? 1 : 0,
+        t);
+    }
+    // the branding keys now live on the page row; leaving copies behind in
+    // org_settings would give the next reader two sources of truth
+    db.prepare(`DELETE FROM org_settings WHERE key IN
+      ('status_accent','status_theme','status_description','status_support_url',
+       'status_legal_url','status_hide_powered')`).run();
+
+    // assets hang off the page, not the org (v17 keyed them by org_id)
+    if (hasColumn('status_assets', 'org_id')) {
+      db.exec(`
+        CREATE TABLE status_assets_v18 (
+          page_id    INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+          kind       TEXT NOT NULL CHECK (kind IN ('logo','favicon')),
+          mime       TEXT NOT NULL,
+          bytes      BLOB NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (page_id, kind)
+        );
+        INSERT INTO status_assets_v18 (page_id, kind, mime, bytes, updated_at)
+          SELECT p.id, a.kind, a.mime, a.bytes, a.updated_at
+            FROM status_assets a JOIN status_pages p ON p.org_id = a.org_id AND p.is_default = 1;
+        DROP TABLE status_assets;
+        ALTER TABLE status_assets_v18 RENAME TO status_assets;
+      `);
+    }
+
+    // Subscribers belong to the page they signed up on. This is a table REBUILD
+    // rather than an added column because the unique key has to move too: with
+    // UNIQUE(org_id, email) the same person subscribing to a second page of the
+    // same org would collide with their first subscription and be silently told
+    // "already subscribed" — which defeats the whole idea of an audience.
+    if (!hasColumn('status_subscribers', 'page_id')) {
+      db.exec(`
+        CREATE TABLE status_subscribers_v18 (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id       INTEGER NOT NULL,
+          page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+          email        TEXT NOT NULL,
+          token_hash   TEXT NOT NULL,
+          confirmed_at INTEGER,
+          created_at   INTEGER NOT NULL,
+          last_sent_at INTEGER,
+          UNIQUE (page_id, email)
+        );
+        INSERT INTO status_subscribers_v18
+            (id, org_id, page_id, email, token_hash, confirmed_at, created_at, last_sent_at)
+          SELECT s.id, s.org_id, p.id, s.email, s.token_hash, s.confirmed_at, s.created_at, s.last_sent_at
+            FROM status_subscribers s
+            JOIN status_pages p ON p.org_id = s.org_id AND p.is_default = 1;
+        DROP TABLE status_subscribers;
+        ALTER TABLE status_subscribers_v18 RENAME TO status_subscribers;
+        CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
+      `);
+    }
+    // outside the guard: schema.sql cannot create this one (it runs before the
+    // migrations, when page_id may not exist yet), so a FRESH install — where
+    // the rebuild above is correctly skipped — would otherwise never get it
+    db.exec('CREATE INDEX IF NOT EXISTS idx_status_subs_page ON status_subscribers(page_id, confirmed_at)');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

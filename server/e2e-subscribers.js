@@ -53,6 +53,8 @@ require('./src/index.js'); // boots the app on :3123
 
 const { db } = require('./src/db');
 const subs = require('./src/lib/subscribers');
+const statusPages = require('./src/lib/status-pages');
+const defaultPage = () => statusPages.defaultPage(1);
 const inc = require('./src/lib/incidents');
 
 const BASE = 'http://127.0.0.1:3123';
@@ -107,7 +109,10 @@ async function until(fn, ms = 3000) {
 async function main() {
   chk('server boots and answers /api/health', await waitForServer());
   chk('user_version is at least 16', db.pragma('user_version', { simple: true }) >= 16);
-  chk('status_subscribers table exists', db.pragma('table_info(status_subscribers)').length === 7);
+  // 8 columns since schema v18: page_id joined the row when subscriptions moved
+  // from the org to the PAGE they were made on.
+  chk('status_subscribers table exists', db.pragma('table_info(status_subscribers)').length === 8);
+  chk('…and is keyed to a page', db.pragma('table_info(status_subscribers)').some((c) => c.name === 'page_id'));
 
   const admin = await login('seed-admin@e2e.test', 'seed-admin-password-1');
   chk('seeded admin can sign in', admin.status === 200, String(admin.status));
@@ -150,10 +155,10 @@ async function main() {
 
   // second subscriber through the lib (the HTTP door is proven; the limiter
   // would otherwise make the harness wait out its bucket)
-  await subs.subscribe(1, 'bob@e2e.test');
+  await subs.subscribe(defaultPage(), 'bob@e2e.test');
   const bobConfirm = linkIn(mailsTo('bob@e2e.test')[0], '/status/confirm\\?token=');
   await page(bobConfirm);
-  await subs.subscribe(1, 'pending@e2e.test'); // stays unconfirmed on purpose
+  await subs.subscribe(defaultPage(), 'pending@e2e.test'); // stays unconfirmed on purpose
   chk('fixtures: two confirmed, one pending',
     !!row('bob@e2e.test').confirmed_at && !row('pending@e2e.test').confirmed_at);
 
@@ -277,6 +282,33 @@ async function main() {
   chk('…while the feed keeps working', (await page('/status/feed.xml')).status === 200);
   await call(admin, 'PATCH', '/api/admin/settings', { status_subscribers_enabled: '1' });
   chk('switched back on, the form returns', (await page('/status')).text.includes('Get status updates'));
+
+  // ── the flow stays inside the customer's brand ────────────────────────────
+  // A visitor who clicks a confirmation link from a light, logo-bearing status
+  // page and lands on a black OpsCat box has left the brand mid-flow — which is
+  // the one thing a status page is bought to avoid. Mails are the same
+  // conversation and get the same treatment.
+  await call(admin, 'PATCH', `/api/admin/status-pages/${defaultPage().id}`,
+    { accent: '#0aa36f', theme: 'light', name: 'Acme' });
+  // Straight at the library: the public endpoint's 3/min limiter has long been
+  // spent by the checks above, and what is under test here is the MAIL, not the
+  // front door that was already exercised at the top of this file.
+  await subs.subscribe(defaultPage(), 'branded@e2e.test');
+  chk('a confirm mail goes out for the branded page', await until(() => mailsTo('branded@e2e.test').length === 1));
+  const bm = mailsTo('branded@e2e.test')[0];
+  chk('the confirm mail carries the page accent', bm.html.includes('#0aa36f'), bm.html.slice(0, 120));
+  chk('…the light palette rather than OpsCat dark', bm.html.includes('#ffffff'));
+  chk('…and the page name, not the product name', /Acme/.test(bm.subject), bm.subject);
+  const brandedConfirm = linkIn(bm, '/status/confirm\\?token=');
+  const confirmPage = await page(brandedConfirm);
+  chk('the confirm page renders in the page palette, not a fixed dark theme',
+    confirmPage.text.includes('#0aa36f') && confirmPage.text.includes('background:#ffffff'));
+  chk('…names the page it belongs to', confirmPage.text.includes('Acme'));
+  chk('…and is noindex (it is a one-visitor page)', confirmPage.text.includes('content="noindex"'));
+
+  const unsubForm = await page('/status/unsubscribe?token=deadbeefdeadbeefdeadbeef');
+  chk('an unsubscribe form for an unknown token still renders, neutrally',
+    unsubForm.status === 200 && !unsubForm.text.includes('#0aa36f'));
 
   // ── wrap up ───────────────────────────────────────────────────────────────
   const fails = R.filter((l) => l.startsWith('FAIL'));

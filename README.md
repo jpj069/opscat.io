@@ -29,8 +29,14 @@ edition with `OPSCAT_EDITION=community` (default).
   incident.io or status.io page works; vendor incidents raise events/alerts and
   can mirror onto your own status-page components.
 - **Incidents & status page** — incident timeline + RCA editor, public status page
-  at `/status` with 45-day component uptime and Downdetector-style anonymous
-  "report a problem" submissions (spikes raise alerts before monitoring catches up).
+  at `/status` with 45-day component uptime, e-mail subscribers (double-opt-in) +
+  Atom feed, and Downdetector-style anonymous "report a problem" submissions
+  (spikes raise alerts before monitoring catches up). Brandable: your logo,
+  favicon, accent colour, light or dark, description and support links — included
+  on every plan, because a status page is public and should look like yours.
+  Optionally on your own domain (`status.acme.com`, certificate issued
+  automatically after a DNS check), with your own CSS, and as several pages —
+  including private, link-only ones for a specific audience.
 - **UI** — React SPA (`/app`): live monitor with streaming logs (SSE), dashboard,
   cases, analytics, alert rules, synthetics, terminal-style Classic View, user & key
   management. Dark/light themes. Password, magic-link and GitHub login (Google +

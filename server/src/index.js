@@ -25,6 +25,9 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
 // unauthenticated: health + public status page
+// BEFORE public.js: a status page on its own verified domain answers at that
+// host's root, and public.js owns `/` for the marketing site.
+app.use(require('./routes/status'));
 app.use(require('./routes/public'));
 
 // open ingest surface (API-key / agent-token / probe-key auth)

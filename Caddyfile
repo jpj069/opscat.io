@@ -25,3 +25,37 @@
 bridge.{$OPSCAT_DOMAIN:localhost} {
 	reverse_proxy livekit:7880
 }
+
+# ── Optional: status pages on your customers' own domains ────────────────────
+# The app already serves a page by Host once its domain is verified in the UI
+# (Status Page → Branding & pages → Custom domain). Caddy still needs to answer
+# on that hostname and hold a certificate for it. Two ways:
+#
+#   1. Simple — add one vhost per domain:
+#        status.acme.com {
+#          import  # …or repeat the reverse_proxy lines from the block above
+#        }
+#
+#   2. On-demand TLS — issue certificates automatically for any verified
+#      domain. UNCOMMENT BOTH PARTS TOGETHER. The `ask` endpoint is not
+#      optional: without it Caddy will request a certificate for ANY hostname
+#      pointed at this server, which burns the Let's Encrypt rate limit and
+#      makes your box a free certificate mint for strangers.
+#
+# {
+# 	on_demand_tls {
+# 		ask http://app:3000/api/public/tls-check
+# 	}
+# }
+#
+# :443 {
+# 	tls {
+# 		on_demand
+# 	}
+# 	encode zstd gzip
+# 	@sse path /api/stream
+# 	reverse_proxy @sse app:3000 {
+# 		flush_interval -1
+# 	}
+# 	reverse_proxy app:3000
+# }

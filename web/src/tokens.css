@@ -179,6 +179,22 @@ input:focus, select:focus, textarea:focus { border-color: var(--low); }
    and a <textarea> must not have it — its resize handle sits on the LAYOUT box, which a
    transform does not move, so at 0.875 the handle ends up ~11px below the visible edge. */
 .ctl-ta { width: var(--ctl-w, 100%); }
+
+/* ui.tsx ColorPicker — the swatch half. A native <input type="color"> is a button
+   that opens the OS picker, not a text field, so it takes neither `.ctl` nor the
+   optical scale: there is no value to render at 14px and nothing for iOS to zoom
+   into. All it needs is a fixed size and the app's radius. The vendor pseudo-
+   elements are what actually paint the colour; without them the browser draws its
+   own inset border inside our border. */
+.swatch {
+  width: 34px; height: 34px; flex-shrink: 0; padding: 2px; cursor: pointer;
+  border: 1px solid var(--bg3); border-radius: 6px; background: var(--bg2);
+}
+.swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+.swatch::-webkit-color-swatch-wrapper { padding: 0; }
+.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
+.swatch:disabled { opacity: 0.5; cursor: default; }
+
 @media (max-width: 720px) {
   .ctl {
     font-size: 16px;

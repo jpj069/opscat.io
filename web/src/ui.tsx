@@ -609,6 +609,42 @@ export function Field({ label, children }: { label: string; children: React.Reac
   );
 }
 
+/**
+ * A colour: a swatch you click and a hex you can paste, both editing one value.
+ *
+ * The swatch stays a native `<input type="color">` for the same reason checkboxes
+ * do — it is a button that opens the OS picker, so none of the reasons `Input`
+ * exists (the phone font floor, the optical scale, the width compensation) apply
+ * to it. The hex field beside it IS text, and is the half people paste a brand
+ * colour into, so that one goes through `Input`.
+ *
+ * `onChange` fires only for a complete `#rrggbb`. Typing "#6" must not repaint
+ * the caller with a broken colour on every keystroke, so the field holds its own
+ * draft until it parses — which is also why a controlled `value` has to flow back
+ * into that draft.
+ */
+export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export function ColorPicker({ value, onChange, disabled, placeholder }: {
+  value: string; onChange: (hex: string) => void; disabled?: boolean; placeholder?: string;
+}) {
+  const [draft, setDraft] = React.useState(value);
+  React.useEffect(() => { setDraft(value); }, [value]);
+  const commit = (v: string) => {
+    setDraft(v);
+    if (HEX_COLOR_RE.test(v)) onChange(v.toLowerCase());
+  };
+  return (
+    <span className="row" style={{ gap: 8 }}>
+      <input type="color" className="swatch" aria-label="Pick a colour" disabled={disabled}
+        value={HEX_COLOR_RE.test(draft) ? draft : '#000000'}
+        onChange={(e) => commit(e.target.value)} />
+      <Input className="mono" width={104} value={draft} disabled={disabled} maxLength={7}
+        aria-label="Hex colour" placeholder={placeholder || '#6366f1'}
+        onChange={(e) => commit(e.target.value)} />
+    </span>
+  );
+}
+
 export function GlowDot({ color, size = 8 }: { color: string; size?: number }) {
   return <span style={{ width: size, height: size, borderRadius: '50%', background: color,
     boxShadow: `0 0 6px ${color}`, display: 'inline-block', flexShrink: 0 }} />;

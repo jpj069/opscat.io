@@ -515,17 +515,79 @@ CREATE TABLE IF NOT EXISTS component_owners (
 -- public status-page subscribers (docs/INCIDENTS-V2.md slice 2): double-opt-in
 -- by mail. The token (hashed at rest, mailed in links only) is the subscriber's
 -- one credential — it confirms while pending and unsubscribes once confirmed.
+-- Uniqueness is per PAGE, not per org (schema v18): an audience-specific page
+-- has its own audience, and the same person may legitimately want the public
+-- page AND the partner page. `org_id` is kept alongside `page_id` because every
+-- quota, admin list and rate limit is still an org-level question.
 CREATE TABLE IF NOT EXISTS status_subscribers (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id       INTEGER NOT NULL,
+  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
   email        TEXT NOT NULL,
   token_hash   TEXT NOT NULL,
   confirmed_at INTEGER,              -- NULL = pending double-opt-in
   created_at   INTEGER NOT NULL,
   last_sent_at INTEGER,              -- confirm-mail resend throttle
-  UNIQUE (org_id, email)
+  UNIQUE (page_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
+-- idx_status_subs_page is created by migration v18, NOT here. This file runs
+-- before the migrations, and on a pre-v18 database the CREATE TABLE above is a
+-- no-op — so an index naming `page_id` would fail on the very databases the
+-- migration exists to bring forward.
+
+-- A status PAGE is a first-class row (schema v18). An org has one default page
+-- (slug = the org's slug, so /status and /status/:slug keep working) and, on the
+-- Enterprise plan, additional ones — an audience-specific page shows a subset of
+-- the components and can be private. Branding lives in COLUMNS rather than a KV
+-- table: the set is fixed and small. `domain` is the page's own hostname, only
+-- ever served once `domain_verified_at` is set (see lib/status-domains.js).
+CREATE TABLE IF NOT EXISTS status_pages (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id             INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  slug               TEXT NOT NULL UNIQUE,
+  name               TEXT NOT NULL,
+  is_default         INTEGER NOT NULL DEFAULT 0,
+  published          INTEGER NOT NULL DEFAULT 1,
+  visibility         TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','private')),
+  access_token       TEXT,             -- private pages: the secret in the link
+  domain             TEXT,
+  domain_token       TEXT,             -- DNS TXT challenge value
+  domain_verified_at INTEGER,
+  accent             TEXT NOT NULL DEFAULT '',
+  theme              TEXT NOT NULL DEFAULT 'dark',
+  description        TEXT NOT NULL DEFAULT '',
+  support_url        TEXT NOT NULL DEFAULT '',
+  legal_url          TEXT NOT NULL DEFAULT '',
+  hide_powered       INTEGER NOT NULL DEFAULT 0,
+  custom_css         TEXT NOT NULL DEFAULT '',
+  created_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_status_pages_org ON status_pages(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_status_pages_domain
+  ON status_pages(domain) WHERE domain IS NOT NULL AND domain <> '';
+
+-- which components a page shows. NO rows = every component of the org, which is
+-- what the default page wants and saves backfilling it on every new component.
+CREATE TABLE IF NOT EXISTS status_page_components (
+  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  PRIMARY KEY (page_id, component_id)
+);
+
+-- status-page branding assets: the customer's own logo and favicon. Stored as
+-- blobs because the SQLite file is the only persisted volume in the Docker
+-- deployment, and because a same-origin `/status/logo` needs no CSP img-src
+-- entry. Raster only (PNG/JPEG/WebP/ICO) — see lib/status-branding.js for why
+-- SVG is refused.
+CREATE TABLE IF NOT EXISTS status_assets (
+  page_id    INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('logo','favicon')),
+  mime       TEXT NOT NULL,
+  bytes      BLOB NOT NULL,
+  updated_at INTEGER NOT NULL,         -- drives the ETag
+  PRIMARY KEY (page_id, kind)
+);
 
 CREATE TABLE IF NOT EXISTS incident_updates (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

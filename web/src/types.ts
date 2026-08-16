@@ -109,6 +109,43 @@ export interface Incident {
 export interface StatusReportRow { ts: number; component: string | null; message: string | null; }
 export interface StatusReportsResponse { total: number; reports: StatusReportRow[]; }
 
+// GET /api/admin/status-pages. `resolved` is the SAME object the public page
+// renders with (server/src/lib/status-branding.js brandingFor) — the admin
+// preview reads it instead of re-deriving the palette, so the preview cannot
+// drift away from the page it previews.
+export interface StatusBrandingAsset { mime: string; updatedAt: number }
+export interface StatusBrandingResolved {
+  theme: 'dark' | 'light';
+  palette: { bg: string; surface: string; border: string; borderStrong: string;
+    text: string; heading: string; muted: string; faint: string; field: string; okStrip: string };
+  accent: string; accentDark: string; accentInk: string;
+  logoUrl: string; faviconUrl: string; faviconMime: string;
+  description: string; supportUrl: string; legalUrl: string;
+  hidePowered: boolean; customCss: string;
+}
+export interface StatusDnsRecord { host: string; type: string; value: string }
+export interface StatusPage {
+  id: number; slug: string; name: string; isDefault: boolean;
+  published: boolean; visibility: 'public' | 'private';
+  url: string; accessToken: string | null;
+  domain: string; domainVerifiedAt: number | null;
+  dns: { challenge: StatusDnsRecord; routing: StatusDnsRecord } | null;
+  accent: string; theme: 'dark' | 'light'; description: string;
+  supportUrl: string; legalUrl: string; hidePowered: boolean; customCss: string;
+  componentIds: number[] | null;   // null = every component of the org
+  logo: StatusBrandingAsset | null;
+  favicon: StatusBrandingAsset | null;
+  resolved: StatusBrandingResolved;
+}
+export interface StatusPagesResponse {
+  pages: StatusPage[];
+  limits: { canWhitelabel: boolean; canCustomCss: boolean;
+    canCustomDomain: boolean; canMultiPage: boolean };
+  maxAssetBytes: number;
+  maxCssBytes: number;
+  defaultAccent: string;
+}
+
 export type CompStatus = 'operational' | 'degraded' | 'partial' | 'major' | 'maintenance';
 export interface Component {
   id: number; name: string; group: string; status: CompStatus; ownerId: number | null;

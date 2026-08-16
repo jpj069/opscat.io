@@ -14,6 +14,9 @@ const scoutEngine = require('../engine/scout');
 const llm = require('../llm');
 const voice = require('../voice');
 const statusScale = require('../lib/status-scale');
+const branding = require('../lib/status-branding');
+const statusPages = require('../lib/status-pages');
+const statusDomains = require('../lib/status-domains');
 
 const plans = require('../plans');
 const invites = require('../lib/invites');
@@ -231,6 +234,11 @@ router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {
 });
 
 // ---- settings (admin; safe subset readable by all sessions) ----
+// Status-page branding moved OUT of org_settings in schema v18 — it belongs to
+// a page now, and an org can have several. It lives on /api/admin/status-pages.
+// `status_published` stays here because it is the switch the Settings screen and
+// EE org provisioning have always flipped; it write-throughs to the default page
+// below, so there is still only one truth.
 const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'retention_logs_days', 'onboarding_done'];
 const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal', 'onboarding_source',
   'alert_email_from', 'auth_email_from', 'teams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers',
@@ -258,9 +266,284 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
     } catch { return httpError(res, 400, 'classifiers must be a JSON array of valid patterns'); }
   }
   for (const [k, v] of Object.entries(b)) setOrgSetting(req.orgId, k, v);
+  // `status_published` is the DEFAULT page's publish flag. Kept as a setting for
+  // the Settings screen and EE org provisioning, written through so the page row
+  // — which is what the public routes actually read — never drifts from it.
+  if (b.status_published !== undefined) {
+    const dflt = statusPages.defaultPage(req.orgId);
+    if (dflt) db.prepare('UPDATE status_pages SET published = ? WHERE id = ?')
+      .run(b.status_published === '1' ? 1 : 0, dflt.id);
+  }
   if (b.classifiers) pipelineEngine.loadClassifiers(req.orgId);
   sec.audit(req.user.id, 'settings_update', Object.keys(b).join(','), req.orgId);
   res.json({ ok: true });
+});
+
+// ---- status pages (schema v18) ----------------------------------------------
+//
+// One org has a default page and, on the Enterprise plan, additional ones. All
+// of the branding lives here; the plan gates (`status_whitelabel`, `status_css`,
+// `status_domain`, `status_pages_multi`) are checked on WRITE so an admin gets a
+// clear 403 instead of a switch that silently does nothing — and again on RENDER
+// (lib/status-pages.js) so a downgrade stops the behaviour without destroying
+// the configuration.
+
+const PAGE_ROLE = 'lead';   // read
+const canEditPages = sec.requireRole('admin');
+
+function pageOr404(req, res) {
+  const page = statusPages.pageById(clampInt(req.params.id, 1, 2 ** 31, 0), req.orgId);
+  if (!page) { httpError(res, 404, 'status page not found'); return null; }
+  return page;
+}
+
+function pageDTO(req, page) {
+  // The admin preview always addresses the page by its opscat.io path, never by
+  // its custom domain: the domain may be unverified, or verified but not yet
+  // resolving, and a broken <img> in the admin UI would read as "my logo is
+  // gone". The stub request is what forces that choice explicitly.
+  const b = branding.brandingFor(page, statusPages.basePath({ hostname: '', headers: {} }, page));
+  const compIds = statusPages.componentIdsFor(page);
+  return {
+    id: page.id, slug: page.slug, name: page.name, isDefault: page.is_default === 1,
+    published: page.published === 1, visibility: page.visibility,
+    url: statusPages.absoluteUrl(page),
+    accessToken: page.visibility === 'private' ? page.access_token : null,
+    domain: page.domain || '', domainVerifiedAt: page.domain_verified_at,
+    dns: statusDomains.dnsInstructions(page),
+    accent: page.accent || '', theme: page.theme, description: page.description || '',
+    supportUrl: page.support_url || '', legalUrl: page.legal_url || '',
+    hidePowered: page.hide_powered === 1, customCss: page.custom_css || '',
+    componentIds: compIds,
+    logo: assetDTO(page.id, 'logo'), favicon: assetDTO(page.id, 'favicon'),
+    // the EXACT object the public page renders with, so the admin preview cannot
+    // drift away from the thing it is previewing
+    resolved: b,
+  };
+}
+function assetDTO(pageId, kind) {
+  const a = branding.assetMeta(pageId, kind);
+  return a ? { mime: a.mime, updatedAt: a.updated_at } : null;
+}
+
+router.get('/status-pages', sec.requireRole(PAGE_ROLE), (req, res) => {
+  statusPages.defaultPage(req.orgId); // invariant: an org always has one
+  res.json({
+    pages: statusPages.listPages(req.orgId).map((p) => pageDTO(req, p)),
+    limits: {
+      canWhitelabel: plans.hasFeature(req.org.plan, 'status_whitelabel'),
+      canCustomCss: plans.hasFeature(req.org.plan, 'status_css'),
+      canCustomDomain: plans.hasFeature(req.org.plan, 'status_domain'),
+      canMultiPage: plans.hasFeature(req.org.plan, 'status_pages_multi'),
+    },
+    maxAssetBytes: branding.MAX_ASSET_BYTES,
+    maxCssBytes: branding.MAX_CSS_BYTES,
+    defaultAccent: branding.DEFAULT_ACCENT,
+  });
+});
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+// Slugs that would collide with the fixed segments under /status.
+const RESERVED_SLUGS = ['confirm', 'unsubscribe', 'subscribe', 'report', 'logo', 'favicon', 'feed'];
+
+router.post('/status-pages', canEditPages, (req, res) => {
+  if (!plans.hasFeature(req.org.plan, 'status_pages_multi')) {
+    return httpError(res, 403, 'additional status pages require the Enterprise plan');
+  }
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const slug = String(b.slug || '').trim().toLowerCase();
+  if (!isStr(name, 80)) return httpError(res, 400, 'name required');
+  if (!SLUG_RE.test(slug)) return httpError(res, 400, 'slug must be 2-41 chars of a-z, 0-9 and -');
+  if (RESERVED_SLUGS.includes(slug)) return httpError(res, 400, `"${slug}" is reserved`);
+  if (statusPages.pageBySlug(slug)) return httpError(res, 409, 'that slug is already taken');
+  const visibility = b.visibility === 'private' ? 'private' : 'public';
+  const info = db.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published,
+      visibility, access_token, created_at) VALUES (?, ?, ?, 0, 1, ?, ?, ?)`)
+    .run(req.orgId, slug, name, visibility,
+      visibility === 'private' ? statusPages.newAccessToken() : null, now());
+  const page = statusPages.pageById(info.lastInsertRowid, req.orgId);
+  setPageComponents(page, b.componentIds);
+  sec.audit(req.user.id, 'status_page_create', `${name} (/status/${slug})`, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+});
+
+// The component subset. An EMPTY selection means "all", which is stored as no
+// rows — so a page that shows everything keeps showing everything as components
+// are added, instead of freezing at today's list.
+function setPageComponents(page, ids) {
+  if (!Array.isArray(ids)) return;
+  db.prepare('DELETE FROM status_page_components WHERE page_id = ?').run(page.id);
+  const ins = db.prepare('INSERT OR IGNORE INTO status_page_components (page_id, component_id) VALUES (?, ?)');
+  const owned = db.prepare('SELECT id FROM components WHERE org_id = ?').all(page.org_id).map((c) => c.id);
+  for (const id of ids) if (owned.includes(Number(id))) ins.run(page.id, Number(id));
+}
+
+router.patch('/status-pages/:id', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  const b = req.body || {};
+  const set = [];
+  const args = [];
+  const put = (col, val) => { set.push(`${col} = ?`); args.push(val); };
+
+  if (b.name !== undefined) {
+    if (!isStr(String(b.name).trim(), 80)) return httpError(res, 400, 'name required');
+    put('name', String(b.name).trim());
+  }
+  if (b.slug !== undefined && !page.is_default) {
+    const slug = String(b.slug).trim().toLowerCase();
+    if (!SLUG_RE.test(slug)) return httpError(res, 400, 'slug must be 2-41 chars of a-z, 0-9 and -');
+    if (RESERVED_SLUGS.includes(slug)) return httpError(res, 400, `"${slug}" is reserved`);
+    const taken = statusPages.pageBySlug(slug);
+    if (taken && taken.id !== page.id) return httpError(res, 409, 'that slug is already taken');
+    put('slug', slug);
+  }
+  if (b.published !== undefined) put('published', b.published ? 1 : 0);
+  if (b.visibility !== undefined) {
+    if (!['public', 'private'].includes(b.visibility)) return httpError(res, 400, 'bad visibility');
+    if (b.visibility === 'private' && page.is_default) {
+      return httpError(res, 400, 'the main status page cannot be private — create an additional page instead');
+    }
+    if (b.visibility === 'private' && !plans.hasFeature(req.org.plan, 'status_pages_multi')) {
+      return httpError(res, 403, 'private pages require the Enterprise plan');
+    }
+    put('visibility', b.visibility);
+    // a page turning private needs a secret; one turning public loses it, so
+    // re-privatising later cannot resurrect a link that was already shared
+    put('access_token', b.visibility === 'private'
+      ? (page.access_token || statusPages.newAccessToken()) : null);
+  }
+
+  // ---- branding (ungated) ----
+  if (b.accent !== undefined) {
+    if (b.accent && !branding.HEX_RE.test(b.accent)) return httpError(res, 400, 'accent must be a #rrggbb hex colour');
+    put('accent', b.accent ? String(b.accent).toLowerCase() : '');
+  }
+  if (b.theme !== undefined) {
+    if (!['dark', 'light'].includes(b.theme)) return httpError(res, 400, 'theme must be dark or light');
+    put('theme', b.theme);
+  }
+  if (b.description !== undefined) {
+    if (String(b.description).length > 300) return httpError(res, 400, 'description is limited to 300 characters');
+    put('description', String(b.description));
+  }
+  for (const [key, col] of [['supportUrl', 'support_url'], ['legalUrl', 'legal_url']]) {
+    if (b[key] === undefined) continue;
+    if (b[key] && !branding.safeUrl(b[key])) return httpError(res, 400, `${key} must be an http(s) URL`);
+    put(col, b[key] ? String(b[key]) : '');
+  }
+
+  // ---- the paid bits: refused on write, so a switch never lies ----
+  if (b.hidePowered !== undefined) {
+    if (b.hidePowered && !plans.hasFeature(req.org.plan, 'status_whitelabel')) {
+      return httpError(res, 403, 'hiding the OpsCat footer requires the Business plan');
+    }
+    put('hide_powered', b.hidePowered ? 1 : 0);
+  }
+  if (b.customCss !== undefined) {
+    if (b.customCss && !plans.hasFeature(req.org.plan, 'status_css')) {
+      return httpError(res, 403, 'custom CSS requires the Business plan');
+    }
+    const problem = branding.cssProblem(String(b.customCss));
+    if (problem) return httpError(res, 400, problem);
+    put('custom_css', String(b.customCss));
+  }
+
+  if (set.length) db.prepare(`UPDATE status_pages SET ${set.join(', ')} WHERE id = ?`).run(...args, page.id);
+  if (b.componentIds !== undefined) setPageComponents(page, b.componentIds);
+  // the default page's publish flag is mirrored by the settings endpoint, so
+  // keep the setting in step when it is flipped from here instead
+  if (b.published !== undefined && page.is_default) {
+    setOrgSetting(req.orgId, 'status_published', b.published ? '1' : '0');
+  }
+  sec.audit(req.user.id, 'status_page_update', `${page.name}: ${Object.keys(b).join(',')}`, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+});
+
+router.delete('/status-pages/:id', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  if (page.is_default) return httpError(res, 400, 'the main status page cannot be deleted');
+  db.prepare('DELETE FROM status_pages WHERE id = ?').run(page.id);
+  sec.audit(req.user.id, 'status_page_delete', `${page.name} (/status/${page.slug})`, req.orgId);
+  res.json({ ok: true });
+});
+
+// Rotating the secret is the "revoke the link" button — everyone who was sent
+// the old URL loses access immediately, which is the only lever a shared-link
+// audience has.
+router.post('/status-pages/:id/rotate-token', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  if (page.visibility !== 'private') return httpError(res, 400, 'page is not private');
+  db.prepare('UPDATE status_pages SET access_token = ? WHERE id = ?')
+    .run(statusPages.newAccessToken(), page.id);
+  sec.audit(req.user.id, 'status_page_rotate_token', page.name, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+});
+
+// ---- branding assets ----
+// Uploads arrive base64 in a JSON body rather than as multipart: it keeps the
+// dependency list unchanged (no multer) and a 512 KB logo is nowhere near the
+// 1 MB express.json ceiling. The bytes are sniffed, never trusted.
+router.put('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  const kind = req.params.kind;
+  if (!['logo', 'favicon'].includes(kind)) return httpError(res, 404, 'unknown asset');
+  const data = req.body?.data;
+  if (!isStr(data)) return httpError(res, 400, 'data (base64) required');
+  // strip a data: URI prefix so the browser's FileReader output can be posted as-is
+  const b64 = data.replace(/^data:[^;,]*;base64,/, '');
+  let buf;
+  try { buf = Buffer.from(b64, 'base64'); } catch { return httpError(res, 400, 'data is not valid base64'); }
+  const r = branding.putAsset(page.id, kind, buf);
+  if (!r.ok) return httpError(res, 400, r.error);
+  sec.audit(req.user.id, 'status_branding_upload', `${page.name} ${kind} (${r.mime}, ${r.bytes} bytes)`, req.orgId);
+  res.json({ ok: true, mime: r.mime, bytes: r.bytes });
+});
+
+router.delete('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  if (!['logo', 'favicon'].includes(req.params.kind)) return httpError(res, 404, 'unknown asset');
+  branding.deleteAsset(page.id, req.params.kind);
+  sec.audit(req.user.id, 'status_branding_delete', `${page.name} ${req.params.kind}`, req.orgId);
+  res.json({ ok: true });
+});
+
+// ---- custom domain ----
+router.post('/status-pages/:id/domain', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  if (!plans.hasFeature(req.org.plan, 'status_domain')) {
+    return httpError(res, 403, 'a custom domain requires the Pro plan');
+  }
+  const r = statusDomains.setDomain(page, req.body?.domain);
+  if (!r.ok) return httpError(res, 400, r.error);
+  sec.audit(req.user.id, 'status_domain_set', `${page.name} -> ${r.domain}`, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+});
+
+router.post('/status-pages/:id/domain/verify', canEditPages, async (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  if (!plans.hasFeature(req.org.plan, 'status_domain')) {
+    return httpError(res, 403, 'a custom domain requires the Pro plan');
+  }
+  const r = await statusDomains.verifyDomain(page, req.app.get('dnsResolver') || null);
+  if (!r.ok) return res.status(400).json({ error: r.error, found: r.found });
+  sec.audit(req.user.id, 'status_domain_verified', `${page.name} -> ${page.domain}`, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+});
+
+router.delete('/status-pages/:id/domain', canEditPages, (req, res) => {
+  const page = pageOr404(req, res);
+  if (!page) return undefined;
+  statusDomains.clearDomain(page);
+  sec.audit(req.user.id, 'status_domain_clear', page.name, req.orgId);
+  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
 });
 
 // ---- log pipeline: throughput + classifiers ----

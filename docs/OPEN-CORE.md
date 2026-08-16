@@ -25,6 +25,8 @@ powers the hosted **OpsCat Cloud** SaaS.
 | Users in multiple orgs + switcher | — (one org) | Yes (self-service new org, invite existing account) |
 | First-run onboarding flow | — | Yes (full-screen setup for each new org) |
 | Monitoring features | **All** (logs, OTLP, Sentry, events, cases, synthetics, SNMP, agents, alerts, incidents, status page, OpsCat Bridge (war room) incl. AI layer — BYO voice/LLM keys) | All |
+| Status-page branding | **All** (logo, favicon, accent, light/dark, links — and the footer is yours to hide, since CE enforces nothing) | Identity on every plan incl. Free; hiding the "Powered by OpsCat" footer from Business |
+| Status pages: custom domain · custom CSS · several/private pages | **All** (a self-hoster already serves its own hostname; nothing is enforced) | Custom domain from Pro, custom CSS from Business, additional + private audience pages on Enterprise |
 | Plan limits | None — unlimited | Enforced per org (Free / Pro / Business / Enterprise) |
 | Billing (Stripe) | — | Yes |
 | Super-admin console | — | Yes |

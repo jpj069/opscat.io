@@ -272,6 +272,78 @@ org depends on (status-page aggregation, like StatusGator/IsDown but self-hosted
   org 1 with `POST /api/vendors/subscribe-catalog`. Only curated catalog vendors
   appear — org-created custom vendors are never exposed publicly.
 
+## Status pages (and what they cost)
+
+The status page is the only OpsCat surface a customer's *own* customers ever look
+at, so its identity is theirs: logo, favicon, accent colour, light/dark,
+description, support and legal links (`lib/status-branding.js`).
+
+Since schema v18 it is also a **row** rather than an implicit per-org thing
+(`lib/status-pages.js`). Three features forced that: a custom domain points at
+one page, not at an org; an audience-specific page shows a subset of the
+components; and a private page needs its own visibility. An org gets a default
+page whose slug is the org's slug — which is what keeps every pre-v18 URL
+working — and `defaultPage()` creates it lazily rather than at every one of the
+three places an org can be minted, so the invariant "an org has a status page"
+holds by construction instead of by everyone remembering.
+
+A page resolves most-specific-first: **verified domain** → **slug** → the origin
+default. Whichever way a visitor arrived, every URL the page prints is built from
+that same prefix — a visitor on status.acme.com must never be linked back to
+opscat.io.
+
+**All of that is free on every plan, Free included, and that is a pricing
+decision rather than an oversight.** A status page is public. A Free one wearing
+a generic OpsCat mark does not pressure anyone into upgrading — it advertises us
+badly, in front of the one audience that did not choose us. Competitors bear this
+out: Better Stack ships branding in its free tier, and the tiers that do charge
+for it charge for *distance from the vendor*, not for identity. So the paid flags
+in `plans.js` are exactly the distance ones: `status_whitelabel` (business+,
+hides the "Powered by OpsCat" footer), `status_domain` (pro+), `status_css`
+(business+), `status_pages_multi` (enterprise). `statusSubscribers` is a limit
+rather than a flag because it grows with the customer's own success.
+
+Five decisions in these modules are load-bearing:
+
+- **Validation is the injection boundary, not input hygiene.** The accent is
+  emitted *inside a `<style>` block*, where HTML-escaping buys nothing — so it is
+  matched against `#[0-9a-f]{6}` and falls back to the default on anything else,
+  on write *and* on render. Never "escape it" instead. Links are checked for an
+  http(s) scheme so `javascript:` cannot reach an `href`.
+- **Uploads are typed by their bytes, and SVG is refused.** An SVG is a
+  script-bearing document: harmless inside an `<img>`, but `/status/logo` can be
+  opened directly, and then it executes on the status page's own origin. Refusing
+  the format deletes the class of bug; a logo is a PNG everywhere else anyway.
+  The declared content type is a claim, the magic bytes are the fact.
+- **Every paid bit is gated at RENDER time, not by clearing the column on
+  downgrade.** The org keeps its intent — footer hidden, CSS written, domain
+  configured — the behaviour stops while the plan lacks the feature, and an
+  upgrade restores all of it without anyone re-typing anything. Same reason the
+  write is refused with a 403 rather than silently stored: an admin who flips a
+  switch and sees nothing change blames the product, not their plan.
+- **A custom domain is only served once DNS PROVES it.** Proof is a TXT record at
+  `_opscat-challenge.<domain>`; the CNAME that routes traffic is deliberately not
+  proof, because a dangling CNAME left by a former owner would hand the name to
+  whoever asks next. The same verified-and-plan-covered check answers Caddy's
+  on-demand-TLS `ask` endpoint (`/api/public/tls-check`) — answer that broadly
+  and the deployment becomes an open certificate mint whose ACME rate limit is
+  gone within an hour of the first bot finding it.
+- **A private page 404s, it does not 403.** A 403 confirms that a page with that
+  slug exists, which is exactly the fact a private page is hiding. It is a
+  shared-link audience (everyone with the link is in, rotating revokes), not
+  per-person auth — stated plainly here because the honest scope is smaller than
+  the words "private page" suggest.
+
+Assets are blobs in `status_assets` rather than files on disk — the SQLite file is
+the only volume the Docker deployment persists — and are served same-origin, so
+they need no CSP `img-src` entry. They 404 while the page is unpublished: an
+unpublished status page must not leak its org's logo either.
+
+The admin preview (Status Page › Branding) renders from `resolved`, the *same*
+object `brandingFor()` hands the public page, instead of re-deriving the palette
+in the frontend. A preview that computes its own colours is a preview that
+quietly stops matching the thing it previews.
+
 ## User problem reports (status page)
 
 The public status page carries a "Report a problem" form (plain HTML POST — the
