@@ -25,6 +25,16 @@ COPY agent/ ./agent/
 COPY --from=serverdeps /build/server/node_modules ./server/node_modules
 COPY --from=webbuild /build/web/dist ./server/public
 
+# Build identity — what /api/version reports (server/src/version.js). Written into
+# the image, because that is the one record that cannot go stale: a new commit is a
+# new image is a new file. Last layer on purpose, so changing it rebuilds nothing
+# else. A build that forgets the arg says "unknown" rather than inventing a commit.
+ARG OPSCAT_COMMIT=unknown
+ARG OPSCAT_BUILT_AT=
+RUN printf '{"commit":"%s","builtAt":"%s"}\n' \
+      "$OPSCAT_COMMIT" "${OPSCAT_BUILT_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+      > /app/server/build-info.json
+
 ENV NODE_ENV=production \
     OPSCAT_DATA_DIR=/data \
     OPSCAT_PUBLIC_DIR=/app/server/public \

@@ -150,3 +150,7 @@ scripts/package-lock.json
 # probe-shots.mjs output — evidence for one review, not a repo artefact
 shots/
 scripts/shots/
+
+# build identity written into the image at build time (see Dockerfile); a local
+# copy is a test artefact, never a repo file
+server/build-info.json

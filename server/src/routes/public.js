@@ -11,9 +11,20 @@ const config = require('../config');
 
 const router = express.Router();
 
+// Health and build identity. Both are unauthenticated on purpose: the Docker
+// HEALTHCHECK, Caddy and the deploy check all run before anyone is logged in, and
+// "which commit is live" is the question a deploy has to be able to answer from
+// outside the host. `ok`/`service`/`ts` keep their shape — the container's own
+// health check reads this endpoint.
+const { INFO } = require('../version');
+
 router.get('/api/health', (req, res) => {
-  res.json({ ok: true, service: 'opscat', ts: now() });
+  res.json({ ok: true, ...INFO, ts: now() });
 });
+
+// The same identity under its own name, for a deploy check that does not care
+// about liveness: `curl -s https://opscat.io/api/version`.
+router.get('/api/version', (req, res) => res.json(INFO));
 
 // ---- public vendor-status grid (marketing / community output) ----------------
 // Aggregated live status of every vendor the platform org (org 1) monitors.

@@ -63,8 +63,14 @@ start again.
 
 ```bash
 git pull
-docker compose up -d --build
+OPSCAT_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d --build
+curl -s http://localhost/api/version     # did the new build actually come up?
 ```
+
+`OPSCAT_COMMIT` stamps the image with the commit it was built from, so
+`/api/version` can tell you afterwards which code is running. Leave it out and
+the answer is `"unknown"` — honest, but then an upgrade that built fine and
+failed to restart looks exactly like one that worked.
 
 Database migrations run automatically and are backward-compatible; still, take
 a backup first.
@@ -72,6 +78,9 @@ a backup first.
 ## Health & monitoring the monitor
 
 - `GET /api/health` — liveness (also used by the container HEALTHCHECK).
+- `GET /api/version` — which build is running: `version`, `commit`, `builtAt`
+  (when the image was built) and `startedAt` (when this container came up).
+  Both endpoints are unauthenticated, so an external monitor can read them.
 - `GET /status` — public status page.
 - Logs: `docker compose logs -f app`.
 

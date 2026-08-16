@@ -9,9 +9,28 @@ Two surfaces:
   agent tokens (`oca_…`) or probe keys (`ocp_…`). Keys are created in the UI (Settings)
   and shown exactly once.
 
-Public (no auth): `GET /api/health`, `GET /api/status` (JSON), `GET /status` (HTML status
-page — per-organization in the EE: `/status/:slug`), and `GET /api/plans`
-(edition, public plan matrix, auth options for the login/pricing UI).
+Public (no auth): `GET /api/health`, `GET /api/version`, `GET /api/status` (JSON),
+`GET /status` (HTML status page — per-organization in the EE: `/status/:slug`), and
+`GET /api/plans` (edition, public plan matrix, auth options for the login/pricing UI).
+
+**Build identity.** `GET /api/version` answers which code is running, and `/api/health`
+carries the same block next to its liveness fields — one request answers both, which is
+what the container's `HEALTHCHECK` and the deploy check need:
+
+```json
+{ "service": "opscat", "version": "2.0.0", "edition": "cloud",
+  "commit": "1bcda1e", "builtAt": "2026-08-16T23:00:20Z",
+  "startedAt": "2026-08-16T23:00:31.402Z", "ts": 1786921283044 }
+```
+
+`commit` is stamped into the image at build time (`build-info.json`, written by the
+Dockerfile from the `OPSCAT_COMMIT` build arg); a development checkout answers with its
+own `git HEAD`, and a build that was given neither answers `"unknown"` rather than
+guessing. `builtAt` is when the image was built (`null` in a checkout — nothing was),
+`startedAt` when this process started: a deploy has landed when `commit` matches AND
+`startedAt` moved. Unauthenticated on purpose — the question "which commit is live" has
+to be answerable from outside the host, and a short commit id opens no door on a private
+repository. See `docs/ARCHITECTURE.md` § Build identity.
 
 **Token auth for the operations API.** `/api/events`, `/api/cases`, `/api/incidents`,
 `/api/synthetics/*`, `/api/vendors/*` and the rest of the operations surface accept

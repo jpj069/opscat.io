@@ -1176,6 +1176,48 @@ The tab has to be picked from that query **during render** — `useTab` normalis
 on mount and the query is gone by the first effect — which is what `billingReturnTab()`
 does; the card then drops the query and keeps the tab.
 
+## Build identity (what `/api/version` answers)
+
+The deploy is `git pull && docker compose up -d --build` over SSH. For a long time
+nothing the running instance served could name the commit it was built from, so
+"is it deployed?" was answered two ways, both indirect: the GitHub job went green
+(a fact about GitHub, not about the container), or the served
+`assets/index-<hash>.js` matched a local `web/` build. The second one works — until
+the change is **server-only**, and then the bundle is byte-identical and the
+comparison confirms nothing while looking like it did.
+
+So the image records what it was built from and the app reports it
+(`server/src/version.js`, `GET /api/version`, same block on `/api/health`):
+
+| Field | Source | Says |
+|---|---|---|
+| `commit` | `build-info.json` → `OPSCAT_COMMIT` → `git rev-parse` → `"unknown"` | which code |
+| `builtAt` | `build-info.json` (`null` in a checkout) | when the image was built |
+| `startedAt` | process start | when this container came up |
+| `version` / `edition` | `package.json` / `edition.js` | which release, which edition |
+
+Three decisions worth knowing:
+
+- **The file wins over the environment.** `build-info.json` is written INTO the image
+  by the Dockerfile, so it cannot go stale: a new commit is a new image is a new file.
+  An `OPSCAT_COMMIT` in someone's `.env` is a promise, and a promise left behind from
+  an earlier release would lie through every rebuild.
+- **Nothing is guessed.** A build given no arg answers `"unknown"`; the resolver never
+  invents a plausible id. An endpoint whose entire job is "which code is this" is the
+  last place for a good-enough answer, and `"unknown"` is a state a deploy check can
+  act on while a wrong sha is not.
+- **`commit` alone does not prove a deploy — `startedAt` is the other half.** The pair
+  separates "new image built and running" from "new image built, old container still
+  serving", which is the failure the deploy check exists for. The workflow polls the
+  container itself (`docker compose exec app`) rather than the public URL, and compares
+  against the HOST's `HEAD`: only the host knows what it pulled, and a second merge
+  landing mid-deploy must not fail the first one.
+
+The endpoint is unauthenticated, like `/api/health` (which the container's own
+`HEALTHCHECK` reads before anyone could log in). A short commit id opens nothing on a
+private repository, and the alternative — SSH for every "is it live?" — is what made
+deploy verification something people skip. Harness: `server/e2e-version.js`.
+
 ## Repository layout
 
 ```

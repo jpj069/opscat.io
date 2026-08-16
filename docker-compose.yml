@@ -7,6 +7,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.community
+      # Build identity for /api/version. Set them to record which commit an image
+      # was built from:
+      #   OPSCAT_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d --build
+      # Left unset the answer is "unknown", which is honest rather than wrong.
+      args:
+        OPSCAT_COMMIT: ${OPSCAT_COMMIT:-unknown}
+        OPSCAT_BUILT_AT: ${OPSCAT_BUILT_AT:-}
     # No host port mapping on purpose: the app is only reachable through Caddy
     # on the internal compose network.
     expose:
@@ -36,6 +43,12 @@ services:
       - OPSCAT_ALLOW_PRIVATE_TARGETS=${OPSCAT_ALLOW_PRIVATE_TARGETS:-0}
       - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
       - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
+      # Build identity fallbacks for a deployment that is neither this image nor a
+      # git checkout. Normally BOTH stay empty: the image's own build-info.json is
+      # what /api/version reads, and it wins over these on purpose (a stale value
+      # in .env would outlive every rebuild).
+      - OPSCAT_COMMIT=${OPSCAT_COMMIT:-}
+      - OPSCAT_BUILD_INFO=${OPSCAT_BUILD_INFO:-}
       - OPSCAT_EDITION=community
       # GitHub login (community feature) — create an OAuth app on GitHub with
       # callback <OPSCAT_BASE_URL>/api/auth/github/callback
