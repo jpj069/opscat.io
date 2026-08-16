@@ -1143,7 +1143,18 @@ router.patch('/components/:id', sec.requireRole('lead'), (req, res) => {
         ON CONFLICT(component_id) DO UPDATE SET user_id = excluded.user_id`).run(c.id, u.id);
     }
   }
-  sec.audit(req.user.id, 'component_status', `${c.name} → ${b.status || c.status}`, req.orgId);
+  // One endpoint, four editable facts — so the entry has to name the one that
+  // changed. It logged `component_status … → operational` for a group rename,
+  // which reads as "somebody changed the status" and is simply false. The UI can
+  // now edit the group and the name here, so that mattered.
+  const changed = [];
+  if (isStr(b.name, 100) && b.name !== c.name) changed.push(`name → ${b.name}`);
+  if (isStr(b.group, 100) && b.group !== c.grp) changed.push(`group → ${b.group}`);
+  if (b.status && b.status !== c.status) changed.push(`status → ${b.status}`);
+  if ('ownerId' in b) changed.push(b.ownerId === null ? 'owner cleared' : `owner → #${b.ownerId}`);
+  if (changed.length) {
+    sec.audit(req.user.id, 'component_update', `${c.name}: ${changed.join(', ')}`, req.orgId);
+  }
   res.json({ ok: true });
 });
 

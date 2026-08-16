@@ -11,7 +11,7 @@ import { useApp, useTab } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import { Card, Button,
   Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy,
-  PageHeader, Tabs, Input, HostInput, DateTime, COL} from '../ui';
+  PageHeader, Tabs, Input, HostInput, DateTime, COL, FormRow, CardNote, SwitchRow } from '../ui';
 import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
@@ -181,13 +181,9 @@ function ToggleRow({ d, k, label, hint, isAdmin }: {
   const isOn = d.val(k) === '1';
   const editable = isAdmin && d.has(k);
   return (
-    <Row label={label} hint={hint}>
-      <div className="row" style={{ gap: 8 }}>
-        <Toggle on={isOn} disabled={!editable}
-          onClick={editable ? () => d.setVal(k, isOn ? '0' : '1') : undefined} />
-        {!editable && <span className="text-xs text-text3">admin only</span>}
-      </div>
-    </Row>
+    <SwitchRow label={label} hint={hint} on={isOn} disabled={!editable}
+      note={editable ? undefined : 'admin only'}
+      onClick={() => d.setVal(k, isOn ? '0' : '1')} />
   );
 }
 
@@ -1017,26 +1013,10 @@ function BillingCard() {
 
 // ---------------------------------------------------------------- small helpers
 
-// The one-line "what is this card for" under a card title. Every card on this
-// page has one now — a tab that hides its neighbours has to say what it holds.
-function CardNote({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs text-text3" style={{ margin: '0 0 10px', maxWidth: 640 }}>{children}</p>;
-}
-
-function Row({ label, hint, children }:
-  { label: React.ReactNode; hint?: string; children: React.ReactNode }) {
-  return (
-    // geometry lives in .form-row (tokens.css), not inline: on a phone the label has to
-    // move ABOVE the field, and a media query cannot override an inline style.
-    <div className="form-row">
-      <span className="form-row-label text-sm text-text2">
-        {label}
-        {hint && <span className="text-xs text-text3" style={{ display: 'block' }}>{hint}</span>}
-      </span>
-      <div className="form-row-field">{children}</div>
-    </div>
-  );
-}
+// `Row` and `CardNote` moved to ui.tsx so the Status Page's branding form is the
+// same component and not a lookalike. Row stays aliased here: this file names it
+// ~90 times and a rename would be noise in the diff for no reader's benefit.
+const Row = FormRow;
 // Built from the real <Row>, so label/field geometry can never drift apart.
 function FormSkeleton({ rows = 4 }: { rows?: number }) {
   return (

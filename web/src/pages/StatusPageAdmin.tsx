@@ -5,9 +5,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp, useTab } from '../state';
 import { api, ApiError } from '../api';
-import { alpha, relTime, STATUS_META } from '../format';
+import { alpha, relTime, SEV, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader,
-  Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton, COL } from '../ui';
+  Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton, COL,
+  FormRow, CardNote, SwitchRow, CopyField } from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusPage, StatusPagesResponse, StatusReportsResponse } from '../types';
 import {
@@ -18,7 +19,12 @@ import {
 
 // (dot) | Name | Group | Status | Owner | 45-day uptime | Uptime %. The heat bar
 // is the widest thing in the row and the only one that benefits from more space.
-const GRID = [COL.tiny, COL.text, COL.label, COL.status, COL.label, COL.textWide, COL.num].join(' ');
+// Group / Status / Owner are SELECTS, so they take COL.control — not COL.label or
+// COL.status, which are sized for text and a pill and truncated them to
+// "Operatio…". The uptime percentage and the delete button are two columns, not
+// one: sharing COL.num clipped "100.00%" down to "00.00%".
+const GRID = [COL.tiny, COL.text, COL.control, COL.control, COL.control,
+  COL.textWide, COL.num, COL.actions].join(' ');
 // colors, ranks and the status list all come from the shared scale
 // (format.ts STATUS_META — mirror of server/src/lib/status-scale.js)
 const COMP_COLOR = Object.fromEntries(
@@ -34,6 +40,52 @@ const OVERALL: Record<CompStatus, string> = {
   major: 'Major Outage',
 };
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
+// Sentinel option value. It cannot collide with a real group: a group is a name
+// somebody typed, and this one is not typeable into the field that produces them.
+const NEW_GROUP = '\u0000new-group';
+
+/**
+ * Pick an existing group or start a new one.
+ *
+ * A group has no table of its own — it is the set of values the components
+ * carry. That is deliberate: "define a group" and "put something in it" are one
+ * act, and a second entity would need its own CRUD, ordering and rename story to
+ * earn its keep. What the free-text field got wrong was not the model but the
+ * INPUT: it invited a typo to create a silent second group ("Core" vs "core"),
+ * and it offered no way to see what already exists.
+ */
+function GroupPicker({ value, groups, onChange, disabled, title = 'Group' }: {
+  value: string; groups: string[]; onChange: (g: string) => void;
+  disabled?: boolean; title?: string;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState('');
+  if (creating) {
+    return (
+      <span className="row" style={{ gap: 6 }}>
+        <Input autoFocus value={draft} maxLength={100} placeholder="Core Services"
+          aria-label="New group name"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); if (draft.trim()) onChange(draft.trim()); setCreating(false); }
+            if (e.key === 'Escape') { setCreating(false); setDraft(''); }
+          }}
+          onBlur={() => { if (draft.trim()) onChange(draft.trim()); setCreating(false); }} />
+      </span>
+    );
+  }
+  return (
+    <Select title={title} aria-label={title} value={value} disabled={disabled}
+      onChange={(v) => { if (v === NEW_GROUP) { setDraft(''); setCreating(true); } else onChange(v); }}
+      options={[
+        ...(value && !groups.includes(value) ? [{ value, label: value }] : []),
+        ...groups.map((g) => ({ value: g, label: g })),
+        // no leading "+": a plain ASCII plus in a label is text, not an icon —
+        // it takes the font's baseline and cannot be sized or coloured like one
+        { value: NEW_GROUP, label: 'New group…' },
+      ]} />
+  );
+}
 
 // uptime-strip cell color (maintenance shares the amber warning tone here)
 function dayColor(w: CompStatus): string {
@@ -62,6 +114,19 @@ export default function StatusPageAdmin() {
   ]), [canEdit]);
   const [tab, setTab] = useTab(tabs.map((t) => t[0]));
 
+  // The public URL is per PAGE, not per install: only org 1's page lives at
+  // /status — everyone else is at /status/<slug>, and a page with a verified
+  // custom domain is at that hostname entirely. A hardcoded "/status" here sent
+  // every workspace to the FIRST org's status page, which is both wrong and a
+  // cross-tenant link. The server already resolves it (pageDTO.url), so ask it.
+  const [publicUrl, setPublicUrl] = useState('');
+  useEffect(() => {
+    if (!canEdit) return;
+    api.get<StatusPagesResponse>('/api/admin/status-pages')
+      .then((d) => setPublicUrl(d.pages.find((p) => p.isDefault)?.url || ''))
+      .catch(() => setPublicUrl(''));
+  }, [canEdit, app.activeOrgId]);
+
   const togglePublish = async () => {
     const next = !published;
     setPublished(next);
@@ -78,7 +143,7 @@ export default function StatusPageAdmin() {
             <span className="micro text-2xs">{published ? 'Published' : 'Unpublished'}</span>
           </span>
         )}
-        <a className="btn" href="/status" target="_blank" rel="noreferrer">
+        <a className="btn" href={publicUrl || '/status'} target="_blank" rel="noreferrer">
           View public page <ExternalLinkIcon size={13} /></a>
       </PageHeader>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
@@ -97,6 +162,14 @@ function Components() {
   const [components, setComponents] = useState<Component[] | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
+  // Groups are not their own entity — they are whatever the components say they
+  // are, so the picker is built from the values in use plus a way to start a new
+  // one. That keeps "define a group" and "put a component in it" the same act,
+  // which is what a free-text field was already doing badly.
+  const groups = useMemo(
+    () => [...new Set((components || []).map((c) => c.group).filter(Boolean))].sort(),
+    [components]);
+
   const load = () => api.get<Component[]>('/api/admin/components').then(setComponents).catch(() => setComponents([]));
   useEffect(() => { load(); }, []);
 
@@ -106,6 +179,10 @@ function Components() {
 
   const setStatus = async (id: number, status: CompStatus) => {
     await api.patch(`/api/admin/components/${id}`, { status });
+    load();
+  };
+  const setGroup = async (id: number, group: string) => {
+    await api.patch(`/api/admin/components/${id}`, { group });
     load();
   };
   const setOwner = async (id: number, v: string) => {
@@ -152,6 +229,7 @@ function Components() {
           <span>Owner</span>
           <span>45-day uptime</span>
           <span style={{ textAlign: 'right' }}>Uptime</span>
+          <span />
         </div>
         {components === null && <TableSkeleton cols={GRID} rows={5} />}
         {components && components.length === 0 && (
@@ -163,7 +241,8 @@ function Components() {
             <div key={c.id} className="tbl-row" style={{ gridTemplateColumns: GRID }}>
               <GlowDot color={COMP_COLOR[c.status]} />
               <span className="text-base font-semibold text-text0">{c.name}</span>
-              <span className="mono text-xs text-text2">{c.group}</span>
+              <GroupPicker value={c.group} groups={groups} disabled={!canEdit}
+                onChange={(g) => setGroup(c.id, g)} />
               <Select title="Component status" value={c.status} disabled={isAnalyst}
                 onChange={(v) => setStatus(c.id, v as CompStatus)}
                 options={COMP_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))} />
@@ -173,8 +252,8 @@ function Components() {
                 options={[{ value: '', label: '— no owner' },
                   ...app.users.map((u) => ({ value: String(u.id), label: u.name }))]} />
               <UptimeStrip days={c.days} />
-              <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-                <span className="mono text-sm text-text1">{pct}%</span>
+              <span className="mono text-sm text-text1" style={{ textAlign: 'right' }}>{pct}%</span>
+              <span className="row" style={{ justifyContent: 'flex-end' }}>
                 {canEdit && (
                   <Button size="sm" variant="danger" title="Delete" aria-label="Delete component"
  onClick={() => remove(c)}><XIcon size={13} /></Button>
@@ -186,7 +265,7 @@ function Components() {
         </TableScroll>
       </Card>
 
-      {showAdd && <AddComponentModal onClose={() => setShowAdd(false)}
+      {showAdd && <AddComponentModal groups={groups} onClose={() => setShowAdd(false)}
         onAdded={() => { setShowAdd(false); load(); }} />}
     </>
   );
@@ -221,30 +300,46 @@ function Branding({ isAdmin }: { isAdmin: boolean }) {
   if (data === null) return <Busy><Card><Skeleton h={120} /></Card></Busy>;
   if (!page) return <Card>No status page yet.</Card>;
 
+  const multi = data.pages.length > 1 || data.limits.canMultiPage;
+
   return (
     <>
-      {(data.pages.length > 1 || data.limits.canMultiPage) && (
-        <Card>
-          <div className="row row-wrap" style={{ gap: 12, alignItems: 'flex-end' }}>
-            <Field label="Status page">
-              <Select title="Status page" value={String(page.id)}
-                style={{ flex: '1 1 220px', maxWidth: 320 }}
-                onChange={(v) => setSel(Number(v))}
-                options={data.pages.map((p) => ({
-                  value: String(p.id),
-                  label: `${p.name}${p.isDefault ? ' (main)' : ''}${p.visibility === 'private' ? ' · private' : ''}`,
-                }))} />
-            </Field>
-            {isAdmin && data.limits.canMultiPage && (
-              <Button size="sm" style={{ marginBottom: 10 }} onClick={() => setShowNew(true)}>
-                <PlusIcon size={13} /> New page</Button>
-            )}
-            <span style={{ flex: 1 }} />
-            <a className="btn" style={{ marginBottom: 10 }} href={pagePath(page)}
-              target="_blank" rel="noreferrer">Open <ExternalLinkIcon size={13} /></a>
-          </div>
-        </Card>
-      )}
+      {/* The address of the page being edited, at the top of the page that edits
+          it. It used to be nowhere: the only link was the header button, which
+          points at the org's DEFAULT page and therefore lies as soon as a second
+          page exists. */}
+      <Card title="Status page" actions={
+        <span className="row" style={{ gap: 8 }}>
+          {isAdmin && data.limits.canMultiPage && (
+            <Button size="sm" onClick={() => setShowNew(true)}>
+              <PlusIcon size={13} /> New page</Button>
+          )}
+          <a className="btn btn-sm" href={pagePath(page)} target="_blank" rel="noreferrer">
+            Open <ExternalLinkIcon size={13} /></a>
+        </span>
+      }>
+        {multi && (
+          <FormRow label="Page" hint={data.limits.canMultiPage
+            ? 'Each page has its own branding, audience and subscribers'
+            : undefined}>
+            <Select title="Status page" value={String(page.id)}
+              onChange={(v) => setSel(Number(v))}
+              options={data.pages.map((p) => ({
+                value: String(p.id),
+                label: `${p.name}${p.isDefault ? ' (main)' : ''}${p.visibility === 'private' ? ' · private' : ''}`,
+              }))} />
+          </FormRow>
+        )}
+        <FormRow label="Public address"
+          hint={page.domainVerifiedAt ? 'Served on your own domain' : 'Send this to whoever asks for it'}>
+          <CopyField label="Status page address" value={`${location.origin}${pagePath(page)}`} />
+        </FormRow>
+        {page.domainVerifiedAt && page.domain && (
+          <FormRow label="Custom domain">
+            <CopyField label="Custom domain address" value={`https://${page.domain}/`} />
+          </FormRow>
+        )}
+      </Card>
 
       <PageEditor key={page.id} page={page} limits={data.limits} isAdmin={isAdmin}
         defaultAccent={data.defaultAccent} onChanged={() => load(page.id)}
@@ -289,56 +384,48 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
   return (
     <>
       <Card title="Identity">
-        <div className="text-2xs text-text3" style={{ marginBottom: 12 }}>
-          Logo, colours and links are included on every plan — a status page is public,
-          so it should look like yours from the first day.
-        </div>
-        <Field label="Page name">
-          <Input value={name} width={260} disabled={!isAdmin} maxLength={80}
+        <CardNote>Logo, colours and links are included on every plan — a status page is
+          public, so it should look like yours from the first day.</CardNote>
+        <FormRow label="Page name">
+          <Input value={name} disabled={!isAdmin} maxLength={80}
             onChange={(e) => setName(e.target.value)}
             onBlur={() => name !== page.name && save({ name })} />
-        </Field>
-        <AssetRow pageId={page.id} kind="logo" label="Logo"
-          hint="PNG, JPEG, WebP or ICO · max 512 KB · shown at 32px tall"
-          asset={page.logo} url={r.logoUrl} disabled={!isAdmin}
-          onChanged={onChanged} onError={onError} />
-        <AssetRow pageId={page.id} kind="favicon" label="Favicon"
-          hint="Falls back to the logo when empty"
-          asset={page.favicon} url={r.faviconUrl} disabled={!isAdmin}
-          onChanged={onChanged} onError={onError} />
-
-        <div className="row row-wrap" style={{ gap: 24, alignItems: 'flex-start', marginTop: 6 }}>
-          <Field label="Accent colour">
-            <ColorPicker value={page.accent || defaultAccent} disabled={!isAdmin}
-              onChange={(v) => save({ accent: v })} />
-          </Field>
-          <Field label="Theme">
-            <Select title="Theme" value={page.theme} disabled={!isAdmin}
-              onChange={(v) => save({ theme: v })} options={THEME_OPTIONS} />
-          </Field>
-        </div>
-
-        <Field label="Description (optional)">
+        </FormRow>
+        <FormRow label="Logo" hint="PNG, JPEG, WebP or ICO · max 512 KB · shown at 32px tall">
+          <AssetField pageId={page.id} kind="logo" asset={page.logo} url={r.logoUrl}
+            disabled={!isAdmin} onChanged={onChanged} onError={onError} />
+        </FormRow>
+        <FormRow label="Favicon" hint="Falls back to the logo when empty">
+          <AssetField pageId={page.id} kind="favicon" asset={page.favicon} url={r.faviconUrl}
+            disabled={!isAdmin} onChanged={onChanged} onError={onError} />
+        </FormRow>
+        <FormRow label="Accent colour">
+          <ColorPicker value={page.accent || defaultAccent} disabled={!isAdmin}
+            onChange={(v) => save({ accent: v })} />
+        </FormRow>
+        <FormRow label="Theme">
+          <Select title="Theme" value={page.theme} disabled={!isAdmin}
+            onChange={(v) => save({ theme: v })} options={THEME_OPTIONS} />
+        </FormRow>
+        <FormRow label="Description" hint="Optional — shown under the page title">
           <Textarea value={desc} maxLength={300} disabled={!isAdmin} rows={2}
             placeholder="Live and historical status for the Acme platform."
             onChange={(e) => setDesc(e.target.value)}
             onBlur={() => desc !== page.description && save({ description: desc })} />
-        </Field>
-        <div className="row row-wrap" style={{ gap: 24, alignItems: 'flex-start' }}>
-          <Field label="Support link (optional)">
-            <HostInput value={support} width={260} disabled={!isAdmin}
-              placeholder="https://acme.example/support"
-              onChange={(e) => setSupport(e.target.value)}
-              onBlur={() => support !== page.supportUrl && save({ supportUrl: support })} />
-          </Field>
-          <Field label="Legal / imprint link (optional)">
-            <HostInput value={legal} width={260} disabled={!isAdmin}
-              placeholder="https://acme.example/imprint"
-              onChange={(e) => setLegal(e.target.value)}
-              onBlur={() => legal !== page.legalUrl && save({ legalUrl: legal })} />
-          </Field>
-        </div>
-        {err && <div className="text-sm" style={{ color: '#f85149' }}>{err}</div>}
+        </FormRow>
+        <FormRow label="Support link" hint="Optional — linked in the footer">
+          <HostInput value={support} disabled={!isAdmin}
+            placeholder="https://acme.example/support"
+            onChange={(e) => setSupport(e.target.value)}
+            onBlur={() => support !== page.supportUrl && save({ supportUrl: support })} />
+        </FormRow>
+        <FormRow label="Legal / imprint link" hint="Optional — linked in the footer">
+          <HostInput value={legal} disabled={!isAdmin}
+            placeholder="https://acme.example/imprint"
+            onChange={(e) => setLegal(e.target.value)}
+            onBlur={() => legal !== page.legalUrl && save({ legalUrl: legal })} />
+        </FormRow>
+        {err && <div className="text-sm" style={{ color: SEV.critical }}>{err}</div>}
       </Card>
 
       <Card title="Preview">
@@ -380,37 +467,33 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
       <DomainCard page={page} canCustomDomain={limits.canCustomDomain} isAdmin={isAdmin}
         onChanged={onChanged} onError={onError} />
 
+      {/* One card, because both halves answer the same question — how far the page
+          may move away from OpsCat's own look — and both are gated on the same plan.
+          They shipped as two cards holding one control each. */}
       <Card title="Whitelabel">
-        <div className="row row-wrap" style={{ gap: 10, justifyContent: 'space-between' }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="text-sm text-text1">Hide “Powered by OpsCat” in the page footer</div>
-            <div className="text-2xs text-text3" style={{ marginTop: 2 }}>
-              {limits.canWhitelabel
-                ? 'The footer keeps the machine-readable JSON and Atom links either way.'
-                : 'Available from the Business plan. Everything else in Identity is included on your plan.'}
-            </div>
-          </div>
-          <Toggle on={page.hidePowered && limits.canWhitelabel} disabled={!isAdmin || !limits.canWhitelabel}
-            onClick={() => save({ hidePowered: !page.hidePowered })} />
-        </div>
-      </Card>
-
-      <Card title="Custom CSS">
-        <div className="text-2xs text-text3" style={{ marginBottom: 8 }}>
-          {limits.canCustomCss
-            ? 'Appended to the page’s own stylesheet, so any selector on the page can be overridden. A closing </style> tag is refused.'
-            : 'Available from the Business plan.'}
-        </div>
-        <Textarea className="mono" value={css} rows={6} disabled={!isAdmin || !limits.canCustomCss}
-          placeholder=".comp { border-radius: 12px }"
-          onChange={(e) => setCss(e.target.value)}
-          onBlur={() => css !== page.customCss && save({ customCss: css }, () => setCss(page.customCss))} />
+        <CardNote>
+          {limits.canWhitelabel
+            ? 'Everything in Identity is included on every plan; these two take the page the rest of the way to being yours.'
+            : 'Available from the Business plan. Everything in Identity is included on your plan.'}
+        </CardNote>
+        <SwitchRow label="Hide “Powered by OpsCat”"
+          hint="The footer keeps the JSON and Atom links either way"
+          on={page.hidePowered && limits.canWhitelabel}
+          disabled={!isAdmin || !limits.canWhitelabel}
+          note={limits.canWhitelabel ? undefined : 'Business plan'}
+          onClick={() => save({ hidePowered: !page.hidePowered })} />
+        <FormRow label="Custom CSS" hint="Appended to the page’s own stylesheet · a closing &lt;/style&gt; tag is refused">
+          <Textarea className="mono" value={css} rows={6} disabled={!isAdmin || !limits.canCustomCss}
+            placeholder=".comp { border-radius: 12px }"
+            onChange={(e) => setCss(e.target.value)}
+            onBlur={() => css !== page.customCss && save({ customCss: css }, () => setCss(page.customCss))} />
+        </FormRow>
       </Card>
 
       {isAdmin && !page.isDefault && (
         <Card title="Delete page">
           <div className="row row-wrap" style={{ gap: 10, justifyContent: 'space-between' }}>
-            <span className="text-2xs text-text3" style={{ flex: 1, minWidth: 0 }}>
+            <span className="text-xs text-text3" style={{ flex: 1, minWidth: 0 }}>
               Removes the page, its branding and its subscribers. The components themselves stay.
             </span>
             <Button size="sm" variant="danger" onClick={async () => {
@@ -438,58 +521,55 @@ function VisibilityCard({ page, limits, isAdmin, save, onChanged, onError }: {
 
   return (
     <Card title="Audience">
+      <CardNote>Who may see this page, and which components it lists.</CardNote>
       {!page.isDefault && (
-        <div className="row row-wrap" style={{ gap: 10, justifyContent: 'space-between', marginBottom: 12 }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="text-sm text-text1">Private page</div>
-            <div className="text-2xs text-text3" style={{ marginTop: 2 }}>
-              Reachable only with the secret link below, and never indexed. Everyone who has
-              the link is the audience — rotate it to revoke access.
-            </div>
-          </div>
-          <Toggle on={page.visibility === 'private'} disabled={!isAdmin || !limits.canMultiPage}
-            onClick={() => save({ visibility: page.visibility === 'private' ? 'public' : 'private' })} />
-        </div>
+        <SwitchRow label="Private page"
+          hint="Reachable only with the secret link, never indexed — rotate it to revoke access"
+          on={page.visibility === 'private'} disabled={!isAdmin || !limits.canMultiPage}
+          note={limits.canMultiPage ? undefined : 'Enterprise plan'}
+          onClick={() => save({ visibility: page.visibility === 'private' ? 'public' : 'private' })} />
       )}
 
       {page.visibility === 'private' && page.accessToken && (
-        <div className="row row-wrap" style={{ gap: 8, marginBottom: 12 }}>
-          <Input className="mono" readOnly value={`${location.origin}${pagePath(page)}`} width={380}
-            onFocus={(e) => e.currentTarget.select()} aria-label="Private page link" />
-          <Button size="sm" disabled={!isAdmin} onClick={async () => {
-            if (!window.confirm('Rotate the link? Everyone who has the current one loses access.')) return;
-            try { await api.post(`/api/admin/status-pages/${page.id}/rotate-token`); onChanged(); }
-            catch (e) { onError(e instanceof ApiError ? e.message : 'could not rotate'); }
-          }}>Rotate link</Button>
-        </div>
+        <FormRow label="Secret link">
+          <div className="row row-wrap" style={{ gap: 8 }}>
+            <CopyField label="Private page link" value={`${location.origin}${pagePath(page)}`} />
+            <Button size="sm" disabled={!isAdmin} onClick={async () => {
+              if (!window.confirm('Rotate the link? Everyone who has the current one loses access.')) return;
+              try { await api.post(`/api/admin/status-pages/${page.id}/rotate-token`); onChanged(); }
+              catch (e) { onError(e instanceof ApiError ? e.message : 'could not rotate'); }
+            }}>Rotate link</Button>
+          </div>
+        </FormRow>
       )}
 
-      <div className="text-2xs micro" style={{ marginBottom: 6 }}>Components shown</div>
-      {comps === null ? <ListSkeleton rows={3} lines={1} /> : (
-        <>
-          <label className="row" style={{ gap: 8, padding: '3px 0' }}>
-            <input type="checkbox" checked={all} disabled={!isAdmin}
-              onChange={() => save({ componentIds: all ? comps.map((c) => c.id) : [] })} />
-            <span className="text-sm text-text1">All components</span>
-            <span className="text-2xs text-text3">— including ones added later</span>
-          </label>
-          {!all && comps.map((c) => (
-            <label key={c.id} className="row" style={{ gap: 8, padding: '3px 0 3px 22px' }}>
-              <input type="checkbox" disabled={!isAdmin}
-                checked={(page.componentIds || []).includes(c.id)}
-                onChange={(e) => {
-                  const cur = new Set(page.componentIds || []);
-                  if (e.target.checked) cur.add(c.id); else cur.delete(c.id);
-                  // an empty selection would mean "all" on the server, which is the
-                  // opposite of what unticking the last box asks for
-                  save({ componentIds: cur.size ? [...cur] : [-1] });
-                }} />
-              <span className="text-sm text-text1">{c.name}</span>
-              <span className="mono text-2xs text-text3">{c.group}</span>
+      <FormRow label="Components shown" hint={all ? undefined : `${(page.componentIds || []).length} selected`}>
+        {comps === null ? <ListSkeleton rows={3} lines={1} /> : (
+          <>
+            <label className="row" style={{ gap: 8, padding: '3px 0' }}>
+              <input type="checkbox" checked={all} disabled={!isAdmin}
+                onChange={() => save({ componentIds: all ? comps.map((c) => c.id) : [] })} />
+              <span className="text-sm text-text1">All components</span>
+              <span className="text-xs text-text3">— including ones added later</span>
             </label>
-          ))}
-        </>
-      )}
+            {!all && comps.map((c) => (
+              <label key={c.id} className="row" style={{ gap: 8, padding: '3px 0 3px 22px' }}>
+                <input type="checkbox" disabled={!isAdmin}
+                  checked={(page.componentIds || []).includes(c.id)}
+                  onChange={(e) => {
+                    const cur = new Set(page.componentIds || []);
+                    if (e.target.checked) cur.add(c.id); else cur.delete(c.id);
+                    // an empty selection would mean "all" on the server, which is the
+                    // opposite of what unticking the last box asks for
+                    save({ componentIds: cur.size ? [...cur] : [-1] });
+                  }} />
+                <span className="text-sm text-text1" style={{ minWidth: 0 }}>{c.name}</span>
+                <span className="mono text-xs text-text3">{c.group}</span>
+              </label>
+            ))}
+          </>
+        )}
+      </FormRow>
     </Card>
   );
 }
@@ -529,33 +609,39 @@ function DomainCard({ page, canCustomDomain, isAdmin, onChanged, onError }: {
 
   return (
     <Card title="Custom domain">
-      <div className="text-2xs text-text3" style={{ marginBottom: 10 }}>
+      <CardNote>
         {canCustomDomain
           ? 'Serve this page on your own hostname. The certificate is issued automatically once DNS is in place.'
           : 'Available from the Pro plan.'}
-      </div>
-      <div className="row row-wrap" style={{ gap: 8, alignItems: 'center' }}>
-        <HostInput value={domain} width={260} disabled={!isAdmin || !canCustomDomain}
-          placeholder="status.acme.com" onChange={(e) => setDomain(e.target.value)} />
-        <Button size="sm" disabled={!isAdmin || !canCustomDomain || busy || !domain
-          || domain === page.domain} onClick={claim}>Save</Button>
-        {page.domain && (
-          <>
-            <Button size="sm" variant="primary" disabled={!isAdmin || busy} onClick={verify}>
-              {verified ? 'Re-check DNS' : 'Verify'}</Button>
-            <Button size="sm" variant="danger" disabled={!isAdmin || busy} onClick={remove}>Remove</Button>
-          </>
-        )}
-        {page.domain && (
-          <span className="text-2xs" style={{ color: verified ? STATUS_META.operational.color : 'var(--text3)' }}>
-            {verified ? '● verified' : '○ not verified yet'}
-          </span>
-        )}
-      </div>
+      </CardNote>
+      <FormRow label="Hostname" hint={page.domain
+        ? (verified ? 'Verified — the page is served here' : 'Not verified yet')
+        : undefined}>
+        <div className="row row-wrap" style={{ gap: 8 }}>
+          <HostInput value={domain} width={200} disabled={!isAdmin || !canCustomDomain}
+            placeholder="status.acme.com" onChange={(e) => setDomain(e.target.value)} />
+          <Button size="sm" disabled={!isAdmin || !canCustomDomain || busy || !domain
+            || domain === page.domain} onClick={claim}>Save</Button>
+          {page.domain && (
+            <>
+              <Button size="sm" variant="primary" disabled={!isAdmin || busy} onClick={verify}>
+                {verified ? 'Re-check DNS' : 'Verify'}</Button>
+              <Button size="sm" variant="danger" disabled={!isAdmin || busy} onClick={remove}>Remove</Button>
+            </>
+          )}
+          {page.domain && (
+            <span className="row text-xs" style={{ gap: 5, flexShrink: 0,
+              color: verified ? STATUS_META.operational.color : 'var(--text3)' }}>
+              <GlowDot color={verified ? STATUS_META.operational.color : 'var(--text3)'} size={7} />
+              {verified ? 'verified' : 'not verified'}
+            </span>
+          )}
+        </div>
+      </FormRow>
 
       {page.dns && !verified && (
         <div style={{ marginTop: 12 }}>
-          <div className="text-2xs micro" style={{ marginBottom: 4 }}>Add these two DNS records</div>
+          <div className="text-xs micro" style={{ marginBottom: 4 }}>Add these two DNS records</div>
           <TableScroll minWidth={520}>
             <div className="tbl-head" style={{ gridTemplateColumns: DNS_GRID }}>
               <span>Type</span><span>Host</span><span>Value</span></div>
@@ -567,7 +653,7 @@ function DomainCard({ page, canCustomDomain, isAdmin, onChanged, onError }: {
               </div>
             ))}
           </TableScroll>
-          <div className="text-2xs text-text3" style={{ marginTop: 6 }}>
+          <div className="text-xs text-text3" style={{ marginTop: 6 }}>
             The TXT record proves you own the domain — we will not serve or request a
             certificate for it until it is there. The CNAME routes the traffic.
           </div>
@@ -630,10 +716,13 @@ function NewPageModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 // One uploaded image: preview, replace, remove. The file never touches a
 // multipart parser — it is read to a data URI in the browser and PUT as JSON,
 // which is why the server strips the `data:...;base64,` prefix.
-function AssetRow({ pageId, kind, label, hint, asset, url, disabled, onChanged, onError }: {
+//
+// It is a FIELD, not a row: the label and hint come from the <FormRow> around it,
+// so it lines up with the text fields above and below instead of carrying its own
+// 120px label column (which wrapped the hint into three lines).
+function AssetField({ pageId, kind, asset, url, disabled, onChanged, onError }: {
   pageId: number;
   kind: 'logo' | 'favicon';
-  label: string; hint: string;
   asset: { mime: string; updatedAt: number } | null;
   url: string; disabled: boolean;
   onChanged: () => void; onError: (m: string) => void;
@@ -668,15 +757,11 @@ function AssetRow({ pageId, kind, label, hint, asset, url, disabled, onChanged, 
   };
 
   return (
-    <div className="row row-wrap" style={{ gap: 12, alignItems: 'center', marginBottom: 12 }}>
-      <div style={{ width: 120, flexShrink: 0 }}>
-        <div className="micro text-2xs">{label}</div>
-        <div className="text-2xs text-text3">{hint}</div>
-      </div>
+    <div className="row row-wrap" style={{ gap: 8, alignItems: 'center' }}>
       <div className="row" style={{ width: 96, height: 40, flexShrink: 0, justifyContent: 'center',
         alignItems: 'center', border: '1px solid var(--bg3)', borderRadius: 6, overflow: 'hidden' }}>
         {asset && url ? <img src={url} alt="" style={{ maxHeight: 32, maxWidth: 88, objectFit: 'contain' }} />
-          : <span className="text-2xs text-text3">none</span>}
+          : <span className="text-xs text-text3">none</span>}
       </div>
       <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} hidden
         onChange={(e) => pick(e.target.files?.[0])} />
@@ -853,9 +938,10 @@ function UptimeStrip({ days }: { days: Component['days'] }) {
 
 // ------------------------------------------------------------------ add modal
 
-function AddComponentModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+function AddComponentModal({ groups, onClose, onAdded }:
+  { groups: string[]; onClose: () => void; onAdded: () => void }) {
   const [name, setName] = useState('');
-  const [group, setGroup] = useState('');
+  const [group, setGroup] = useState(groups[0] || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -873,7 +959,7 @@ function AddComponentModal({ onClose, onAdded }: { onClose: () => void; onAdded:
             placeholder="API Gateway" />
         </Field>
         <Field label="Group">
-          <Input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Core Services" />
+          <GroupPicker value={group} groups={groups} onChange={setGroup} />
         </Field>
         {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block

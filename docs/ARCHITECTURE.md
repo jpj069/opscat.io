@@ -957,6 +957,60 @@ not have caught it. And unlike control sizing, which only the browser can judge,
 viewBox is unconditionally wrong; there is no layout in which it means something else.
 Opt out of either rule with a `chart-exempt` comment stating the reason.
 
+## Frontend form rows (FormRow / SwitchRow / CardNote / CopyField)
+
+The geometry of a settings form — a fixed label column beside a bounded field,
+stacking on a phone — has lived in `tokens.css` as `.form-row` for a long time. The
+React wrapper around it did not: it was a page-local `Row` inside `Settings.tsx`. So
+the class was shared and the component was not, and the second form to need this
+layout — the status page's *Branding & pages* tab — grew its own instead. Measured on
+the shipped page:
+
+| Defect | Cause |
+|--------|-------|
+| ~280px of empty space in the page-picker card | `flex: '1 1 220px'` on a `Select` inside a **column**-flex `Field` — flex-grow then acts *vertically* |
+| a 300-character description field stretched to 1160px next to 260px inputs | `Field` has no field-column cap; `.form-row-field` has `max-width: 420px` |
+| the Logo/Favicon hint wrapped to three lines | a hand-rolled 120px label column beside `.form-row`'s 200px one |
+| a toggle 900px from the label of the field above it | `justify-content: space-between` across the whole card instead of a field column |
+| six cards holding one control each | no row primitive, so every setting became a card |
+
+`FormRow`, `SwitchRow`, `CardNote` and `CopyField` now live in `ui.tsx` (and in the
+Component Lab). `Settings.tsx` keeps `const Row = FormRow` — it names it ~90 times and
+a rename would be diff noise — and its `ToggleRow` is now a thin binding of
+`SwitchRow` to the settings draft.
+
+Two rules the shapes encode:
+
+- **A switch is a form field**, so it goes in the field column like everything else.
+  `SwitchRow`'s `note` carries what a dimmed toggle cannot say on its own — *admin
+  only*, *Business plan*. Without it a disabled switch reads as broken.
+- **The geometry stays in `tokens.css`.** On a phone `.form-row` stacks the label
+  above the field, and a media query cannot beat an inline style — so a call site
+  passes `width` to the control, never `style={{ flex }}` to the row.
+
+`CopyField` is the other half of the same story: a status page URL, a private link and
+an ingest endpoint are all values that exist to be handed to somebody, and each had its
+own read-only-input-plus-nothing. It copies on one click *and reports back*; a silent
+button gets a second click, and the second click is what pastes twice.
+`navigator.clipboard` is undefined outside a secure context, so it falls back to
+selecting the text rather than failing silently.
+
+## Status page components: what a "group" is
+
+A component's group is a **label the component carries** (`components.grp`, `NOT NULL
+DEFAULT 'Core'`), not a row in a table of its own. Groups are the distinct values in
+use; the public page renders one heading per group. This is deliberate: "define a
+group" and "put something in it" are one act, and a second entity would need its own
+CRUD, ordering and rename story before it earned the extra join.
+
+What was wrong was the **input**, not the model — the admin field was free text, so a
+typo silently created a second group (`Core` beside `core`) and nothing showed you what
+already existed. `GroupPicker` (`StatusPageAdmin.tsx`) is a `Select` over the groups in
+use plus a *New group…* option that swaps in a text field; the same component sits in
+the components table and in the add-component dialog. If ordering or a rename that
+moves every member ever becomes worth having, that is the point at which a
+`component_groups` table earns its keep — and not before.
+
 ## Settings page (six tabs, addressable)
 
 `Settings.tsx` was one scroll of twelve unrelated cards — billing, platform fields,

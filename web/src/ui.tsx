@@ -4,7 +4,7 @@ import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
 import { HAS_POPOVER, topLayer } from './toplayer';
 import markLight from './assets/opscat-mark.png';
 import markDark from './assets/opscat-mark-dark.png';
-import { XIcon } from 'lucide-react';
+import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 
 // The OpsCat brand mark (transparent line art). Renders both stroke variants;
 // tokens.css shows the one matching body[data-theme].
@@ -573,6 +573,15 @@ export const COL = {
   num: '72px',
   /** one StatusPill or SevBadge */
   status: '104px',
+  /**
+   * An interactive control living IN a cell — a Select, a DateTime, a small
+   * Input. It is not `status`: a pill is sized by its text, a Select is sized by
+   * its LONGEST OPTION plus a chevron, and squeezing one into a pill's track is
+   * how the status column on the Status Page shipped reading "Operatio…" and
+   * "Maintena…". A control's ceiling IS known, so a fixed track is right — it
+   * just has to be the control's ceiling and not the label's.
+   */
+  control: '150px',
   /** an absolute timestamp (fmtTime / fmtDate) */
   time: '150px',
   /** a relative age or duration ("2.4d", "12m ago") */
@@ -859,6 +868,92 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement,
         style={w ? { ...style, ['--ctl-w' as string]: w } : style} {...rest} />
     );
   });
+
+/**
+ * THE settings/form row: a fixed label column beside a bounded field.
+ *
+ * Promoted out of Settings.tsx, where it lived as a page-local `Row` — the
+ * geometry was already shared (`.form-row` in tokens.css), only the React
+ * wrapper was not, so the Status Page's branding form grew its own layout and
+ * ended up with a 300-character description field stretched across 1160px next
+ * to 260px inputs. A form that has to look like the other forms needs the same
+ * component, not the same CSS class copied.
+ *
+ * The geometry stays in tokens.css and never moves inline: on a phone the label
+ * goes ABOVE the field, and a media query cannot beat an inline style.
+ */
+export function FormRow({ label, hint, children }:
+  { label: React.ReactNode; hint?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="form-row">
+      <span className="form-row-label text-sm text-text2">
+        {label}
+        {hint && <span className="text-xs text-text3" style={{ display: 'block' }}>{hint}</span>}
+      </span>
+      <div className="form-row-field">{children}</div>
+    </div>
+  );
+}
+
+/** The one-line "what is this card for" under a card title. */
+export function CardNote({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs text-text3" style={{ margin: '0 0 10px', maxWidth: 640 }}>{children}</p>;
+}
+
+/**
+ * A setting that is a switch, in the same geometry as every other form row.
+ *
+ * The alternative shape — label left, toggle pushed to the far right of the card
+ * by `justify-content: space-between` — is what the Status Page branding form
+ * used, and it makes a switch land 900px away from the label of the text field
+ * above it. A switch is a form field: it belongs in the field column.
+ *
+ * `note` is for the state a `disabled` toggle cannot express on its own ("admin
+ * only", "Business plan") — without it a dimmed switch reads as broken.
+ */
+export function SwitchRow({ label, hint, on, disabled, onClick, note }: {
+  label: React.ReactNode; hint?: React.ReactNode; on: boolean;
+  disabled?: boolean; onClick?: () => void; note?: React.ReactNode;
+}) {
+  return (
+    <FormRow label={label} hint={hint}>
+      <span className="row" style={{ gap: 8 }}>
+        <Toggle on={on} disabled={disabled} onClick={disabled ? undefined : onClick} />
+        {note && <span className="text-xs text-text3">{note}</span>}
+      </span>
+    </FormRow>
+  );
+}
+
+/**
+ * A value that exists to be handed to someone else: a status page URL, a private
+ * link, an ingest endpoint. Read-only, selects itself on focus, and copies on one
+ * click with the button reporting back — "did that work?" is otherwise
+ * unanswerable, and the second click on a silent button is what pastes twice.
+ *
+ * `navigator.clipboard` is undefined outside a secure context, so the button
+ * falls back to selecting the text: the field is never a dead end.
+ */
+export function CopyField({ value, label, width }:
+  { value: string; label: string; width?: number | string }) {
+  const [done, setDone] = React.useState(false);
+  const ref = React.useRef<HTMLInputElement>(null);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(value); } catch { ref.current?.select(); return; }
+    setDone(true);
+    setTimeout(() => setDone(false), 1500);
+  };
+  return (
+    <span className="row" style={{ gap: 8, minWidth: 0 }}>
+      <Input ref={ref} className="mono" readOnly value={value} aria-label={label} width={width}
+        onFocus={(e) => e.currentTarget.select()} />
+      <Button size="sm" type="button" style={{ flexShrink: 0 }} onClick={copy}
+        title="Copy" aria-label={`Copy ${label}`}>
+        {done ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      </Button>
+    </span>
+  );
+}
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
