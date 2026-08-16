@@ -11,7 +11,8 @@ import { PlusIcon } from 'lucide-react';
 // label + color per channel live in format.ts (CHANNEL_META), so the pill, the
 // picker and the notification log cannot drift apart.
 // Rule | Channel | Trigger | Min Sev | Cooldown | On | actions
-const RULE_COLS = [COL.text, COL.label, COL.text, COL.num, COL.num, COL.toggle, COL.actions].join(' ');
+// actionsWide: the bar is Test / Edit / Del — labelled buttons, 130px measured
+const RULE_COLS = [COL.text, COL.label, COL.text, COL.num, COL.num, COL.toggle, COL.actionsWide].join(' ');
 // Time | Rule | Event | Channel | Status — the time is fmtTime, but time-of-day
 // only, so it needs an age-sized track and not a full timestamp one.
 const NOTIF_COLS = [COL.age, COL.text, COL.text, COL.label, COL.status].join(' ');

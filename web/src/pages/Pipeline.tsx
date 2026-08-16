@@ -461,7 +461,10 @@ function Tester() {
 // ---------------------------------------------------------------- scout
 
 // Seen | Template | Last seen | AI suggestion | actions
-const SCOUT_GRID = [COL.num, COL.textWide, COL.age, COL.text, COL.actions].join(' ');
+// actionsBar, not actions: the row carries FOUR labelled buttons (Logs,
+// AI suggest/Re-suggest, Create draft, Dismiss). In the 84px icon-button track they
+// wrapped to two lines each and the bar reached back over the AI-suggestion text.
+const SCOUT_GRID = [COL.num, COL.textWide, COL.age, COL.text, COL.actionsBar].join(' ');
 
 // OpsCat Scout: templates mined from unclassified lines, ordered by frequency.
 // Admins ask the org's LLM for a name/severity, approve into a classifier

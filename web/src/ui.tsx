@@ -667,8 +667,32 @@ export const COL = {
   spark: '64px',
   /** an icon, a dot, an avatar, a drag handle — no label of its own */
   tiny: '34px',
-  /** trailing buttons — as wide as the widest row needs, no wider */
-  actions: 'max-content',
+  /**
+   * Trailing buttons. THREE fixed sizes, chosen by what the bar holds — and
+   * fixed on purpose, which is the whole point of this entry.
+   *
+   * It used to be `max-content`, i.e. "as wide as the widest row needs". That
+   * reads as obviously right and is the one thing a shared track list may never
+   * contain, because `.tbl-head` and `.tbl-row` are SEPARATE grids (tokens.css:
+   * each carries its own `display: grid`). A content-dependent track therefore
+   * resolves per element: the header's cell holds the word "ACTIONS" and the
+   * row's holds a Select plus three buttons. Measured on Platform ›
+   * Organizations at 1990px — head 55px, row 272px. The 217px difference has to
+   * go somewhere, and it goes into the only flexible track, so the header's
+   * first column came out 217px wider than the row's and EVERY column label
+   * after it stood 217px right of its own data.
+   *
+   * The shared constant guaranteed the same string, never the same geometry.
+   * Only a content-independent track can do that, so these are numbers.
+   * `check-table-grids.mjs` fails the build on any intrinsic track in a grid
+   * constant, this file included.
+   */
+  /** one or two icon buttons, no labels (measured: 31–71px) */
+  actions: '84px',
+  /** short labelled buttons — "Test  Edit  Del" (measured: 130px) */
+  actionsWide: '148px',
+  /** a full bar: a control plus labelled buttons (measured: 305px) */
+  actionsBar: '312px',
 } as const;
 
 export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, fit = false, children }:

@@ -825,6 +825,27 @@ unbounded. Rebuilt from `COL`, the same table gives that column 344px.
 - **At least one flexible track per grid.** `web/scripts/check-table-grids.mjs` runs in
   `npm run check:ui` (therefore in the build and the deploy) and fails on an all-fixed
   track list. Opt out with a `grid-exempt <NAME>: <why>` comment.
+- **No track sized by CONTENT.** `.tbl-head` and `.tbl-row` are separate CSS grids —
+  each has its own `display: grid` in `tokens.css` — and share only the track *string*.
+  An intrinsic track (`max-content`, `min-content`, `auto`, `fit-content`) therefore
+  resolves against each element's own cells. `COL.actions` was `max-content`; measured on
+  Platform › Organizations at 1990px that is 55px in the header (the word "ACTIONS") and
+  272px in the row (a Select plus three buttons), and the 217px difference is absorbed by
+  the flexible track, so the header's first column came out 217px wider and every label
+  after it stood 217px right of its data. Five tables were affected (organizations 217px,
+  rules 130px, status-page components 31px, synthetics 16px, super-admins 4px).
+  `actions` is now three fixed sizes — `actions` 84px (one or two icon buttons),
+  `actionsWide` 148px (short labelled buttons), `actionsBar` 312px (a control plus
+  labelled buttons) — each measured against what the bar actually holds. The same check
+  script rejects an intrinsic track in a grid constant **and in `COL` itself**.
+
+  Two things about this are worth keeping: the shared constant was byte-identical
+  throughout, so no amount of reading the source could reveal it — sharing the string is
+  not sharing the geometry. And it only exists above the width where the grid has free
+  space to distribute: at 1280px both elements sit at the flexible track's floor and the
+  table looks perfect, which is exactly the width the change had been reviewed at.
+  `scripts/probe-shots.mjs` now compares the head's and the first row's computed
+  `gridTemplateColumns` at every width it shoots.
 - **Fixed is for content with a ceiling** — a pill, a count, a timestamp. Never for a
   name, a URL, a description or anything joined out of several fields.
 - **Give the slack to the column whose CONTENT is longest**, which is not always the one

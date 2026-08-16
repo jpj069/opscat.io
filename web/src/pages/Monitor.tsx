@@ -18,8 +18,11 @@ const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
 };
 // one source of truth per grid: the rows AND their loading placeholder read it
 // finish/downgrade | severity | hits | sparkline | device + age | name + description |
-// assignee. `actions` leads here rather than trails: the two icon buttons size the
-// track exactly, which a fixed 44px only happened to do at the current icon size.
+// assignee. `actions` leads here rather than trails, which is fine — what is NOT
+// fine is sizing it by content: `COL.actions` used to be `max-content`, and a track
+// that measures its own cell resolves differently in the header than in the rows
+// (they are separate grids). Two icon buttons measure 59px; the 84px track holds
+// them with room, and holds the same width in the header.
 const EVENT_COLS = [COL.actions, COL.status, COL.num, COL.spark,
   COL.text, COL.textWide, COL.tiny].join(' ');
 // minmax, not 1fr: the real rows need the track to grow to the longest line

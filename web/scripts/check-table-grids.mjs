@@ -12,6 +12,17 @@
  * So: at least one flexible track (`fr`) per grid. Compose from `COL` in ui.tsx
  * rather than picking pixels — the entry names say what belongs in the column.
  *
+ * SECOND rule, and the more subtle one: a track list shared between a header and
+ * its rows may contain NO intrinsic track (`max-content`, `min-content`, `auto`,
+ * `fit-content`). `.tbl-head` and `.tbl-row` are separate CSS grids — each has its
+ * own `display: grid` in tokens.css — so an intrinsic track resolves against each
+ * element's OWN contents. `COL.actions` was `max-content`, which on Platform ›
+ * Organizations at 1990px meant 55px in the header ("ACTIONS") and 272px in the row
+ * (a Select and three buttons). The 217px difference lands in the flexible track, so
+ * every column label stood 217px right of its own data — while the shared constant
+ * was, character for character, identical. Sharing the string is not sharing the
+ * geometry; only a content-independent track gives you that.
+ *
  * Runs in `npm run check:ui`, therefore in the build, therefore in the deploy.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -31,15 +42,44 @@ const files = [];
 const DECL = /^\s*const\s+([A-Z][A-Z0-9_]*(?:GRID|COLS))\s*=\s*(['"`])([^'"`]*)\2/gm;
 const findings = [];
 
+const INTRINSIC = /\b(max-content|min-content|fit-content)\b|(^|\s)auto(\s|$)/;
+
+// Rule 2 first, and on COL itself: every grid in the app composes from it, so one
+// intrinsic entry there misaligns every table that uses it. This is the check that
+// would have caught `actions: 'max-content'` the day it was written.
+{
+  const ui = readFileSync(join(SRC, 'ui.tsx'), 'utf8');
+  const block = ui.match(/export const COL = \{([\s\S]*?)\n\} as const;/);
+  if (!block) {
+    findings.push('src/ui.tsx  could not find `export const COL = { … } as const;` — '
+      + 'the track vocabulary moved, and this check is now inspecting nothing');
+  } else {
+    for (const m of block[1].matchAll(/^\s*(\w+):\s*'([^']*)'/gm)) {
+      const [, key, value] = m;
+      if (!INTRINSIC.test(value)) continue;
+      findings.push(`src/ui.tsx  COL.${key} = "${value}" is an INTRINSIC track — `
+        + `it resolves against each element's own contents, so .tbl-head and .tbl-row\n`
+        + `      (separate grids) disagree and the header drifts off its data. Use a px width.`);
+    }
+  }
+}
+
 for (const f of files) {
-  if (f.endsWith('ui.tsx')) continue;                  // COL itself lives there
+  if (f.endsWith('ui.tsx')) continue;                  // COL itself is checked above
   const src = readFileSync(f, 'utf8');
   for (const m of src.matchAll(DECL)) {
     const [, name, , value] = m;
-    if (value.includes('fr')) continue;                // has a flexible track — fine
-    if (/max-content|auto/.test(value)) continue;      // intrinsically sized, also fine
-    if (src.includes(`grid-exempt ${name}`)) continue; // opt out, with a stated reason
     const line = src.slice(0, m.index).split('\n').length;
+    const exempt = src.includes(`grid-exempt ${name}`); // opt out, with a stated reason
+    if (INTRINSIC.test(value) && !exempt) {
+      findings.push(`${f.replace(SRC, 'src/')}:${line}  ${name} has an INTRINSIC track — `
+        + `"${value}"\n      head and rows are separate grids, so it resolves differently in each. `
+        + `Use a px width (see COL.actions).`);
+      continue;
+    }
+    if (value.includes('fr')) continue;                // has a flexible track — fine
+    if (INTRINSIC.test(value)) continue;               // exempt, and already reported above
+    if (exempt) continue;
     findings.push(`${f.replace(SRC, 'src/')}:${line}  ${name} has no flexible track — `
       + `"${value}"\n      compose from COL (ui.tsx), or add a "grid-exempt ${name}: <why>" comment`);
   }
@@ -50,4 +90,4 @@ if (findings.length) {
   for (const x of findings) console.error(`  ✗ ${x}`);
   process.exit(1);
 }
-console.log('table-grid check: ok (every table grid can use the width it is given)');
+console.log('table-grid check: ok (every grid can use its width, and none is content-sized)');
