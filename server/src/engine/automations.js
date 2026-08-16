@@ -5,13 +5,14 @@
 //                  "raise" event (same org+device, same target when
 //                  matchTarget) and closes its open case
 //   assign_case  — assign the triggering event's case to a user
-//   webhook      — POST a JSON payload to a URL
+//   webhook      — POST a JSON payload to a URL (SSRF-guarded, see runWebhook)
 // Every executed action lands in audit_log as 'automation_run' with
 // user_id NULL (system actor) so the whole feature stays auditable.
 const { db } = require('../db');
 const { now } = require('../util');
 const sec = require('../security');
 const pipeline = require('./pipeline');
+const { safeFetch } = require('../lib/ssrf');
 
 const getAutomations = db.prepare('SELECT * FROM automations WHERE org_id = ? AND enabled = 1');
 const getFire = db.prepare('SELECT fired_at FROM automation_fires WHERE automation_id = ? AND dedupe_key = ?');
@@ -80,19 +81,48 @@ function runAssignCase(auto, params, ev) {
   return { ok: true, detail: `assign_case C-${1000 + c.id} → user ${userId}` };
 }
 
+// A retry is only safe where a repeat is harmless. A refused or malformed
+// request will be refused again, and a 4xx is the receiver's verdict — retrying
+// either just doubles the noise. A timeout or a 5xx is the transient case, and
+// the receiver of an ops webhook is expected to be idempotent on the event's
+// dedupe key, so it is the one worth repeating.
+const WEBHOOK_RETRIES = 2;
+const RETRY_BACKOFF_MS = [1000, 4000];
+
 async function runWebhook(auto, params, ev) {
   const url = String(params.url || '');
-  if (!/^https?:\/\//.test(url)) return { ok: false, detail: 'webhook: invalid URL' };
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      source: 'opscat-automation', automation: auto.name, event: ev.name, device: ev.device,
-      target: ev.target, severity: ev.severity, hits: ev.hits, ts: ev.last_seen,
-    }),
+  const payload = JSON.stringify({
+    source: 'opscat-automation', automation: auto.name, event: ev.name, device: ev.device,
+    target: ev.target, severity: ev.severity, hits: ev.hits, ts: ev.last_seen,
   });
-  if (!resp.ok) return { ok: false, detail: `webhook ${url.slice(0, 120)}: HTTP ${resp.status}` };
-  return { ok: true, detail: `webhook ${url.slice(0, 120)}: delivered` };
+  const short = url.slice(0, 120);
+  let last = '';
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // safeFetch owns the scheme check, the SSRF guard on EVERY redirect hop,
+      // the timeout and the body cap (lib/ssrf.js). Before it, this action
+      // validated `^https?://` and nothing else — so a lead could point an
+      // automation at 169.254.169.254 and read the cloud metadata service's
+      // answer out of the audit detail.
+      const resp = await safeFetch(url, {
+        method: 'POST', body: payload,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (resp.ok) {
+        return { ok: true, detail: `webhook ${short}: delivered${attempt ? ` (attempt ${attempt + 1})` : ''}` };
+      }
+      last = `HTTP ${resp.status}`;
+      if (resp.status < 500) return { ok: false, detail: `webhook ${short}: ${last}` };
+    } catch (err) {
+      last = String(err.message).slice(0, 120);
+      // A guard rejection is a decision, not a hiccup — never retried.
+      if (/private address|url must be|invalid URL|too many redirects/.test(last)) {
+        return { ok: false, detail: `webhook ${short}: ${last}` };
+      }
+    }
+    if (attempt >= WEBHOOK_RETRIES) return { ok: false, detail: `webhook ${short}: ${last}` };
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt] || 4000));
+  }
 }
 
 async function runActions(auto, ev) {

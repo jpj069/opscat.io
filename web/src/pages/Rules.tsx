@@ -2,17 +2,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
-import { SEV, fmtTime } from '../format';
+import { SEV, fmtTime, CHANNEL_META, channelLabel, channelColor } from '../format';
 import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { Rule, NotificationRow } from '../types';
 import { PlusIcon } from 'lucide-react';
 
-const CHAN_COLORS: Record<string, string> = {
-  teams: '#5865f2', email: '#388bfd', sms: '#3fb950', webhook: '#3fb950',
-  slack: '#e01e5a', telegram: '#29a9eb', discord: '#7289da', ntfy: '#3fb950', pushover: '#249df1',
-};
-const chanColor = (ch: string) => CHAN_COLORS[ch] || SEV.info;
+// label + color per channel live in format.ts (CHANNEL_META), so the pill, the
+// picker and the notification log cannot drift apart.
 // Rule | Channel | Trigger | Min Sev | Cooldown | On | actions
 const RULE_COLS = [COL.text, COL.label, COL.text, COL.num, COL.num, COL.toggle, COL.actions].join(' ');
 // Time | Rule | Event | Channel | Status — the time is fmtTime, but time-of-day
@@ -85,7 +82,7 @@ export default function Rules() {
             opacity: r.enabled ? 1 : 0.5 }}>
             <span className="text-base font-semibold text-text0" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-            <StatusPill text={r.channel} color={chanColor(r.channel)} />
+            <StatusPill text={channelLabel(r.channel)} color={channelColor(r.channel)} />
             <span className="mono text-sm" style={{ color: r.triggerName ? 'var(--text1)' : 'var(--text3)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.triggerName || 'any'}</span>
             <span className="mono text-sm text-text2">≥ {r.severityMin}</span>
@@ -130,7 +127,7 @@ export default function Rules() {
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.rule}</span>
             <span className="mono text-sm" style={{ color: '#388bfd', overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.event}</span>
-            <StatusPill text={n.channel} color={chanColor(n.channel)} />
+            <StatusPill text={channelLabel(n.channel)} color={channelColor(n.channel)} />
             <span className="mono text-xs" style={{ color: n.ok ? SEV.green : SEV.critical }}
               title={n.ok ? undefined : n.error}>{n.ok ? 'sent' : 'failed'}</span>
           </div>
@@ -158,7 +155,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
 
   const RECIPIENTS_UI: Record<Rule['channel'], { label: string; placeholder: string }> = {
     email: { label: 'Recipients — one email per line', placeholder: 'noc@opscat.io' },
-    teams: { label: 'Teams webhook URL (empty = Settings default)', placeholder: 'https://…' },
+    msteams: { label: 'Microsoft Teams webhook URL (empty = Settings default)', placeholder: 'https://…' },
     webhook: { label: 'Webhook URL', placeholder: 'https://…' },
     slack: { label: 'Slack incoming-webhook URL(s) — one per line', placeholder: 'https://hooks.slack.com/services/…' },
     telegram: { label: 'Telegram chat ID(s) — one per line (bot token in Settings)', placeholder: '-1001234567890' },
@@ -192,8 +189,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
       </Field>
       <Field label="Channel">
         <Select title="Channel" value={channel} onChange={(v) => setChannel(v as Rule['channel'])}
-          options={(['email', 'teams', 'slack', 'telegram', 'discord', 'ntfy', 'pushover', 'webhook'] as const)
-            .map((c) => ({ value: c, label: c }))} />
+          options={Object.entries(CHANNEL_META).map(([value, m]) => ({ value, label: m.label }))} />
       </Field>
       <Field label="Trigger Event (empty = any)">
         <Input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"

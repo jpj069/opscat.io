@@ -54,12 +54,20 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 4. Events scoring ≥ 60 auto-open a **case** (C-1xxx). Analysts assign/close/downgrade in the UI.
 5. The **alert engine** matches new/escalated events against **rules**
    (trigger name, min severity, cooldown) → notifications via **Resend e-mail** or
-   **Teams/webhook**, all recorded in `notifications`.
+   **Microsoft Teams/webhook**, all recorded in `notifications`.
 6. The **automation engine** (`engine/automations.js`, Automation page) matches the
    same events against per-org automations: lifecycle auto-close (a clear event
    finishes its raise event and closes the case), case auto-assign, outbound
    webhooks. One run per event dedupe key and cooldown; every run is written to
    `audit_log` (`automation_run`, system actor) so automated decisions stay auditable.
+   The v2 rework — trigger/condition graph, incident contract, durable timers — is
+   specified in `docs/AUTOMATION-V1.md`, the counterpart to `docs/INCIDENTS-V2.md`.
+7. **On-call & paging** (`docs/ONCALL-V1.md`, not built yet) sits on the other side
+   of that boundary: schedules and rotations, escalation policies, pages with an
+   acknowledgement deadline. It is native rather than flow-driven because paging is
+   load-bearing — an escalation chain that only exists if somebody drew it is a
+   configuration, not a guarantee. Flows raise a page and react to its outcome; they
+   never contain the ladder.
 
 **Scout** (`engine/scout.js`, Pipeline → Scout tab) mines rule suggestions from
 lines no classifier matched: variable parts are masked (`<IP>`, `<NUM>`, …),
@@ -1145,7 +1153,7 @@ it has a URL:
 | Tab | URL | Cards | Visible to |
 |-----|-----|-------|-----------|
 | General | `/app/settings/general` | Organization (name, backend label, log retention, status page published) · System | everyone; System admin-only |
-| Notifications | `/app/settings/notifications` | Sender addresses · Channel credentials (Teams / Telegram / Pushover) · Maintenance Windows | everyone; editing admin, windows lead+ |
+| Notifications | `/app/settings/notifications` | Sender addresses · Channel credentials (Microsoft Teams / Telegram / Pushover) · Maintenance Windows | everyone; editing admin, windows lead+ |
 | AI & Voice | `/app/settings/ai` | AI (chat endpoint) · Voice / Transcription (STT) | admin only — the tab is not rendered for anyone else |
 | API & Access | `/app/settings/access` | API Keys · Connected apps (the caller's own MCP/OAuth grants) | keys lead+, connected apps everyone |
 | Agents & SNMP | `/app/settings/collectors` | Agents · SNMP Targets | agents everyone (edit lead+), SNMP lead+ |
@@ -1181,5 +1189,7 @@ agent/     opscat-agent.js — dependency-free server agent (+ --probe mode)
 marketing/ static marketing site served at opscat.io/ (private repo only)
 deploy/    sensor fleet provisioning — cloud-init, provider APIs, Terraform
 scripts/   publish-community.sh — filtered sync to the public repo
-docs/      this file, API.md, OPEN-CORE.md, OPERATIONS.md, SENSORS.md
+docs/      this file, API.md, OPEN-CORE.md, OPERATIONS.md, SENSORS.md; design docs
+           for work in flight: INCIDENTS-V2.md, AUTOMATION-V1.md, ONCALL-V1.md
+           (read as a set — each states the contract the other two build against)
 ```

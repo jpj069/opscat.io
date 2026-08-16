@@ -293,8 +293,8 @@ function NotificationsTab({ d, isAdmin, canEdit }:
           or a Slack, Discord, ntfy or webhook URL is a recipient and lives there.</CardNote>
         {d.settings === null ? <FormSkeleton rows={3} /> : (
           <>
-            <TextRow d={d} isAdmin={isAdmin} k="teams_webhook_url" label="Teams webhook URL"
-              mono hint="Fallback for Teams rules that carry no webhook of their own"
+            <TextRow d={d} isAdmin={isAdmin} k="msteams_webhook_url" label="Microsoft Teams webhook URL"
+              mono hint="Fallback for Microsoft Teams rules that carry no webhook of their own"
               placeholder="https://outlook.office.com/webhook/…" />
             <TextRow d={d} isAdmin={isAdmin} k="telegram_bot_token" label="Telegram bot token"
               type="password" mono placeholder="123456:ABC-DEF…" />

@@ -475,8 +475,12 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
   name          TEXT NOT NULL,
   enabled       INTEGER NOT NULL DEFAULT 1,
+  -- 'msteams' is Microsoft Teams. It is spelled out because On-Call introduces
+  -- a Team object of our own (docs/ONCALL-V1.md §2) and `channel = 'teams'`
+  -- next to `kind = 'team'` would differ by one letter in the one subsystem
+  -- where confusing them pages a webhook instead of a person.
   channel       TEXT NOT NULL CHECK (channel IN
-                  ('email','teams','webhook','slack','telegram','discord','ntfy','pushover')),
+                  ('email','msteams','webhook','slack','telegram','discord','ntfy','pushover')),
   trigger_name  TEXT,                        -- null = any event name
   severity_min  INTEGER NOT NULL DEFAULT 60,
   cooldown_m    INTEGER NOT NULL DEFAULT 15,

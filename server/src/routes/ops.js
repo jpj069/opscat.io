@@ -328,7 +328,7 @@ router.get('/analytics', (req, res) => {
 });
 
 // ---- alert rules + notifications ----
-const RULE_CHANNELS = ['email', 'teams', 'webhook', 'slack', 'telegram', 'discord', 'ntfy', 'pushover'];
+const RULE_CHANNELS = ['email', 'msteams', 'webhook', 'slack', 'telegram', 'discord', 'ntfy', 'pushover'];
 
 router.get('/rules', (req, res) => {
   const rules = db.prepare('SELECT * FROM alert_rules WHERE org_id = ? ORDER BY id').all(req.orgId)

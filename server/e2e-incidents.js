@@ -36,6 +36,12 @@ process.env.OPSCAT_DATA_DIR = tmp;
 process.env.OPSCAT_SECRET = 'e2e-incidents-secret';
 process.env.PORT = '3121';
 process.env.OPSCAT_EDITION = 'community';
+// The one alert channel this harness exercises points at a local stub, and
+// lib/ssrf.js refuses private addresses for outbound webhooks. This is the
+// edition-gated escape hatch (CE only, ignored in cloud) — without it the
+// lifecycle-event assertions fail with "target resolves to a private address",
+// which is the guard working, not the feature breaking.
+process.env.OPSCAT_ALLOW_PRIVATE_TARGETS = '1';
 process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';

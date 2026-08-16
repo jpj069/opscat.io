@@ -1,8 +1,26 @@
 // Shared formatting + severity helpers (mapping from the design handoff).
 export const SEV = {
   critical: '#f85149', high: '#f0883e', medium: '#e3b341', low: '#388bfd', info: '#8b949e',
-  green: '#3fb950', purple: '#bc8cff', cyan: '#38b6ff', teams: '#5865f2',
+  green: '#3fb950', purple: '#bc8cff', cyan: '#38b6ff', msteams: '#5865f2',
 };
+
+// Alert channels — mirror of RULE_CHANNELS in server/src/routes/ops.js and the
+// CHECK on alert_rules.channel. `label` is the display spelling; the stored
+// value is what the API takes. `msteams` is Microsoft Teams, spelled out
+// because On-Call has a Team object of its own (docs/ONCALL-V1.md §2).
+export const CHANNEL_META = {
+  email: { label: 'E-mail', color: '#388bfd' },
+  msteams: { label: 'Microsoft Teams', color: '#5865f2' },
+  slack: { label: 'Slack', color: '#e01e5a' },
+  telegram: { label: 'Telegram', color: '#29a9eb' },
+  discord: { label: 'Discord', color: '#7289da' },
+  ntfy: { label: 'ntfy', color: '#3fb950' },
+  pushover: { label: 'Pushover', color: '#249df1' },
+  webhook: { label: 'Webhook', color: '#3fb950' },
+} as const;
+export type Channel = keyof typeof CHANNEL_META;
+export const channelLabel = (c: string) => CHANNEL_META[c as Channel]?.label ?? c;
+export const channelColor = (c: string) => CHANNEL_META[c as Channel]?.color ?? SEV.info;
 
 // The app-wide status scale — mirror of server/src/lib/status-scale.js
 // (docs/INCIDENTS-V2.md §2 "One status scale"). Insertion order = rank order;

@@ -29,6 +29,11 @@ process.env.OPSCAT_DATA_DIR = tmp;
 process.env.OPSCAT_SECRET = 'e2e-bridge-secret';
 process.env.PORT = '3117';
 process.env.OPSCAT_EDITION = 'community';
+// The alert-channel round-trip posts to a local stub, and lib/ssrf.js refuses
+// private addresses for outbound webhooks. CE-only escape hatch (ignored in
+// cloud) — without it the test fails with "target resolves to a private
+// address", which is the guard working, not the feature breaking.
+process.env.OPSCAT_ALLOW_PRIVATE_TARGETS = '1';
 process.env.OPSCAT_LIVEKIT_URL = 'wss://rt.e2e.test';
 process.env.OPSCAT_LIVEKIT_API_KEY = 'opscat';
 process.env.OPSCAT_LIVEKIT_API_SECRET = 'e2e-livekit-secret-0123456789abcdef';

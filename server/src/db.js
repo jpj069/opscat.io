@@ -687,6 +687,64 @@ const MIGRATIONS = [
     db.exec("DELETE FROM sqlite_sequence WHERE name IN ('users', 'organizations')");
     db.exec('DROP TABLE _org_map; DROP TABLE _user_map;');
   },
+  // idx 21 -> version 22: the Microsoft Teams alert channel is renamed
+  // 'teams' -> 'msteams', and its org setting with it. The On-Call module
+  // (docs/ONCALL-V1.md) introduces a Team object of our own, and a paging
+  // target `kind = 'team'` one letter away from `channel = 'teams'` is a
+  // collision in the one subsystem where getting it wrong sends a page to a
+  // webhook instead of to a person. Renamed now rather than later because the
+  // value is about to be embedded in automation graph documents, which
+  // AUTOMATION-V1 §9.2 keeps as IMMUTABLE version snapshots — after that a
+  // rename can only be an alias forever.
+  //
+  // Breaking on purpose: the API accepts only the new spelling. No alias, no
+  // second spelling of one fact (INCIDENTS-V2 §2, same call for `impact`).
+  () => {
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alert_rules'").get();
+    // The channel CHECK is baked into the table, so rebuild it (as migration
+    // v3 did to widen it). A fresh install already has the new CHECK.
+    if (ddl && !ddl.sql.includes("'msteams'")) {
+      // org_id is TEXT here, NOT the integer the pre-v21 table had: migration 20
+      // moved organizations to uuid keys, and a rebuild that re-declared it as
+      // INTEGER would quietly undo that for this one table — the rows would
+      // survive, every org-scoped rule lookup would stop matching, and nothing
+      // would raise an error. Mirrors schema.sql.
+      db.exec(`
+        CREATE TABLE alert_rules_new (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
+          name          TEXT NOT NULL,
+          enabled       INTEGER NOT NULL DEFAULT 1,
+          channel       TEXT NOT NULL CHECK (channel IN
+                          ('email','msteams','webhook','slack','telegram','discord','ntfy','pushover')),
+          trigger_name  TEXT,
+          severity_min  INTEGER NOT NULL DEFAULT 60,
+          cooldown_m    INTEGER NOT NULL DEFAULT 15,
+          recipients    TEXT NOT NULL DEFAULT '[]',
+          created_at    INTEGER NOT NULL
+        );
+        INSERT INTO alert_rules_new (id, org_id, name, enabled, channel, trigger_name,
+          severity_min, cooldown_m, recipients, created_at)
+          SELECT id, org_id, name, enabled,
+            CASE channel WHEN 'teams' THEN 'msteams' ELSE channel END,
+            trigger_name, severity_min, cooldown_m, recipients, created_at FROM alert_rules;
+        DROP TABLE alert_rules;
+        ALTER TABLE alert_rules_new RENAME TO alert_rules;
+        CREATE INDEX IF NOT EXISTS idx_rules_org ON alert_rules(org_id);
+      `);
+    }
+    // The delivery log carries the same fact and has no CHECK; rewrite it too
+    // rather than leave two spellings in the one screen that answers "why did
+    // nothing arrive". Bounded: engine/retention.js prunes this table.
+    db.prepare("UPDATE notifications SET channel = 'msteams' WHERE channel = 'teams'").run();
+    // Per-org webhook URL. INSERT-then-DELETE rather than UPDATE, so an org
+    // that somehow holds both keys keeps the value it was already using.
+    db.prepare(`INSERT INTO org_settings (org_id, key, value)
+      SELECT org_id, 'msteams_webhook_url', value FROM org_settings WHERE key = 'teams_webhook_url'
+      ON CONFLICT(org_id, key) DO NOTHING`).run();
+    db.prepare("DELETE FROM org_settings WHERE key = 'teams_webhook_url'").run();
+    db.prepare("DELETE FROM settings WHERE key = 'teams_webhook_url'").run();
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

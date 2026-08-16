@@ -10,6 +10,7 @@ const { db } = require('../db');
 const config = require('../config');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const pipeline = require('./pipeline');
+const { assertPublicHost } = require('../lib/ssrf');
 
 const insResult = db.prepare(`INSERT INTO synthetic_results
   (check_id, location_id, ts, ok, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?)`);
@@ -55,39 +56,12 @@ function run(cmd, args, timeoutMs) {
 
 const isSafeTarget = (t) => /^[a-zA-Z0-9._:\/?#\[\]@!$&'()*+,;=%-]+$/.test(t) && !t.startsWith('-');
 
-// SSRF guard: refuse checks aimed at private / loopback / link-local space so a
-// probe can't be pointed at the cloud metadata endpoint (169.254.169.254),
-// localhost, or neighbouring compose services. Applied to http/tcp targets.
-function isPrivateAddress(ip) {
-  if (net.isIPv4(ip)) {
-    const p = ip.split('.').map(Number);
-    if (p[0] === 10) return true;
-    if (p[0] === 127) return true;
-    if (p[0] === 0) return true;
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-    if (p[0] === 192 && p[1] === 168) return true;
-    if (p[0] === 169 && p[1] === 254) return true; // link-local incl. metadata
-    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true; // CGNAT
-    return false;
-  }
-  if (net.isIPv6(ip)) {
-    const l = ip.toLowerCase();
-    if (l === '::1' || l === '::') return true;
-    if (l.startsWith('fe80') || l.startsWith('fc') || l.startsWith('fd')) return true;
-    if (l.startsWith('::ffff:')) return isPrivateAddress(l.slice(7)); // IPv4-mapped
-    return false;
-  }
-  return false;
-}
-
-async function assertPublicHost(host) {
-  if (net.isIP(host)) {
-    if (isPrivateAddress(host)) throw new Error('target resolves to a private address');
-    return;
-  }
-  const { address } = await dns.promises.lookup(host);
-  if (isPrivateAddress(address)) throw new Error('target resolves to a private address');
-}
+// SSRF guard: private / loopback / link-local space is refused so a probe cannot
+// be pointed at the cloud metadata endpoint (169.254.169.254), localhost, or a
+// neighbouring compose service. The implementation moved to lib/ssrf.js when the
+// automation and alert webhooks turned out to need the same guard — one copy,
+// re-exported here because vendor-feeds.js has imported it from this module
+// since it was written.
 
 // Days until the server certificate expires (null when unknown/plain http).
 // rejectUnauthorized:false on purpose — an already-invalid chain should still

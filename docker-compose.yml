@@ -32,6 +32,8 @@ services:
       # recursive resolver of our own is what makes their answers trustworthy.
       # Override to a comma-separated list, or to empty for the host resolver.
       - OPSCAT_REPUTATION_DNS=${OPSCAT_REPUTATION_DNS:-unbound}
+      # CE only: permit webhook targets on private/LAN addresses (ignored in cloud)
+      - OPSCAT_ALLOW_PRIVATE_TARGETS=${OPSCAT_ALLOW_PRIVATE_TARGETS:-0}
       - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
       - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
       - OPSCAT_EDITION=community

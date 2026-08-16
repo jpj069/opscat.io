@@ -58,7 +58,7 @@ export interface AnalyticsData {
 
 export interface Rule {
   id: number; name: string; enabled: boolean;
-  channel: 'email' | 'teams' | 'webhook' | 'slack' | 'telegram' | 'discord' | 'ntfy' | 'pushover';
+  channel: 'email' | 'msteams' | 'webhook' | 'slack' | 'telegram' | 'discord' | 'ntfy' | 'pushover';
   triggerName: string | null; severityMin: number; cooldownM: number; recipients: string[];
 }
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }

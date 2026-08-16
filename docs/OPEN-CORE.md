@@ -86,10 +86,12 @@ standalone as the community edition.
 
 Keep the exclusion list in `scripts/publish-community.sh` in sync with this
 document. Internal planning documents stay private — `docs/BACKLOG.md`,
-`docs/BRIDGE.md`, `docs/INCIDENTS-V2.md` and `docs/POSTGRES-MIGRATION-PLAN.md`.
-A planning doc names problems, plan tiers and attack surfaces that a future
-change *would* open; none of that belongs in a public repository, even when the
-code it discusses is core. Contributions to the public repo are ported into the private repo
+`docs/BRIDGE.md`, `docs/INCIDENTS-V2.md`, `docs/AUTOMATION-V1.md`,
+`docs/ONCALL-V1.md` and `docs/POSTGRES-MIGRATION-PLAN.md`. A planning doc names
+problems, plan tiers and attack surfaces that a future change *would* open; none
+of that belongs in a public repository, even when the code it discusses is core
+— so a new design doc is an exclusion-list entry in the same commit that creates
+it. Contributions to the public repo are ported into the private repo
 (see `CONTRIBUTING.md`) and flow back out with the next sync.
 
 ## Why this split
