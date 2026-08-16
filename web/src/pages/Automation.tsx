@@ -7,6 +7,10 @@ import { useApp } from '../state';
 import { SEV } from '../format';
 import { Card, Button, Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput} from '../ui';
 import { Select } from '../Select';
+import {
+  PlusIcon,
+  XIcon,
+} from 'lucide-react';
 
 interface TeamMember { id: number; name: string; role: string; }
 interface AutomationAction { type: 'close_event' | 'assign_case' | 'webhook';
@@ -52,7 +56,7 @@ export default function Automation() {
   return (
     <div className="page">
       <PageHeader title="Automation">
-        {canEdit && <Button size="sm" onClick={() => setEditing('new')}>+ New automation</Button>}
+        {canEdit && <Button size="sm" onClick={() => setEditing('new')}><PlusIcon size={13} /> New automation</Button>}
       </PageHeader>
 
       <Card>
@@ -97,7 +101,7 @@ export default function Automation() {
                       if (confirm(`Delete automation "${r.name}"?`)) {
                         api.del(`/api/admin/automations/${r.id}`).then(load);
                       }
-                    }}>×</button>
+                    }}><XIcon size={15} /></button>
                 )}
               </span>
             </div>
@@ -207,8 +211,9 @@ function EditModal({ existing, team, onClose, onSaved }: {
                 options={ACTION_TYPES} style={{ minWidth: 170 }}
                 onChange={(v) => setAction(i, { type: v as AutomationAction['type'] })} />
               {actions.length > 1 && (
-                <button type="button" title="Remove action" style={{ color: SEV.critical, marginLeft: 'auto' }}
-                  onClick={() => setActions((cur) => cur.filter((_, j) => j !== i))}>×</button>
+                <button type="button" title="Remove action"
+                  style={{ color: SEV.critical, marginLeft: 'auto', display: 'inline-flex' }}
+                  onClick={() => setActions((cur) => cur.filter((_, j) => j !== i))}><XIcon size={15} /></button>
               )}
             </div>
             {a.type === 'close_event' && (
@@ -248,7 +253,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
         ))}
         {actions.length < 5 && (
           <Button size="sm" type="button" style={{ marginBottom: 12 }}
- onClick={() => setActions((cur) => [...cur, { type: 'webhook' }])}>+ Add action</Button>
+ onClick={() => setActions((cur) => [...cur, { type: 'webhook' }])}><PlusIcon size={13} /> Add action</Button>
         )}
 
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}

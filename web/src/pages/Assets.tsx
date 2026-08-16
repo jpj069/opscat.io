@@ -6,7 +6,15 @@ import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
 import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
-import { ServerIcon, NetworkIcon, AppWindowIcon, RadarIcon, HeartPulseIcon } from 'lucide-react';
+import {
+  AppWindowIcon,
+  HeartPulseIcon,
+  NetworkIcon,
+  PlusIcon,
+  RadarIcon,
+  ServerIcon,
+  XIcon,
+} from 'lucide-react';
 import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } from './Settings';
 import type { SecretInfo } from './Settings';
 import type { AssetRow } from '../types';
@@ -64,7 +72,7 @@ export default function Assets() {
   return (
     <div className="page">
       <PageHeader title="Assets">
-        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}>+ Add</Button>}
+        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}><PlusIcon size={13} /> Add</Button>}
       </PageHeader>
 
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
@@ -100,8 +108,8 @@ export default function Assets() {
               {r.lastSeen ? relTime(r.lastSeen) : 'never'}</span>
             <span>
               {canEdit && r.kind === 'heartbeat' && (
-                <button className="text-md" title="Delete heartbeat" style={{ color: SEV.critical}}
-                  onClick={() => removeHeartbeat(r)}>×</button>
+                <button title="Delete heartbeat" style={{ color: SEV.critical, display: 'inline-flex' }}
+                  onClick={() => removeHeartbeat(r)}><XIcon size={15} /></button>
               )}
             </span>
           </div>

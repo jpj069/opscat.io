@@ -7,7 +7,12 @@
 //   - a list that could not be queried is UNKNOWN, never "clean"
 //   - a finding carries its delisting link, so the fix is one click away
 import React, { useEffect, useMemo, useState } from 'react';
-import { RefreshCwIcon } from 'lucide-react';
+import {
+  ExternalLinkIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  XIcon,
+} from 'lucide-react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
@@ -159,7 +164,7 @@ export default function Reputation() {
     <div className="page">
       <PageHeader title="Reputation">
         {canWrite && (
-          <Button variant="primary" onClick={() => setShowAdd(true)}>+ Add asset</Button>
+          <Button variant="primary" onClick={() => setShowAdd(true)}><PlusIcon size={13} /> Add asset</Button>
         )}
       </PageHeader>
 
@@ -283,7 +288,8 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
               <StatusPill text={asset.enabled ? ui.label : 'paused'}
                 color={asset.enabled ? ui.color : 'var(--text3)'} />
             </div>
-            <button className="text-text2" onClick={onClose} style={{ fontSize: 'var(--t-xl)' }}>×</button>
+            <button className="text-text2" aria-label="Close" onClick={onClose}
+              style={{ display: 'inline-flex' }}><XIcon size={17} /></button>
           </div>
           {asset.rdns && (
             <div className="mono text-2xs text-text3" style={{ marginTop: 4 }}>{asset.rdns}</div>
@@ -375,7 +381,7 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
                     </span>
                     {l.url && (
                       <a className="mono text-2xs" href={l.url} target="_blank"
-                        rel="noreferrer noopener">delist ↗</a>
+                        rel="noreferrer noopener">delist <ExternalLinkIcon size={10} /></a>
                     )}
                   </div>
                 ))}
@@ -600,7 +606,7 @@ function ZoneBreakdown({ asset, zones }: { asset: ReputationAsset; zones: Reputa
               <StatusPill text={ZONE_UI[z.state].label} color={ZONE_UI[z.state].color} />
               {z.url && z.state === 'listed' && (
                 <a className="mono text-2xs" href={z.url} target="_blank"
-                  rel="noreferrer noopener">delist ↗</a>
+                  rel="noreferrer noopener">delist <ExternalLinkIcon size={10} /></a>
               )}
             </span>
           </div>

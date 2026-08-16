@@ -6,6 +6,7 @@ import { alpha, initials, relTime } from '../format';
 import { Card, Button, Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { UserRow } from '../types';
+import { PlusIcon } from 'lucide-react';
 
 const ROLES = ['admin', 'cto', 'lead', 'analyst'];
 const ROLE_COLOR: Record<string, string> = {
@@ -67,7 +68,7 @@ export default function Users() {
     <div className="page">
       <PageHeader title="Users">
         {isAdmin && (
-          <Button variant="primary" onClick={() => setInvite(true)}>+ Invite user</Button>
+          <Button variant="primary" onClick={() => setInvite(true)}><PlusIcon size={13} /> Invite user</Button>
         )}
       </PageHeader>
 

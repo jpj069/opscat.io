@@ -17,6 +17,11 @@ import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
 } from '../types';
+import {
+  CheckIcon,
+  PlusIcon,
+  XIcon,
+} from 'lucide-react';
 
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 
@@ -186,7 +191,8 @@ function SaveBar({ d }: { d: SettingsDraft }) {
     <div className="row row-wrap" style={{ justifyContent: 'flex-end', gap: 12 }}>
       {d.err && <span className="text-sm" style={{ color: SEV.critical }}>{d.err}</span>}
       {d.dirty && !d.err && <span className="text-sm text-text3">Unsaved changes</span>}
-      {d.saved && <span className="text-base font-semibold" style={{ color: SEV.green }}>saved ✓</span>}
+      {d.saved && <span className="row text-base font-semibold" style={{ color: SEV.green, gap: 4 }}>
+        <CheckIcon size={13} /> saved</span>}
       <Button variant="primary" onClick={d.save} disabled={!d.dirty || d.saving}>
         {d.saving ? 'Saving…' : 'Save changes'}
       </Button>
@@ -323,7 +329,7 @@ function AccessTab({ leadPlus }: { leadPlus: boolean }) {
     <>
       {!keysHidden && (
         <Card title="API Keys"
-          actions={<Button size="sm" onClick={() => setModal(true)}>+ Create key</Button>}>
+          actions={<Button size="sm" onClick={() => setModal(true)}><PlusIcon size={13} /> Create key</Button>}>
           <CardNote>Machine credentials for log ingest, server agents and remote probes.
             A key is shown once, at creation.</CardNote>
           <TableScroll minWidth={720}>
@@ -406,7 +412,7 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
     <>
       {!agentsHidden && (
         <Card title="Agents"
-          actions={leadPlus && <Button size="sm" onClick={() => setModal('agent')}>+ Register agent</Button>}>
+          actions={leadPlus && <Button size="sm" onClick={() => setModal('agent')}><PlusIcon size={13} /> Register agent</Button>}>
           <CardNote>Server agents shipping metrics, containers and logs. Registering one
             hands out an install one-liner with a token shown only once.</CardNote>
           <TableScroll minWidth={840}>
@@ -431,10 +437,10 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
                   onClick={leadPlus ? () => api.patch(`/api/admin/agents/${a.id}`, { autoUpdate: !a.autoUpdate }).then(reloadAgents) : undefined} />
                 <span>
                   {leadPlus && (
-                    <button className="text-lg" title="Delete agent" style={{ color: SEV.critical }}
+                    <button title="Delete agent" style={{ color: SEV.critical, display: 'inline-flex' }}
                       onClick={() => {
                         if (confirm(`Delete agent "${a.name}"?`)) api.del(`/api/admin/agents/${a.id}`).then(reloadAgents);
-                      }}>×</button>
+                      }}><XIcon size={15} /></button>
                   )}
                 </span>
               </div>
@@ -445,7 +451,7 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
 
       {!targetsHidden && (
         <Card title="SNMP Targets"
-          actions={<Button size="sm" onClick={() => setModal('target')}>+ Add target</Button>}>
+          actions={<Button size="sm" onClick={() => setModal('target')}><PlusIcon size={13} /> Add target</Button>}>
           <CardNote>Devices polled over SNMP v2c or v3. Credentials are stored encrypted
             and never read back.</CardNote>
           <TableScroll minWidth={780}>
@@ -470,10 +476,10 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
                   <span className="text-text3"> · {relTime(t.lastSeenAt)}</span>
                 </span>
                 <span>
-                  <button className="text-lg" title="Delete target" style={{ color: SEV.critical }}
+                  <button title="Delete target" style={{ color: SEV.critical, display: 'inline-flex' }}
                     onClick={() => {
                       if (confirm(`Delete SNMP target "${t.name}"?`)) api.del(`/api/admin/snmp/targets/${t.id}`).then(reloadTargets);
-                    }}>×</button>
+                    }}><XIcon size={15} /></button>
                 </span>
               </div>
             ))}
@@ -520,7 +526,7 @@ function AiCard() {
       if (apiKey) body.apiKey = apiKey;
       await api.put('/api/admin/ai', body);
       setApiKey(''); setDirty(false);
-      setMsg({ ok: true, text: 'saved ✓' });
+      setMsg({ ok: true, text: 'saved' });
       load();
     } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
     finally { setBusy(''); }
@@ -617,7 +623,7 @@ function VoiceCard() {
       if (apiKey) body.apiKey = apiKey;
       await api.put('/api/admin/voice', body);
       setApiKey(''); setDirty(false);
-      setMsg({ ok: true, text: 'saved ✓' });
+      setMsg({ ok: true, text: 'saved' });
       load();
     } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
     finally { setBusy(false); }
@@ -734,8 +740,8 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
           <span className="text-sm text-text0 font-semibold">{w.name}</span>
           <span className="mono text-xs text-text2" style={{ flex: 1 }}>
             {fmt(w.startsAt)} → {fmt(w.endsAt)}</span>
-          {canEdit && <button className="text-md" title="Delete" style={{ color: SEV.critical }}
-            onClick={() => remove(w)}>×</button>}
+          {canEdit && <button title="Delete" style={{ color: SEV.critical, display: 'inline-flex' }}
+            onClick={() => remove(w)}><XIcon size={15} /></button>}
         </div>
       ))}
       {canEdit && (
@@ -754,7 +760,7 @@ function MaintenanceCard({ canEdit }: { canEdit: boolean }) {
           <Field label="Ends">
             <DateTime required value={to} onChange={(e) => setTo(e.target.value)} />
           </Field>
-          <Button size="sm" style={{ marginBottom: 2 }}>+ Add window</Button>
+          <Button size="sm" style={{ marginBottom: 2 }}><PlusIcon size={13} /> Add window</Button>
           {err && <span className="text-sm" style={{ color: SEV.critical }}>{err}</span>}
         </form>
       )}
@@ -836,7 +842,7 @@ function PlanUpgradeCard({ plan, interval, current, canBuy, busy, onBuy }: {
           flexDirection: 'column', gap: 4 }}>
           {plan.features.slice(0, 5).map((f) => (
             <li key={f} className="row text-sm text-text2" style={{ gap: 6}}>
-              <span style={{ color: '#3fb950' }}>✓</span>{f}
+              <CheckIcon size={13} style={{ color: '#3fb950', flexShrink: 0 }} />{f}
             </li>
           ))}
         </ul>

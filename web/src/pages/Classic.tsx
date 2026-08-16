@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { age, fmtDateTime } from '../format';
+import { ArrowDownIcon, CheckIcon } from 'lucide-react';
 
 const MONO = "'JetBrains Mono', ui-monospace, monospace";
 
@@ -149,8 +150,10 @@ export default function Classic() {
             <div key={e.id} style={{ display: 'grid', gridTemplateColumns: EVENT_COLS, gap: 8,
               padding: '0 8px', color: c, alignItems: 'baseline' }}>
               <span style={{ display: 'inline-flex', gap: 4, alignSelf: 'center' }}>
-                <button title="finish" onClick={(ev) => act(e.id, 'finish', ev)} style={iconBtn}>✓</button>
-                <button title="downgrade" onClick={(ev) => act(e.id, 'downgrade', ev)} style={iconBtn}>↓</button>
+                <button title="finish" aria-label="finish" onClick={(ev) => act(e.id, 'finish', ev)}
+                  style={{ ...iconBtn, display: 'inline-flex' }}><CheckIcon size={13} /></button>
+                <button title="downgrade" aria-label="downgrade" onClick={(ev) => act(e.id, 'downgrade', ev)}
+                  style={{ ...iconBtn, display: 'inline-flex' }}><ArrowDownIcon size={13} /></button>
               </span>
               <span>{age(Date.now() - e.lastSeen)} / {age(Date.now() - e.firstSeen)}</span>
               <span style={{ textAlign: 'right' }}>{e.hits}</span>

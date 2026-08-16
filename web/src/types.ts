@@ -23,7 +23,15 @@ export interface EventRow {
 }
 export interface EventDetail extends EventRow {
   recentLogs: LogRow[];
+  timeline: EventTimelineEntry[];
   case: { label: string; id: number; status: string } | null;
+}
+/** One line of an event's history. `user: null` = the platform acted, not a person. */
+export interface EventTimelineEntry {
+  ts: number;
+  user: AssignedRef | null;
+  action: 'detected' | 'assign' | 'downgrade' | 'finish' | 'note' | string;
+  detail: string | null;
 }
 export interface LogRow { ts: number; device: string; line: string; sev: number; }
 

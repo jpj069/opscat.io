@@ -6,6 +6,7 @@ import { SEV, fmtTime } from '../format';
 import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
 import { Select } from '../Select';
 import type { Rule, NotificationRow } from '../types';
+import { PlusIcon } from 'lucide-react';
 
 const CHAN_COLORS: Record<string, string> = {
   teams: '#5865f2', email: '#388bfd', sms: '#3fb950', webhook: '#3fb950',
@@ -61,7 +62,7 @@ export default function Rules() {
     <div className="page">
       <PageHeader title="Alert Rules">
         {canEdit && (
-          <Button variant="primary" onClick={() => setEditing('new')}>+ New Rule</Button>
+          <Button variant="primary" onClick={() => setEditing('new')}><PlusIcon size={13} /> New Rule</Button>
         )}
       </PageHeader>
 

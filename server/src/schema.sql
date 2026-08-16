@@ -152,6 +152,22 @@ CREATE TABLE IF NOT EXISTS cases (
   closed_at     INTEGER
 );
 
+-- Who did what to an event, append-only. `cases.note` is a single column that every
+-- "Add Note" overwrote, so the previous note was gone and nothing recorded who wrote
+-- it; the audit log had the action but keyed the event by a free-text detail string,
+-- which cannot be queried back. This is the record the NOC reads during a handover.
+-- user_id NULL = the platform did it (detection, automation), not a person.
+CREATE TABLE IF NOT EXISTS event_timeline (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  ts            INTEGER NOT NULL,
+  user_id       INTEGER REFERENCES users(id),
+  action        TEXT NOT NULL,          -- assign | downgrade | finish | note | reopen
+  detail        TEXT                    -- the note body, or "90 → 65"
+);
+CREATE INDEX IF NOT EXISTS idx_event_timeline ON event_timeline(event_id, ts);
+
 CREATE TABLE IF NOT EXISTS agents (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        INTEGER NOT NULL DEFAULT 1,

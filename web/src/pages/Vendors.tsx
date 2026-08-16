@@ -8,7 +8,14 @@ import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
 import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput} from '../ui';
 import { Select } from '../Select';
-import { RefreshCwIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  ExternalLinkIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  XIcon,
+} from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
 
 const COLS = '1fr 130px 90px 100px 110px 60px';
@@ -58,7 +65,7 @@ export default function Vendors() {
     <div className="page">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1 className="page-title">Vendors</h1>
-        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}>+ Add vendor</Button>}
+        {canEdit && <Button variant="primary" onClick={() => setAdding(true)}><PlusIcon size={13} /> Add vendor</Button>}
       </div>
 
       {rows && rows.length > 0 && (
@@ -105,8 +112,8 @@ export default function Vendors() {
                 <button title="Check now" onClick={() => pollNow(v)} disabled={busyId === v.id}
                   style={{ color: busyId === v.id ? 'var(--text3)' : 'var(--text2)' }}>
                   <RefreshCwIcon size={13} /></button>
-                {canEdit && <button className="text-md" title="Stop monitoring" style={{ color: SEV.critical}}
-                  onClick={() => remove(v)}>×</button>}
+                {canEdit && <button title="Stop monitoring" style={{ color: SEV.critical, display: 'inline-flex' }}
+                  onClick={() => remove(v)}><XIcon size={15} /></button>}
               </span>
             </div>
           );
@@ -217,7 +224,7 @@ function AddVendorModal({ existing, onClose, onAdded }:
                   ? <span className="mono text-xs" style={{ color: SEV.green }}>monitored</span>
                   : <Button size="sm" disabled={busySlug !== null}
  onClick={() => addFromCatalog(c)}>
-                      {busySlug === c.slug ? '…' : '+ Add'}</Button>}
+                      {busySlug === c.slug ? '…' : <><PlusIcon size={13} /> Add</>}</Button>}
               </div>
             ))}
           </div>
@@ -233,8 +240,8 @@ function AddVendorModal({ existing, onClose, onAdded }:
  disabled={detecting || !detectUrl.trim()}>{detecting ? '…' : 'Detect'}</Button>
             </div>
           </Field>
-          {preview && <div className="mono text-xs" style={{ color: SEV.green, marginBottom: 10 }}>
-            ✓ {preview}</div>}
+          {preview && <div className="row mono text-xs" style={{ color: SEV.green, marginBottom: 10, gap: 5 }}>
+            <CheckIcon size={13} style={{ flexShrink: 0 }} /> {preview}</div>}
           <Field label="Name">
             <Input required value={name} onChange={(e) => setName(e.target.value)}
               placeholder="Acme SaaS" />

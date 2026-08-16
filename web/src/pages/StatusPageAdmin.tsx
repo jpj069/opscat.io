@@ -7,6 +7,11 @@ import { alpha, relTime, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input} from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusReportsResponse } from '../types';
+import {
+  ExternalLinkIcon,
+  PlusIcon,
+  XIcon,
+} from 'lucide-react';
 
 const GRID = '20px 1fr 100px 150px 150px 260px 70px';
 // colors, ranks and the status list all come from the shared scale
@@ -82,7 +87,8 @@ export default function StatusPageAdmin() {
             <span className="micro text-2xs">{published ? 'Published' : 'Unpublished'}</span>
           </span>
         )}
-        <a className="btn" href="/status" target="_blank" rel="noreferrer">View public page ↗</a>
+        <a className="btn" href="/status" target="_blank" rel="noreferrer">
+          View public page <ExternalLinkIcon size={13} /></a>
       </PageHeader>
 
       {/* overall banner */}
@@ -97,7 +103,7 @@ export default function StatusPageAdmin() {
       <Card style={{ padding: 0 }}>
         <div className="row row-wrap" style={{ justifyContent: 'space-between', padding: '12px 16px', gap: 8 }}>
           <span className="card-title" style={{ margin: 0 }}>Components</span>
-          {canEdit && <Button size="sm" onClick={() => setShowAdd(true)}>+ Add component</Button>}
+          {canEdit && <Button size="sm" onClick={() => setShowAdd(true)}><PlusIcon size={13} /> Add component</Button>}
         </div>
         <div className="text-2xs text-text3" style={{ padding: '0 16px 10px' }}>
           Status follows the worst impact of open incidents — a manual change is
@@ -136,8 +142,8 @@ export default function StatusPageAdmin() {
               <span className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <span className="mono text-sm text-text1">{pct}%</span>
                 {canEdit && (
-                  <Button size="sm" variant="danger" title="Delete" onClick={() => remove(c)}
- >×</Button>
+                  <Button size="sm" variant="danger" title="Delete" aria-label="Delete component"
+ onClick={() => remove(c)}><XIcon size={13} /></Button>
                 )}
               </span>
             </div>
@@ -218,8 +224,8 @@ function Subscribers({ isAdmin }: { isAdmin: boolean }) {
             <span className="mono text-xs" style={{ flexShrink: 0,
               color: r.confirmedAt ? 'var(--text2)' : 'var(--text3)' }}>
               {r.confirmedAt ? `confirmed ${relTime(r.confirmedAt)}` : 'pending'}</span>
-            <Button size="sm" variant="danger" title="Remove subscriber"
-              onClick={() => remove(r.id, r.email)}>×</Button>
+            <Button size="sm" variant="danger" title="Remove subscriber" aria-label="Remove subscriber"
+              onClick={() => remove(r.id, r.email)}><XIcon size={13} /></Button>
           </div>
         ))}
       </div>

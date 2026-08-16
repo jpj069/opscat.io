@@ -7,11 +7,42 @@ import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import { topLayer } from './toplayer';
 import {
-  ActivityIcon, TableIcon, LayoutDashboardIcon, BoxesIcon, InboxIcon, TriangleAlertIcon,
-  GlobeIcon, RadarIcon, ScrollTextIcon, BellRingIcon, ChartColumnIcon, UsersIcon,
-  SettingsIcon, GemIcon, Rows3Icon, Rows4Icon, SunIcon, MoonIcon, MenuIcon, SearchIcon,
-  ChevronUpIcon, LayoutGridIcon, FilterIcon, Building2Icon, ZapIcon, ShieldAlertIcon,
+  ActivityIcon,
+  ArrowDownIcon,
+  ArrowRightIcon,
+  BellRingIcon,
+  BoxesIcon,
+  Building2Icon,
+  ChartColumnIcon,
+  CheckIcon,
+  ChevronUpIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
+  FilterIcon,
+  GemIcon,
+  GlobeIcon,
+  InboxIcon,
+  LayoutDashboardIcon,
+  LayoutGridIcon,
+  MenuIcon,
+  MessageSquarePlusIcon,
+  MoonIcon,
+  RadarIcon,
   RadioIcon,
+  Rows3Icon,
+  Rows4Icon,
+  ScrollTextIcon,
+  SearchIcon,
+  SettingsIcon,
+  ShieldAlertIcon,
+  SunIcon,
+  TableIcon,
+  TriangleAlertIcon,
+  UserCheckIcon,
+  UserPlusIcon,
+  UsersIcon,
+  XIcon,
+  ZapIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CaseRow, EventDetail, User } from './types';
@@ -412,8 +443,10 @@ function Shell() {
             {!collapsed && <span className="text-base font-bold text-text0">OpsCat</span>}
           </div>
           <button onClick={() => setCollapsed(!collapsed)} className="tb-hide-m"
-            style={{ color: 'var(--text3)', fontSize: 'var(--t-sm)' }}>
-            {collapsed ? '»' : '«'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={{ color: 'var(--text3)', display: 'inline-flex' }}>
+            {collapsed ? <ChevronsRightIcon size={15} /> : <ChevronsLeftIcon size={15} />}
           </button>
         </div>
         {/* The nav list is the ONLY thing that scrolls in here. On a phone the rail is
@@ -528,7 +561,9 @@ function Shell() {
           {edition === 'cloud' && nearLimit && (
             <button className="mono tb-hide-m" onClick={() => app.setNav('settings')}
               title="Approaching a plan limit"
-              style={{ fontSize: 'var(--t-2xs)', fontWeight: 700, color: SEV.medium }}>Upgrade →</button>
+              style={{ fontSize: 'var(--t-2xs)', fontWeight: 700, color: SEV.medium,
+                display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              Upgrade <ArrowRightIcon size={12} /></button>
           )}
           <button onClick={() => setShowPalette(true)} className="row tb-hide-m" style={{ width: 220,
             justifyContent: 'space-between', background: 'var(--bg2)', border: '1px solid var(--bg3)',
@@ -697,6 +732,17 @@ function Palette({ onClose }: { onClose: () => void }) {
 
 // ---------------------------------------------------------------- event slide-over
 
+// the label column is a grid TRACK, so no row's value can shift it (see below)
+const DETAIL_COLS = '90px minmax(0, 1fr)';
+
+// What an entry in the event history says it is. The verb is past tense on purpose:
+// the panel is a record of what happened, not a list of buttons.
+const TIMELINE_VERB: Record<string, string> = {
+  detected: 'detected', assign: 'assigned to', downgrade: 'downgraded',
+  finish: 'finished', note: 'noted', reopen: 'reopened',
+  case_status: 'moved the case', root_cause: 'set the root cause',
+};
+
 function EventSlideOver({ id }: { id: number }) {
   const app = useApp();
   const [detail, setDetail] = useState<EventDetail | null>(null);
@@ -707,6 +753,11 @@ function EventSlideOver({ id }: { id: number }) {
 
   if (!detail) return null;
   const c = sevColor(detail.severity);
+  // what each action would still change — the buttons below read these, and the
+  // server refuses the same three with a 409
+  const assignedToMe = detail.assigned?.id === app.user?.id;
+  const atFloor = detail.severity <= 10;
+  const finished = detail.status !== 'active';
   const act = async (action: string, extra?: object) => {
     await api.post(`/api/events/${id}/action`, { action, ...extra });
     app.refreshEvents(); load();
@@ -719,7 +770,8 @@ function EventSlideOver({ id }: { id: number }) {
         <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--bg3)' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <SevBadge score={detail.severity} />
-            <button onClick={() => app.setSelectedEvent(null)} style={{ color: 'var(--text2)', fontSize: 'var(--t-xl)' }}>×</button>
+            <button onClick={() => app.setSelectedEvent(null)} aria-label="Close"
+              style={{ color: 'var(--text2)', display: 'inline-flex' }}><XIcon size={18} /></button>
           </div>
           <div className="mono font-semibold text-text0" style={{ fontSize: 18, margin: '10px 0 4px' }}>
             {detail.name}
@@ -739,39 +791,97 @@ function EventSlideOver({ id }: { id: number }) {
         </div>
         <div style={{ padding: '0 20px 14px' }}>
           <div className="micro text-2xs" style={{ marginBottom: 6 }}>HIT TREND</div>
-          <Spark data={detail.spark || []} w={470} h={36} color={c} />
+          {/* fluid: the panel is 520px on a desktop and 92vw on a phone — a fixed
+              width here is a width the panel has to scroll to */}
+          <Spark data={detail.spark || []} fluid h={36} color={c} />
         </div>
         <div style={{ padding: '0 20px 14px' }}>
           <div className="micro text-2xs" style={{ marginBottom: 6 }}>DETAILS</div>
+          {/* A GRID, not a flex row. `width: 90` on a flex item is a suggestion —
+              flex-shrink lets the longest value squeeze its own label, so each row
+              started its value at a different x (measured: 68.3px next to 90px, and
+              the reader sees a ragged column). A grid track cannot be shrunk by a
+              sibling. `start` puts the label on the value's FIRST line rather than
+              centring it against a three-line description. */}
           {([['Description', detail.description || '—'], ['Target', detail.target || '—'],
             ['Status', detail.status], ['First seen', fmtTime(detail.firstSeen)],
             ['Last seen', fmtTime(detail.lastSeen)],
             ['Case', detail.case ? `${detail.case.label} (${detail.case.status})` : '—'],
             ['Assigned', detail.assigned ? detail.assigned.n : 'unassigned']] as const).map(([k, v]) => (
-            <div key={k} className="row" style={{ padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
-              <span className="text-xs text-text3" style={{ width: 90}}>{k}</span>
-              <span className="mono text-sm text-text1" style={{ wordBreak: 'break-all' }}>{v}</span>
+            <div key={k} style={{ display: 'grid', gridTemplateColumns: DETAIL_COLS, gap: 8,
+              alignItems: 'start', padding: '4px 0', borderBottom: '1px solid var(--bg3)' }}>
+              <span className="text-xs text-text3">{k}</span>
+              {/* `anywhere`, not `break-all`: break-all chops every line at the box
+                  edge regardless of words ("interfac|e"), which is unreadable for a
+                  description written in prose. `anywhere` wraps between words and
+                  only splits a token — a URL, an OID, a 40-char hostname — when that
+                  token genuinely does not fit, which is the case it was added for. */}
+              <span className="mono text-sm text-text1" style={{ overflowWrap: 'anywhere' }}>{v}</span>
             </div>
           ))}
         </div>
+        {/* Every action states when it is spent. A button that stays live after it has
+            done its job invites the second click, and the second click is the one that
+            asks "did the first one work?" — which is the question the panel exists to
+            answer. The server enforces the same three guards with a 409, because a
+            disabled button is a courtesy, not a lock. */}
+        {/* Icons come from lucide-react, never a unicode glyph: "✓" and "↓" are TEXT,
+            so they take the font's own metrics and baseline instead of the 13px box
+            every other icon in the app sits in — which is why they never lined up
+            with their label. `.btn` is already an inline-flex with a 6px gap, so the
+            icon needs no spacing of its own. */}
         <div style={{ padding: '0 20px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button size="sm" style={{ color: SEV.purple }} onClick={() => act('assign')}>
-            Assign to me</Button>
-          <Button size="sm" style={{ color: SEV.medium }} onClick={() => act('downgrade')}>
-            ↓ Downgrade</Button>
-          <Button size="sm" style={{ color: SEV.green }} onClick={() => act('finish')}>
-            ✓ Finish Case</Button>
+          <Button size="sm" style={{ color: SEV.purple }} disabled={assignedToMe}
+            title={assignedToMe ? 'already assigned to you' : undefined}
+            onClick={() => act('assign')}>
+            {assignedToMe ? <UserCheckIcon size={13} /> : <UserPlusIcon size={13} />}
+            {assignedToMe ? 'Assigned to you' : 'Assign to me'}</Button>
+          <Button size="sm" style={{ color: SEV.medium }} disabled={atFloor}
+            title={atFloor ? 'severity is already at the floor' : undefined}
+            onClick={() => act('downgrade')}>
+            <ArrowDownIcon size={13} /> Downgrade</Button>
+          <Button size="sm" style={{ color: SEV.green }} disabled={finished}
+            title={finished ? 'this event is already finished' : undefined}
+            onClick={() => act('finish')}>
+            <CheckIcon size={13} /> {finished ? 'Case finished' : 'Finish Case'}</Button>
           <Button size="sm" style={{ color: SEV.cyan }} onClick={() => setShowNote(!showNote)}>
-            Add Note</Button>
+            <MessageSquarePlusIcon size={13} /> Add Note</Button>
         </div>
         {showNote && (
           <div style={{ padding: '0 20px 14px' }}>
             <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)}
               placeholder="Note for the case…" />
-            <Button variant="primary" size="sm" style={{ marginTop: 6 }}
+            <Button variant="primary" size="sm" style={{ marginTop: 6 }} disabled={!note.trim()}
  onClick={() => { act('note', { note }); setShowNote(false); setNote(''); }}>Save note</Button>
           </div>
         )}
+        {/* HISTORY — the handover question ("who touched this, and what did they say?")
+            answered in the panel that raises it. Notes used to go into a single
+            `cases.note` column that the next note overwrote and no screen displayed,
+            so writing one looked exactly like losing one. */}
+        <div style={{ padding: '0 20px 14px' }}>
+          <div className="micro text-2xs" style={{ marginBottom: 6 }}>HISTORY</div>
+          {detail.timeline.map((t, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: DETAIL_COLS, gap: 8,
+              alignItems: 'start', padding: '5px 0', borderBottom: '1px solid var(--bg3)' }}>
+              <span className="mono text-xs text-text3">{fmtTime(t.ts)}</span>
+              <span style={{ minWidth: 0 }}>
+                <span className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
+                  {t.user
+                    ? <Avatar i={t.user.i} c={t.user.c} size={16} />
+                    : <GlowDot color="var(--text3)" />}
+                  <span className="text-xs text-text2">
+                    {t.user ? t.user.n : 'OpsCat'} {TIMELINE_VERB[t.action] || t.action}
+                  </span>
+                </span>
+                {t.detail && (
+                  <span className="mono text-xs text-text1" style={{ display: 'block',
+                    marginTop: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.detail}</span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
         <div style={{ padding: '0 20px 20px' }}>
           <div className="micro text-2xs" style={{ marginBottom: 6 }}>RECENT SYSLOGS · {detail.device}</div>
           {detail.recentLogs.length === 0 && <div className="text-sm text-text3">no recent logs</div>}
@@ -780,7 +890,7 @@ function EventSlideOver({ id }: { id: number }) {
               display: 'flex', gap: 8 }}>
               <span className="mono text-xs text-text3" style={{ flexShrink: 0 }}>
                 {fmtTime(l.ts)}</span>
-              <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
+              <span className="mono text-xs" style={{ color: logSevColor(l.sev), overflowWrap: 'anywhere' }}>
                 {l.line}</span>
             </div>
           ))}

@@ -126,10 +126,23 @@ one-liner shown in onboarding and Settings → Agents & SNMP:
 
 - `GET /api/stream` — SSE; events: `log` `{ts,device,line,sev}`, `event` (event object)
 - `GET /api/events?status=active|finished|downgraded|all&limit=` → `[{id,name,device,ip,target,description,severity,hits,status,firstSeen,lastSeen,assigned:{id,n,i,c}|null,spark:[10 cumulative points]}]`
-- `GET /api/events/:id` → event + `recentLogs` + `case {label,id,status}`
+- `GET /api/events/:id` → event + `spark` (same 10 cumulative points as the list) + `recentLogs` + `timeline` + `case {label,id,status}`
+  - `timeline: [{ts, user:{id,n,i,c}|null, action, detail}]`, oldest first — who did what to this
+    event. `user: null` = the platform, not a person. The first entry is always `detected`,
+    derived from `firstSeen` (so events predating the table still have a history) and carries
+    no `detail`: `severity` is the CURRENT value, and a derived line must not state as fact
+    something a later downgrade made true. Actions: `detected`, `assign`, `downgrade`
+    (`"92 → 67"`), `finish`, `note` (the note body), `case_status`, `root_cause`.
 - `POST /api/events/:id/action` — `{action:'finish'|'downgrade'|'assign'|'note', userId?, note?}`
+  - appends one `timeline` entry per accepted call. **409** when the action would change
+    nothing: already finished, already assigned to that user, severity already at the floor
+    (10). The UI disables the matching button; this is the same rule enforced server-side.
 - `GET /api/cases?status=` → `[{id,label,eventId,name,device,severity,status,assigned,rootCause,note,openedAt,closedAt,durationMs}]`
-- `PATCH /api/cases/:id` — `{status?, assignedUserId?, rootCause?, note?}`
+- `PATCH /api/cases/:id` — `{status?, assignedUserId?, rootCause?, note?}`. Each field that
+  actually CHANGED appends an entry to the event's timeline (a re-save of an untouched form
+  records nothing), so a note written here and one written in the slide-over land in the
+  same history. `note` is a single column — it holds the latest note; the timeline holds all
+  of them, with their authors.
 - `GET /api/logs?hours=&q=&limit=` → `[{ts,device,line,sev}]`
 - `GET /api/dashboard` → `{sevCounts, openCases, mttrMs, logs24, events24, casesByAnalyst}`
 - `GET /api/analytics?range=24h|7d|30d` → `{volume:[{d,c,h,m,l}], mttrDaily:[{d,v}], topTypes, topServers, totals:{events,mttrMs,resolutionRate,notifications,notificationsFailed}}`

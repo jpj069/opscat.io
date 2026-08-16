@@ -60,6 +60,19 @@ function tabFromPath(): string {
 }
 
 /**
+ * The open event slide-over, as a deep link: `/app/monitor?event=123`.
+ *
+ * A query parameter and not a path segment, because the slide-over is an OVERLAY on
+ * whatever page is behind it — the path already says which page that is, and
+ * `/app/<page>/<tab>` is spoken for by useTab.
+ */
+function eventFromSearch(): number | null {
+  const raw = new URLSearchParams(location.search).get('event');
+  const id = Number(raw);
+  return raw && Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/**
  * A page's tab, in the URL — `/app/pipeline/classifiers` rather than state nobody
  * can link to. Every tabbed page uses this; a tab that lives only in useState
  * cannot be shared, bookmarked, or reached by the back button, and reloading the
@@ -113,7 +126,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [eventsLoading, setEventsLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(true);
   const [connected, setConnected] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<number | null>(null);
+  const [selectedEvent, setSelectedEventState] = useState<number | null>(eventFromSearch);
   const [bridgeIncident, setBridgeIncident] = useState<number | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -128,10 +141,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const setNav = (n: string) => {
     setNavState(n);
+    // the new URL carries no ?event, so the slide-over cannot stay open over the
+    // page it was not opened from — the URL is the truth, both ways
+    setSelectedEventState(null);
     history.pushState(null, '', `/app/${n}`);
   };
+
+  /**
+   * Open/close the event slide-over AND write it to the URL, so the panel can be
+   * linked, bookmarked and closed with the back button.
+   *
+   * History shape: opening PUSHES (back closes it), switching from one event to the
+   * next REPLACES (one entry means "an event is open", not one per row clicked), and
+   * closing steps back over the entry we pushed instead of stacking open/close pairs.
+   * A deep link landed on has no entry of ours to pop — it gets a replace, so closing
+   * never walks the reader off the app.
+   */
+  const setSelectedEvent = (id: number | null) => {
+    setSelectedEventState(id);
+    const url = new URL(location.href);
+    const ours = !!history.state?.event;
+    if (id === null) {
+      if (ours) { history.back(); return; }
+      url.searchParams.delete('event');
+      history.replaceState(null, '', url.pathname + url.search);
+      return;
+    }
+    url.searchParams.set('event', String(id));
+    const target = url.pathname + url.search;
+    if (ours) history.replaceState({ event: id }, '', target);
+    else history.pushState({ event: id }, '', target);
+  };
+
   useEffect(() => {
-    const onPop = () => setNavState(navFromPath());
+    const onPop = () => { setNavState(navFromPath()); setSelectedEventState(eventFromSearch()); };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);

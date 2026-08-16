@@ -4,6 +4,7 @@ import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
 import { HAS_POPOVER, topLayer } from './toplayer';
 import markLight from './assets/opscat-mark.png';
 import markDark from './assets/opscat-mark-dark.png';
+import { XIcon } from 'lucide-react';
 
 // The OpsCat brand mark (transparent line art). Renders both stroke variants;
 // tokens.css shows the one matching body[data-theme].
@@ -35,14 +36,38 @@ export function StatusPill({ text, color }: { text: string; color: string }) {
   );
 }
 
+/**
+ * Initials in a coloured disc. ONE size knob: everything else — the circle, the type
+ * size, the centring — comes from `.avatar` in tokens.css, so a 16px avatar and a 28px
+ * one are the same picture at two scales.
+ *
+ * It was computed inline here before, and neither half survived measuring: the
+ * `Math.max(8, size * 0.35)` clamp meant a 16px avatar drew its initials at 0.50 of
+ * the box while a 26px one used 0.35 (so the small one read as cramped and lopsided),
+ * and the inherited 1.5 line-height centred the text by its LINE BOX rather than its
+ * ink, leaving the letters ~1.7px high in a 16px avatar — measured in pixels.
+ *
+ * The initials are SVG for that second reason. HTML can only centre a LINE box, and a
+ * line box is ascent + descent — but initials are capitals with nothing below the
+ * baseline, so centring the box always leaves the letters sitting high. A `viewBox`
+ * also turns the geometry into a ratio rather than a pixel count, so every size is
+ * literally the same picture.
+ *
+ * `y = 63.9` is that centring, done properly: capitals occupy 0…capHeight above the
+ * baseline, so the baseline goes at 50 + capHeight/2 = 50 + (0.73 × 38)/2. Measured,
+ * not guessed — `dominant-baseline: central` (the font's ascent/descent midpoint) was
+ * the first attempt and left the letters 1.06px high in a 26px disc.
+ *
+ * Only the colour stays inline — it is data, not geometry.
+ */
 export function Avatar({ i, c, size = 26 }: { i: string; c: string; size?: number }) {
   return (
-    <span className="font-semibold" style={{
-      width: size, height: size, borderRadius: '50%', flexShrink: 0,
+    <span className="avatar" style={{
+      ['--av' as string]: `${size}px`,
       background: `linear-gradient(135deg, ${c}, ${alpha(c, 0.6)})`,
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: Math.max(8, size * 0.35), color: '#fff',
-      fontFamily: "'JetBrains Mono', monospace"}}>{i}</span>
+    }} role="img" aria-label={i}>
+      <svg viewBox="0 0 100 100" aria-hidden="true"><text x="50" y="63.9">{i}</text></svg>
+    </span>
   );
 }
 
@@ -55,25 +80,56 @@ export function Toggle({ on, onClick, disabled }: { on: boolean; onClick?: () =>
   );
 }
 
-export function Spark({ data, w = 56, h = 18, color = SEV.low, fill = true, dot = true }:
-  { data: number[]; w?: number; h?: number; color?: string; fill?: boolean; dot?: boolean }) {
-  if (!data || data.length < 2) return <svg width={w} height={h} />;
-  const min = Math.min(...data); const max = Math.max(...data);
-  const range = max - min || 1;
-  const pts = data.map((v, i) => [
-    (i / (data.length - 1)) * (w - 2) + 1,
-    h - 2 - ((v - min) / range) * (h - 4),
-  ]);
-  const line = pts.map((p) => p.join(',')).join(' ');
-  const poly = `1,${h - 1} ${line} ${w - 1},${h - 1}`;
-  const last = pts[pts.length - 1];
-  return (
-    <svg width={w} height={h} style={{ display: 'block', flexShrink: 0 }}>
-      {fill && <polygon points={poly} fill={alpha(color, 0.12)} />}
-      <polyline points={line} fill="none" stroke={color} strokeWidth={1.4} />
-      {dot && <circle cx={last[0]} cy={last[1]} r={2} fill={color} />}
-    </svg>
-  );
+/**
+ * Sparkline. `w` is a FIXED pixel width — right for a table cell, wrong for anything
+ * that has to fit a box whose width comes from the viewport. `fluid` measures the
+ * parent instead and draws at that width, with `w` as the pre-measurement fallback.
+ *
+ * Measured, not styled: the slide-over drew its hit trend at a hard-coded 470px, and
+ * on a 390px phone the panel is 358px wide — so the panel scrolled sideways by 132px
+ * with nothing to see out there. A `viewBox` + `preserveAspectRatio="none"` stretch
+ * would fit the box too, but it scales x and y differently: the stroke thins and the
+ * last-point dot turns into an ellipse. Measuring keeps the geometry honest.
+ */
+export function Spark({ data, w = 56, h = 18, color = SEV.low, fill = true, dot = true, fluid = false }:
+  { data: number[]; w?: number; h?: number; color?: string; fill?: boolean; dot?: boolean; fluid?: boolean }) {
+  const boxRef = React.useRef<HTMLSpanElement>(null);
+  const [boxW, setBoxW] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!fluid || !el) return;
+    setBoxW(el.clientWidth);
+    const ro = new ResizeObserver(() => setBoxW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fluid]);
+  const ww = fluid ? (boxW || w) : w;
+
+  let svg: React.ReactElement;
+  if (!data || data.length < 2) {
+    svg = <svg width={ww} height={h} />;
+  } else {
+    const min = Math.min(...data); const max = Math.max(...data);
+    const range = max - min || 1;
+    const pts = data.map((v, i) => [
+      (i / (data.length - 1)) * (ww - 2) + 1,
+      h - 2 - ((v - min) / range) * (h - 4),
+    ]);
+    const line = pts.map((p) => p.join(',')).join(' ');
+    const poly = `1,${h - 1} ${line} ${ww - 1},${h - 1}`;
+    const last = pts[pts.length - 1];
+    svg = (
+      <svg width={ww} height={h} style={{ display: 'block', flexShrink: 0 }}>
+        {fill && <polygon points={poly} fill={alpha(color, 0.12)} />}
+        <polyline points={line} fill="none" stroke={color} strokeWidth={1.4} />
+        {dot && <circle cx={last[0]} cy={last[1]} r={2} fill={color} />}
+      </svg>
+    );
+  }
+  // the measured span must be able to shrink, or it inherits the SVG's width and
+  // reports the very number we are trying to correct
+  if (!fluid) return svg;
+  return <span ref={boxRef} style={{ display: 'block', width: '100%', minWidth: 0 }}>{svg}</span>;
 }
 
 // value/sub = null → the card renders itself in loading state (same chrome,
@@ -257,7 +313,8 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
       <div className="modal-panel" style={{ width }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
           <span className="text-md font-bold text-text0">{title}</span>
-          {!hideClose && <button className="text-text2 text-xl" onClick={onClose}>×</button>}
+          {!hideClose && <button className="text-text2" aria-label="Close" onClick={onClose}
+            style={{ display: 'inline-flex' }}><XIcon size={17} /></button>}
         </div>
         {children}
       </div>

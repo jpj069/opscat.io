@@ -12,6 +12,11 @@ import { useTab } from '../state';
 import type {
   ClassifierRule, ClassifiersResponse, ClassifyTestResult, PipelineStats, ScoutTemplate,
 } from '../types';
+import {
+  CheckIcon,
+  PlusIcon,
+  XIcon,
+} from 'lucide-react';
 
 type Tab = 'throughput' | 'classifiers' | 'scout';
 type Range = '24h' | '7d' | '30d';
@@ -152,7 +157,7 @@ function Classifiers() {
       <Card>
         <div className="card-title" style={{ justifyContent: 'space-between' }}>
           <span>Custom rules · this organization</span>
-          {isAdmin && <Button size="sm" onClick={add}>+ Add rule</Button>}
+          {isAdmin && <Button size="sm" onClick={add}><PlusIcon size={13} /> Add rule</Button>}
         </div>
         <div className="text-xs text-text3" style={{ marginBottom: 10 }}>
           Evaluated before the built-ins, first match wins. Target group extracts a regex
@@ -185,15 +190,16 @@ function Classifiers() {
                 inputMode="numeric" 
                 onChange={(e) => edit(i, { targetGroup: e.target.value ? parseInt(e.target.value, 10) : null })} />
               <span>
-                {isAdmin && <button className="text-lg" title="Delete rule" style={{ color: SEV.critical}}
-                  onClick={() => remove(i)}>×</button>}
+                {isAdmin && <button title="Delete rule" style={{ color: SEV.critical, display: 'inline-flex' }}
+                  onClick={() => remove(i)}><XIcon size={15} /></button>}
               </span>
             </div>
           ))}
         </TableScroll>
         {isAdmin && (
           <div className="row" style={{ justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
-            {saved && <span className="text-base font-semibold" style={{ color: SEV.green}}>saved ✓</span>}
+            {saved && <span className="row text-base font-semibold" style={{ color: SEV.green, gap: 4 }}>
+              <CheckIcon size={13} /> saved</span>}
             <Button variant="primary" onClick={save} disabled={!dirty || saving}>
               {saving ? 'Saving…' : 'Save Rules'}
             </Button>

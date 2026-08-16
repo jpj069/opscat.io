@@ -4,7 +4,13 @@ import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
 import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input} from '../ui';
-import { PanelTopIcon, PanelLeftIcon, SquareIcon } from 'lucide-react';
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  PanelLeftIcon,
+  PanelTopIcon,
+  SquareIcon,
+} from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
 const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
@@ -108,10 +114,12 @@ export default function Monitor() {
                 borderLeft: selected ? `2px solid ${c}` : '2px solid transparent',
                 background: selected ? alpha(c, 0.06) : undefined }}>
               <span className="row" style={{ gap: 4 }}>
-                <button title="Finish" onClick={(ev) => act(e.id, 'finish', ev)}
-                  style={{ color: SEV.green, fontSize: 'var(--t-sm)', opacity: 0.7 }}>✓</button>
-                <button title="Downgrade" onClick={(ev) => act(e.id, 'downgrade', ev)}
-                  style={{ color: SEV.medium, fontSize: 'var(--t-sm)', opacity: 0.7 }}>↓</button>
+                <button title="Finish" aria-label="Finish" onClick={(ev) => act(e.id, 'finish', ev)}
+                  style={{ color: SEV.green, opacity: 0.7, display: 'inline-flex' }}>
+                  <CheckIcon size={14} /></button>
+                <button title="Downgrade" aria-label="Downgrade" onClick={(ev) => act(e.id, 'downgrade', ev)}
+                  style={{ color: SEV.medium, opacity: 0.7, display: 'inline-flex' }}>
+                  <ArrowDownIcon size={14} /></button>
               </span>
               <SevBadge score={e.severity} />
               <span className="mono text-sm font-semibold text-text0" style={{

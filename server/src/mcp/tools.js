@@ -402,18 +402,27 @@ const TOOLS = [
       const e = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!e) return fail(`No event ${a.id} in this organization.`);
       const t = now();
+      // Same three writes as POST /events/:id/action, and the same timeline entry:
+      // an event's history must not have a hole where an agent acted. The client id
+      // rides along in the detail, so the panel says a tool did this, not a person
+      // at a keyboard.
+      const via = ` [via ${p.clientId}]`;
       if (a.action === 'finish') {
         db.prepare("UPDATE events SET status = 'finished', finished_at = ?, finished_by = ? WHERE id = ? AND org_id = ?")
           .run(t, p.user.id, e.id, p.orgId);
         db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
           .run(t, e.id, p.orgId);
+        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'finish', via.trim());
       } else if (a.action === 'downgrade') {
+        const newSev = Math.max(10, e.severity - 25);
         db.prepare('UPDATE events SET severity = ? WHERE id = ? AND org_id = ?')
-          .run(Math.max(10, e.severity - 25), e.id, p.orgId);
+          .run(newSev, e.id, p.orgId);
+        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'downgrade', `${e.severity} → ${newSev}${via}`);
       } else {
         if (!isStr(a.note, 2000)) return fail('action "note" requires a note.');
         db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
           .run(a.note, e.id, p.orgId);
+        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'note', `${a.note}${via}`);
       }
       auditTool(p, `event_${a.action}`, `event ${e.id} ${e.name}@${e.device}`);
       const after = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(e.id, p.orgId);

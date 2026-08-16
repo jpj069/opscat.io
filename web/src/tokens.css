@@ -291,6 +291,12 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   display: inline-flex; align-items: center; gap: 6px;
 }
 .btn:hover { color: var(--text0); border-color: var(--text3); }
+/* A spent action has to LOOK spent. `disabled` alone changed nothing visually — the
+   button stayed lit and inviting while silently swallowing the click, which reads as
+   the app being broken rather than the action being done. Opacity (not a colour) so
+   it also dims the call sites that set their own `color`. */
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:hover { color: inherit; border-color: var(--border); }
 .btn-primary { background: #388bfd; border-color: #388bfd; color: #fff; }
 .btn-primary:hover { background: #2f7de6; color: #fff; }
 .btn-sm { padding: 3px 8px; font-size: var(--t-xs); border-radius: 3px; }
@@ -302,6 +308,34 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
    `style={{ width: '100%', justifyContent: 'center' }}`, the single most-copied
    inline style in the app. */
 .btn-block { width: 100%; justify-content: center; }
+
+/* Avatar (ui.tsx) — ONE geometry for every size, driven by --av.
+   It used to be recomputed inline at each call site and was wrong twice over.
+   `fontSize: Math.max(8, size * 0.35)`: the clamp broke the ratio below 23px, so a
+   16px avatar drew its initials at 0.50 of the box while a 26px one used 0.35 — the
+   small one reads as cramped, not as the same picture scaled down. And with the
+   inherited line-height (1.5) the initials were centred by their LINE BOX, not their
+   ink, which put them ~1px high in every avatar in the app (measured on the 16px one:
+   3.0px of space above, 4.0px below). `line-height: 1` makes the em box the line box,
+   so `align-items: center` centres what you can actually see. */
+.avatar {
+  display: inline-flex; width: var(--av, 26px); height: var(--av, 26px);
+  border-radius: 50%; flex-shrink: 0; overflow: hidden; user-select: none;
+}
+.avatar > svg { width: 100%; height: 100%; display: block; }
+/* font-size is in USER UNITS against the 100-wide viewBox, so it is a ratio: the
+   same 0.38 of the disc at 16px and at 28px, with no clamp to break it.
+   The baseline is placed by hand rather than with `dominant-baseline: central`,
+   which centres the font's ascent/descent midpoint — right for mixed-case text,
+   wrong here, because initials are ALL CAPITALS with nothing below the baseline,
+   so it left them visibly high (measured: 1.06px in a 26px disc). Caps occupy
+   0 … capHeight above the baseline, so centring them puts the baseline at
+   50 + capHeight/2 = 50 + (0.73 × 38)/2 ≈ 63.9. `y` lives on the element in
+   ui.tsx next to the viewBox it belongs to. */
+.avatar text {
+  fill: #fff; font-family: 'JetBrains Mono', monospace; font-weight: 600;
+  font-size: 38px; text-anchor: middle;
+}
 
 /* pills + badges */
 .pill {

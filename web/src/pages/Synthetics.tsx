@@ -15,6 +15,11 @@ import type {
   SynthLocation, SynthCheck, SynthResult, SynthSeriesPoint, SynthHistory, SynthHistoryEntry,
   CloudCredential, CatalogEntry, ProviderCatalog,
 } from '../types';
+import {
+  ArrowLeftIcon,
+  PlusIcon,
+  XIcon,
+} from 'lucide-react';
 
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
 const CHECK_TYPES: SynthCheck['type'][] = ['http', 'icmp', 'dns', 'tcp', 'traceroute'];
@@ -201,10 +206,10 @@ export default function Synthetics() {
             </Button>
           )}
           {canWrite && tab === 'checks' && (
-            <Button variant="primary" onClick={() => setShowAddCheck(true)}>+ New check</Button>
+            <Button variant="primary" onClick={() => setShowAddCheck(true)}><PlusIcon size={13} /> New check</Button>
           )}
           {canWrite && tab === 'agents' && (
-            <Button variant="primary" onClick={() => setShowAddAgent(true)}>+ New Sensor Agent</Button>
+            <Button variant="primary" onClick={() => setShowAddAgent(true)}><PlusIcon size={13} /> New Sensor Agent</Button>
           )}
         </div>
       </PageHeader>
@@ -279,8 +284,8 @@ export default function Synthetics() {
                       onClick={(e) => e.stopPropagation()}>
                       {canWrite && <Toggle on={c.enabled} onClick={() => toggleCheck(c)} />}
                       {canWrite && (
-                        <Button size="sm" variant="danger" title="Delete" onClick={() => removeCheck(c)}
- >×</Button>
+                        <Button size="sm" variant="danger" title="Delete" aria-label="Delete check"
+ onClick={() => removeCheck(c)}><XIcon size={13} /></Button>
                       )}
                     </span>
                   </div>
@@ -356,7 +361,8 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
               <StatusPill text={status === 'degraded' ? `degraded · ${okCount}/${latest.length}` : status}
                 color={STATUS_COLOR[status]} />
             </div>
-            <button className="text-text2" onClick={onClose} style={{ fontSize: 'var(--t-xl)' }}>×</button>
+            <button className="text-text2" aria-label="Close" onClick={onClose}
+              style={{ display: 'inline-flex' }}><XIcon size={17} /></button>
           </div>
           {canWrite && (
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
@@ -533,8 +539,8 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
                     {loc.nodeStatus === 'provisioning' ? 'provisioning' : loc.online ? 'online' : 'offline'}</span>
                 </span>
                 {canWrite && loc.kind === 'customer' && (
-                  <Button size="sm" variant="danger"
- onClick={(e) => { e.stopPropagation(); removeLocation(loc); }}>×</Button>
+                  <Button size="sm" variant="danger" aria-label="Remove location"
+ onClick={(e) => { e.stopPropagation(); removeLocation(loc); }}><XIcon size={13} /></Button>
                 )}
                 {canWrite && loc.kind === 'managed' && loc.booked && (
                   <Button size="sm" title="Unbook"
@@ -612,7 +618,7 @@ function CloudCredentialsCard() {
           no cloud keys yet — needed for AWS/GCP hosted sensor agents</div>
       )}
       <div style={{ padding: '10px 16px' }}>
-        <Button size="sm" onClick={() => setAdding(true)}>+ Add credential</Button>
+        <Button size="sm" onClick={() => setAdding(true)}><PlusIcon size={13} /> Add credential</Button>
         <span className="mono text-2xs text-text3" style={{ marginLeft: 8 }}>AWS · GCP</span>
       </div>
       {adding && <AddCredentialModal onClose={() => setAdding(false)}
@@ -933,7 +939,8 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
       {step === 2 && (
         <>
           <div className="row" style={{ gap: 8, marginBottom: 12 }}>
-            <Button size="sm" onClick={() => { setStep(1); setErr(''); }}>← back</Button>
+            <Button size="sm" onClick={() => { setStep(1); setErr(''); }}>
+              <ArrowLeftIcon size={13} /> back</Button>
             <span className="mono text-xs text-text2">
               {prov === 'self' ? 'self hosted' : prov === 'managed' ? 'OpsCat Managed' : `${prov.toUpperCase()} hosted`}
             </span>

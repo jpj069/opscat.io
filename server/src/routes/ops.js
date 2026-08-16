@@ -38,6 +38,45 @@ function publicEvent(e) {
   };
 }
 
+/**
+ * The 10-point cumulative sparkline the UI draws, per event id, from the last 30
+ * minutes of per-minute buckets. One query for however many events are passed.
+ *
+ * Shared on purpose: only the LIST endpoint used to compute this, so the slide-over
+ * asked for one event, got no `spark`, and drew its HIT TREND as an empty box —
+ * a hole nothing could report, because the same panel on the same screen showed a
+ * correct sparkline in the row behind it.
+ */
+function sparksFor(rows) {
+  const out = new Map();
+  if (!rows.length) return out;
+  const ids = rows.map((r) => r.id);
+  const nowMin = Math.floor(now() / 60000);
+  const bRows = db.prepare(`SELECT event_id, bucket, count FROM event_buckets
+    WHERE bucket >= ? AND event_id IN (${ids.map(() => '?').join(',')})`)
+    .all(nowMin - 30, ...ids);
+  const byEvent = new Map();
+  for (const b of bRows) {
+    if (!byEvent.has(b.event_id)) byEvent.set(b.event_id, []);
+    byEvent.get(b.event_id).push([b.bucket, b.count]);
+  }
+  for (const e of rows) {
+    const buckets = Array(30).fill(0);
+    for (const [bucket, count] of (byEvent.get(e.id) || [])) {
+      const idx = 29 - (nowMin - bucket);
+      if (idx >= 0 && idx < 30) buckets[idx] = count;
+    }
+    const spark = [];
+    let acc = Math.max(0, e.hits - buckets.reduce((a, b) => a + b, 0));
+    for (let i = 0; i < 30; i += 3) {
+      acc += buckets.slice(i, i + 3).reduce((a, b) => a + b, 0);
+      spark.push(acc);
+    }
+    out.set(e.id, spark);
+  }
+  return out;
+}
+
 // ---- live stream ----
 router.get('/stream', (req, res) => hub.handler(req, res, req.orgId));
 
@@ -59,36 +98,39 @@ router.get('/events', (req, res) => {
     ? db.prepare('SELECT * FROM events WHERE org_id = ? ORDER BY severity DESC, last_seen DESC LIMIT ?').all(req.orgId, limit)
     : db.prepare('SELECT * FROM events WHERE status = ? AND org_id = ? ORDER BY severity DESC, last_seen DESC LIMIT ?')
         .all(status, req.orgId, limit);
-  // sparkline: last 30 minutes of buckets per event, in one query
-  const ids = rows.map((r) => r.id);
-  const sparks = new Map();
-  if (ids.length) {
-    const since = Math.floor((now() - 30 * 60000) / 60000);
-    const bRows = db.prepare(`SELECT event_id, bucket, count FROM event_buckets
-      WHERE bucket >= ? AND event_id IN (${ids.map(() => '?').join(',')})`).all(since, ...ids);
-    for (const b of bRows) {
-      if (!sparks.has(b.event_id)) sparks.set(b.event_id, []);
-      sparks.get(b.event_id).push([b.bucket, b.count]);
-    }
-  }
-  res.json(rows.map((e) => {
-    const pts = (sparks.get(e.id) || []).sort((a, b) => a[0] - b[0]);
-    // cumulative sparkline like the design (10 points)
-    const nowMin = Math.floor(now() / 60000);
-    const buckets = Array(30).fill(0);
-    for (const [bucket, count] of pts) {
-      const idx = 29 - (nowMin - bucket);
-      if (idx >= 0 && idx < 30) buckets[idx] = count;
-    }
-    const spark = [];
-    let acc = Math.max(0, e.hits - buckets.reduce((a, b) => a + b, 0));
-    for (let i = 0; i < 30; i += 3) {
-      acc += buckets.slice(i, i + 3).reduce((a, b) => a + b, 0);
-      spark.push(acc);
-    }
-    return { ...publicEvent(e), spark };
-  }));
+  const sparks = sparksFor(rows);
+  res.json(rows.map((e) => ({ ...publicEvent(e), spark: sparks.get(e.id) })));
 });
+
+/**
+ * Who did what to this event, oldest first.
+ *
+ * The "detected" entry is DERIVED from `events.first_seen` rather than written at
+ * ingest: it is true for every event that ever existed, including the ones that
+ * predate the table, so no backfill can be wrong or missing. Everything after it is
+ * a real recorded action.
+ *
+ * It carries no severity ON PURPOSE. `events.severity` is the CURRENT value, so a
+ * derived line reading "detected — severity 67" claimed as fact something that only
+ * became true after a downgrade an hour later. A derived entry may only state what
+ * the row it is derived from actually proves; the severity's own history is the
+ * downgrade entries ("92 → 67"), which are recorded, not inferred.
+ */
+function timelineFor(e) {
+  const rows = db.prepare(`SELECT ts, user_id, action, detail FROM event_timeline
+    WHERE event_id = ? AND org_id = ? ORDER BY ts, id`).all(e.id, e.org_id);
+  return [
+    { ts: e.first_seen, user: null, action: 'detected', detail: null },
+    ...rows.map((r) => ({ ts: r.ts, user: assignedView(r.user_id), action: r.action, detail: r.detail })),
+  ];
+}
+
+/** Append one entry. `userId` null means the platform acted, not a person. */
+function recordEvent(orgId, eventId, userId, action, detail) {
+  db.prepare(`INSERT INTO event_timeline (org_id, event_id, ts, user_id, action, detail)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(orgId, eventId, now(), userId || null, action, detail ? String(detail).slice(0, 2000) : null);
+}
 
 router.get('/events/:id', (req, res) => {
   const e = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
@@ -97,7 +139,8 @@ router.get('/events/:id', (req, res) => {
     WHERE device = ? AND org_id = ? ORDER BY ts DESC LIMIT 20`).all(e.device, req.orgId);
   const caseRow = db.prepare('SELECT id, status FROM cases WHERE event_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1')
     .get(e.id, req.orgId);
-  res.json({ ...publicEvent(e), recentLogs: logs,
+  res.json({ ...publicEvent(e), spark: sparksFor([e]).get(e.id), recentLogs: logs,
+    timeline: timelineFor(e),
     case: caseRow ? { label: `C-${1000 + caseRow.id}`, id: caseRow.id, status: caseRow.status } : null });
 });
 
@@ -107,23 +150,37 @@ router.post('/events/:id/action', (req, res) => {
   const { action } = req.body || {};
   const t = now();
   if (action === 'finish') {
+    // already finished: nothing to do, and recording a second "finished" would put a
+    // line in the history for a click that changed nothing
+    if (e.status === 'finished') return httpError(res, 409, 'event already finished');
     db.prepare("UPDATE events SET status = 'finished', finished_at = ?, finished_by = ? WHERE id = ? AND org_id = ?")
       .run(t, req.user.id, e.id, req.orgId);
     db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
       .run(t, e.id, req.orgId);
+    recordEvent(req.orgId, e.id, req.user.id, 'finish', null);
   } else if (action === 'downgrade') {
+    if (e.severity <= 10) return httpError(res, 409, 'severity is already at the floor');
     const newSev = Math.max(10, e.severity - 25);
     db.prepare('UPDATE events SET severity = ? WHERE id = ? AND org_id = ?').run(newSev, e.id, req.orgId);
+    recordEvent(req.orgId, e.id, req.user.id, 'downgrade', `${e.severity} → ${newSev}`);
   } else if (action === 'assign') {
     const uid = req.body.userId || req.user.id;
     if (!userInOrg.get(uid, req.orgId)) return httpError(res, 400, 'unknown user');
+    if (e.assigned_user_id === uid) return httpError(res, 409, 'already assigned to that user');
     db.prepare('UPDATE events SET assigned_user_id = ? WHERE id = ? AND org_id = ?').run(uid, e.id, req.orgId);
     db.prepare("UPDATE cases SET assigned_user_id = ?, status = 'assigned' WHERE event_id = ? AND status = 'open' AND org_id = ?")
       .run(uid, e.id, req.orgId);
+    // who it went TO, since that is not always who clicked
+    const to = assignedView(uid);
+    recordEvent(req.orgId, e.id, req.user.id, 'assign', to ? to.n : null);
   } else if (action === 'note') {
     if (!isStr(req.body.note, 2000)) return httpError(res, 400, 'note required');
+    // cases.note is a single column — it keeps the LATEST note for the Cases page,
+    // while the timeline keeps every one of them with its author. Before the
+    // timeline existed, writing a second note silently destroyed the first.
     db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
       .run(req.body.note, e.id, req.orgId);
+    recordEvent(req.orgId, e.id, req.user.id, 'note', req.body.note);
   } else {
     return httpError(res, 400, 'unknown action');
   }
@@ -167,6 +224,24 @@ router.patch('/cases/:id', (req, res) => {
     WHERE id = ? AND org_id = ?`)
     .run(status || null, assignedUserId || null, rootCause ?? null, note ?? null,
       status || null, now(), c.id, req.orgId);
+  // The Cases editor writes the SAME `cases.note` column the slide-over does, so a
+  // note typed here has to reach the same history — otherwise "who wrote this?" has
+  // a different answer depending on which screen it was written from. Only what
+  // actually changed is recorded; re-saving a form must not fill the timeline with
+  // lines about fields nobody touched.
+  if (c.event_id) {
+    if (note != null && note !== c.note) recordEvent(req.orgId, c.event_id, req.user.id, 'note', note);
+    if (status && status !== c.status) {
+      recordEvent(req.orgId, c.event_id, req.user.id, 'case_status', `${c.status} → ${status}`);
+    }
+    if (assignedUserId && assignedUserId !== c.assigned_user_id) {
+      const to = assignedView(assignedUserId);
+      recordEvent(req.orgId, c.event_id, req.user.id, 'assign', to ? to.n : null);
+    }
+    if (rootCause != null && rootCause !== c.root_cause) {
+      recordEvent(req.orgId, c.event_id, req.user.id, 'root_cause', rootCause);
+    }
+  }
   sec.audit(req.user.id, 'case_update', `case ${c.id}`, req.orgId);
   res.json({ ok: true });
 });
@@ -612,3 +687,5 @@ module.exports = router;
 // push the same SSE frames the UI already listens for.
 module.exports.hub = hub;
 module.exports.publicEvent = publicEvent;
+// …and the same history, so an action taken by an agent is not a gap in it.
+module.exports.recordEvent = recordEvent;

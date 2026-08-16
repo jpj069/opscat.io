@@ -6,6 +6,10 @@ import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime, STATUS_META, I
 import { Card, Button, SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
 import { Select, MultiSelect } from '../Select';
 import type { Incident, Impact, Component } from '../types';
+import {
+  CheckIcon,
+  PlusIcon,
+} from 'lucide-react';
 
 const STATUS_COLOR: Record<Incident['status'], string> = {
   investigating: '#f85149', identified: '#f0883e', monitoring: '#e3b341', resolved: '#3fb950',
@@ -65,7 +69,7 @@ export default function Incidents() {
         <div className="row" style={{ justifyContent: 'space-between', padding: '12px 16px',
           borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
           <span className="text-lg font-bold text-text0">Incidents</span>
-          <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>+ New Incident</Button>
+          <Button variant="primary" size="sm" onClick={() => setShowNew(true)}><PlusIcon size={13} /> New Incident</Button>
         </div>
         <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--bg3)', flexShrink: 0 }}>
           <Select title="Assignee filter" aria-label="Filter by assignee" value={who} onChange={setWho}
@@ -211,7 +215,8 @@ function IncidentDetail({ incident, comps, reload }:
         <button className="pill" onClick={togglePublish} style={{ cursor: 'pointer', ...(incident.published
           ? { color: SEV.green, background: alpha(SEV.green, 0.12), border: `1px solid ${alpha(SEV.green, 0.3)}` }
           : { color: 'var(--text3)', background: 'var(--bg3)', border: '1px solid var(--border)' }) }}>
-          {incident.published ? '✓ On public status page' : 'Not published'}
+          {incident.published && <CheckIcon size={12} />}
+          {incident.published ? 'On public status page' : 'Not published'}
         </button>
       </div>
       <h1 className="font-bold text-text0" style={{ fontSize: 17, margin: '0 0 18px' }}>{incident.title}</h1>
@@ -288,7 +293,8 @@ function IncidentDetail({ incident, comps, reload }:
       <Card>
         <div className="card-title" style={{ justifyContent: 'space-between' }}>
           <span>Root Cause Analysis</span>
-          {saved && <span className="mono text-xs" style={{ color: SEV.green }}>saved ✓</span>}
+          {saved && <span className="row mono text-xs" style={{ color: SEV.green, gap: 4 }}>
+            <CheckIcon size={12} /> saved</span>}
         </div>
         {RCA_FIELDS.map((f) => (
           <label key={f.key} style={{ display: 'block', marginBottom: 12 }}>

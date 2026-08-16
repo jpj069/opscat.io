@@ -369,6 +369,22 @@ page sideways. The invariants:
   wider than a 390px viewport. Making it genuinely phone-friendly means a pan
   container (min-width + one horizontal scroller) — a product decision, not done.
 
+**A fixed pixel width inside a viewport-sized box is a promise the viewport cannot
+keep.** The event slide-over is 520px on a desktop and `92vw` on a phone, and its hit
+trend was drawn at a hard-coded `w={470}`: on a 390px phone the panel is 358px, so the
+panel scrolled sideways by 132px onto blank space. `Spark` takes a `fluid` prop for
+exactly this — it measures the box it is in (ResizeObserver) and draws at that width,
+rather than stretching a `viewBox`, which would scale x and y differently and thin the
+stroke while turning the last-point dot into an ellipse.
+
+This class of bug is invisible to the per-route sweep, and that is worth understanding
+before adding the next overlay: the sweep ignores anything inside a scroll container
+(that is how `TableScroll` is allowed to exist), and `.slide-over` is one, because
+`overflow-y: auto` makes the browser compute `overflow-x` to `auto` next to it. So a
+panel is a scroller by accident, with no fade, no affordance and nothing out there to
+find. `probe-mobile.mjs` therefore checks `.slide-over` separately: a panel is not a
+table, and its content must fit its width.
+
 ## Frontend typography (the --t-* scale)
 
 Font sizes used to live as raw numbers in ~360 inline `style={{ fontSize: 11 }}` props.
@@ -599,6 +615,76 @@ Three constraints that are easy to get wrong:
 
 The `--z-modal` / `--z-picker` / `--z-tip` tokens stay in the scale as exactly that
 fallback, and as the order those surfaces would take if they ever left the top layer.
+
+## Frontend URL state (what belongs in the address bar)
+
+Three kinds of app state are addressable, and they use three different parts of the URL
+because they answer three different questions:
+
+| state | where | written by |
+|---|---|---|
+| which page | `/app/<page>` | `setNav` (`state.tsx`) |
+| which tab of that page | `/app/<page>/<tab>` | `useTab` (`state.tsx`) |
+| which **overlay** is open on top | `?event=<id>` | `setSelectedEvent` (`state.tsx`) |
+
+The event slide-over is the overlay case. It is rendered by the shell, not by a page —
+it floats over whatever is behind it — so it cannot own a path segment: the path already
+says which page that is, and the tab segment is spoken for. A query parameter says the
+right thing ("this page, plus this panel open") and survives a page that has tabs.
+
+The history shape is the part that is easy to get wrong, so it is fixed in one place:
+
+- **Opening pushes.** That is what makes the back button close the panel, which on a
+  phone is the gesture people actually use — there is no visible × under a thumb.
+- **Switching from one event to another replaces.** One history entry means "an event is
+  open", not one per row a NOC operator clicks through during a shift.
+- **Closing steps back** over the entry we pushed (`history.state.event` marks it as
+  ours) instead of pushing a third entry, so open/close does not stack up pairs that
+  the back button then has to walk through.
+- **A deep link landed on has no entry of ours**, so closing it replaces instead —
+  going "back" out of the app the reader just arrived in would be worse than useless.
+- **Navigating away closes it.** `setNav` writes a URL without the parameter, so the
+  state has to follow the URL, not outlive it.
+- An id for an event that does not exist (finished, other org, typo) resolves to a 404,
+  and the loader clears both the panel and the stale parameter.
+
+`scripts/probe-mobile.mjs` asserts the link exists after a row click — a deep link that
+silently stops being written looks exactly like one that works.
+
+## Event history (who did what)
+
+A NOC handover starts with one question — *who touched this, and what did they say?* —
+and until `event_timeline` existed the app could not answer it:
+
+- **Notes were a single column.** `cases.note` is one TEXT field. Every "Add Note"
+  ran `UPDATE cases SET note = ?`, so writing a second note destroyed the first, and
+  nothing recorded who wrote either. The slide-over never displayed the column at all,
+  so writing a note and losing one looked identical from the panel.
+- **The audit log could not be queried back.** `sec.audit` stores the event as free
+  text (`event 42 BGP_DOWN@core-01`), so "everything that happened to event 42" is a
+  `LIKE` against a string with no index — where `event 4` also matches `event 42`.
+  It stays what it is: the org-wide security log, not an object's history.
+
+`event_timeline` (migration v17) is append-only: `event_id`, `ts`, `user_id`, `action`,
+`detail`. `user_id NULL` means the platform acted, not a person. Three rules keep it
+trustworthy:
+
+- **Every writer records.** The panel (`POST /events/:id/action`), the Cases editor
+  (`PATCH /cases/:id`) and the MCP tool `opscat_event_action` all append — an event's
+  history must not have a hole where an agent or another screen acted. The MCP entries
+  carry `[via <client>]` so the panel says a tool did it.
+- **Only real changes.** A no-op is refused with 409 (already finished, already assigned
+  to that user, severity at the floor) and a re-saved but untouched form records nothing.
+  A history that fills with lines about clicks that changed nothing stops being read.
+- **A derived entry states only what its source proves.** The opening `detected` line is
+  derived from `events.first_seen`, so it is right for events that predate the table and
+  needs no backfill — and it carries no severity, because `events.severity` is the
+  *current* value and the line would have claimed "detected at severity 67" about an
+  event that was detected at 92. The severity's history is the recorded `downgrade`
+  entries (`"92 → 67"`), never an inference.
+
+`cases.note` stays as the case's latest note (the Cases editor's field); the timeline is
+the record. Nothing is lost any more, but the column is still last-write-wins by design.
 
 ## Frontend loading states (skeletons)
 

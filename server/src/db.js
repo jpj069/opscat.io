@@ -397,6 +397,24 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
     `);
   },
+  // idx 16 -> version 17: per-event timeline (who did what, append-only).
+  // Nothing to backfill: the detail endpoint derives the "detected" entry from
+  // events.first_seen, so an event that predates this table still opens with a
+  // history rather than an empty box. Mirrors schema.sql.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS event_timeline (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        INTEGER NOT NULL DEFAULT 1,
+        event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        ts            INTEGER NOT NULL,
+        user_id       INTEGER REFERENCES users(id),
+        action        TEXT NOT NULL,
+        detail        TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_event_timeline ON event_timeline(event_id, ts);
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);
