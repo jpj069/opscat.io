@@ -11,7 +11,7 @@
 // uniformly so probing an address book against the form reveals nothing.
 const crypto = require('crypto');
 const { db, getOrgSetting } = require('../db');
-const { now, sha256, isEmail } = require('../util');
+const { now, sha256, isEmail, escapeHtml } = require('../util');
 const config = require('../config');
 const mailer = require('../mailer');
 const plans = require('../plans');
@@ -229,11 +229,6 @@ function unsubscribeById(id, sig) {
   if (!row) return null;
   q.del.run(row.id);
   return { orgId: row.org_id, pageId: row.page_id };
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function adminList(orgId) {

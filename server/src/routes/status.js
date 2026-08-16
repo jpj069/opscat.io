@@ -10,7 +10,7 @@
 // the CSP stays strict and the page renders in anything.
 const express = require('express');
 const { db, getOrgSetting } = require('../db');
-const { now, sha256, RateLimiter } = require('../util');
+const { now, sha256, RateLimiter, escapeHtml: esc } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
 const pages = require('../lib/status-pages');
@@ -26,11 +26,6 @@ const STATUS_LABEL = {
 };
 const DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341',
   partial: '#f0883e', major: '#f85149' };
-
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 // ---- the payload -------------------------------------------------------------
 

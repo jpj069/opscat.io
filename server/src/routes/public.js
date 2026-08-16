@@ -5,7 +5,7 @@
 // customer's own domain, and this file owns `/` for the marketing site.
 const express = require('express');
 const { db, getOrgSetting, getSetting } = require('../db');
-const { now, sha256, RateLimiter, clampInt } = require('../util');
+const { now, sha256, RateLimiter, clampInt, escapeHtml: esc } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
 

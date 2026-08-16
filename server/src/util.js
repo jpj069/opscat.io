@@ -97,7 +97,20 @@ const isEmail = (v) => typeof v === 'string' && /^[^\s@]{1,64}@[^\s@]{1,255}\.[^
 
 function httpError(res, status, message) { res.status(status).json({ error: message }); }
 
+/**
+ * HTML-escape for the server-rendered public pages (status page, vendor grid,
+ * mails). It lives HERE rather than as a local helper in each of them because
+ * the local copies are exactly what broke: pulling the status page out of
+ * routes/public.js took `esc` with it, and the vendor grid — which used it too
+ * and has no harness — started answering 500 in production. A shared primitive
+ * cannot be moved out from under its second caller.
+ */
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 module.exports = {
   now, sha256, randHex, hashPassword, verifyPassword, encrypt, decrypt,
-  RateLimiter, SseHub, isStr, optStr, clampInt, isEmail, httpError,
+  RateLimiter, SseHub, isStr, optStr, clampInt, isEmail, httpError, escapeHtml,
 };

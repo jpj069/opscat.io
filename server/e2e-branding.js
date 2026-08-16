@@ -447,6 +447,29 @@ async function main() {
   chk('upgrading opens sign-ups again',
     !!db.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('after-upgrade@e2e.test'));
 
+  // ── the OTHER server-rendered public pages still render ───────────────────
+  // Added after a real production 500: pulling the status page out of
+  // routes/public.js took the shared `esc()` helper with it, and the vendor grid
+  // — which used it too and had no test of any kind — started throwing on every
+  // request to radar.opscat.io. Nothing else in this repo renders that page, so
+  // these two lines are the whole safety net for it.
+  const { setSetting } = require('./src/db');
+  setSetting('vendor_grid_published', '1');
+  // A vendor ROW is what makes the check real: the grid's per-vendor template is
+  // where esc() is called, so an empty grid renders fine with esc undefined and
+  // the check passes while testing nothing. (Verified by breaking esc on
+  // purpose: empty grid = green, seeded grid = 500.)
+  db.prepare(`INSERT INTO vendors (org_id, slug, name, feed_type, feed_url, page_url, status, enabled, created_at)
+    VALUES (1, 'github', 'GitHub', 'statuspage', 'https://x.example/api/v2/summary.json',
+            'https://x.example', 'operational', 1, ?)`).run(now());
+  const grid = await raw('/vendor-grid');
+  chk('the vendor grid renders (it shares helpers with the status page)',
+    grid.status === 200, `HTTP ${grid.status}`);
+  chk('…and actually produced HTML, not an error body',
+    grid.text.includes('</html>'), grid.text.slice(0, 120));
+  chk('the grid JSON renders too', (await raw('/api/public/vendor-grid')).status === 200);
+  setSetting('vendor_grid_published', '0');
+
   // ── wrap up ───────────────────────────────────────────────────────────────
   const fails = R.filter((l) => l.startsWith('FAIL'));
   console.log(R.join('\n'));
