@@ -2,10 +2,11 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { SEV, fmtDuration } from '../format';
-import { Card, KpiCard, StackedArea, LineChart, HBars, PageHeader } from '../ui';
+import { Card, KpiCard, StackedArea, LineChart, HBars, PageHeader, Segmented } from '../ui';
 import type { AnalyticsData } from '../types';
 
 type Range = '24h' | '7d' | '30d';
+const RANGES = [['24h', '24h'], ['7d', '7d'], ['30d', '30d']] as const;
 
 export default function Analytics() {
   const [range, setRange] = useState<Range>('7d');
@@ -24,10 +25,7 @@ export default function Analytics() {
   return (
     <div className="page">
       <PageHeader title="Analytics">
-        {(['24h', '7d', '30d'] as Range[]).map((r) => (
-          <button key={r} className={`chip ${range === r ? 'active' : ''}`}
-            onClick={() => setRange(r)}>{r}</button>
-        ))}
+        <Segmented label="Time range" value={range} onChange={setRange} options={RANGES} />
       </PageHeader>
 
       {/* The layout renders from the first paint; each card placeholders itself

@@ -630,6 +630,31 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .tab.active { color: var(--text0); border-bottom-color: var(--low); }
 @media (max-width: 720px) { .tab { padding: 8px 12px; } }
 
+/* segmented switch (ui.tsx <Segmented>) — a few fixed choices shown in full, e.g. a
+   chart's time range. One border around the group, hairlines between the segments. */
+.seg {
+  display: inline-flex; border: 1px solid var(--bg3); border-radius: 6px;
+  overflow: hidden; background: var(--bg2);
+}
+.seg-btn {
+  padding: 5px 12px; font-size: var(--t-sm); font-weight: 600; color: var(--text3);
+  font-family: 'JetBrains Mono', monospace; border-left: 1px solid var(--bg3);
+}
+.seg-btn:first-child { border-left: 0; }
+.seg-btn:hover { color: var(--text1); }
+.seg-btn.active { background: var(--bg3); color: var(--text0); }
+@media (max-width: 720px) { .seg-btn { padding: 7px 14px; } }
+
+/* hover readout of a <LineChart>. Positioned by the chart (left = the hovered point,
+   clamped to the box); the translate keeps it centred on that point. */
+.chart-tip {
+  position: absolute; top: 0; transform: translateX(-50%);
+  padding: 2px 7px; border-radius: 4px; white-space: nowrap; pointer-events: none;
+  /* --bg0, not --bg1: on the light theme --bg1 IS the card, so the readout would
+     have been a white box on white with only its border to show for it */
+  background: var(--bg0); border: 1px solid var(--bg3); color: var(--text1);
+}
+
 /* filter chips */
 .chip {
   padding: 3px 10px; border-radius: 12px; font-size: var(--t-xs); font-weight: 600;

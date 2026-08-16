@@ -305,9 +305,23 @@ export interface PipelineStats {
   buckets: PipelineBucket[];
   totals: { lines: number; bytes: number; events: number };
 }
-// custom rule as stored (org_settings key 'classifiers'); builtin rows use the same shape
+// custom rule as stored (org_settings key 'classifiers'); builtin rows use the same shape.
+// `enabled: false` = DRAFT: stored, listed and dry-runnable, but out of the chain.
+// Absent means live — rules written before drafts existed keep classifying.
 export interface ClassifierRule {
   pattern: string; flags?: string; name: string; severity: number; targetGroup?: number | null;
+  enabled?: boolean;
+}
+// what a rule WOULD have done over the stored logs (POST .../dryrun)
+export interface DryRun {
+  hours: number; scanned: number; matched: number;
+  shadowed: number; takeover: number; fresh: number;
+  events: number; cases: number;
+  samples: { ts: number; device: string; line: string; target: string | null;
+    replaces: { name: string; source: string } | null }[];
+  truncated: boolean; timedOut: boolean;
+  // scout dry-run only: the regex the server generated from the template
+  pattern?: string; captureGroup?: number | null; tooLong?: boolean;
 }
 export interface ClassifiersResponse { builtin: ClassifierRule[]; custom: ClassifierRule[]; }
 export interface ScoutTemplate {

@@ -873,6 +873,90 @@ derived, never hand-drawn.**
   in the Docker build and the deploy) fails on any new ad-hoc `loading…` text outside
   `ui.tsx`. A deliberate text-only case opts out with a `skeleton-exempt` comment.
 
+## Classifier drafts and the dry run
+
+A classifier rule is a piece of production behaviour: it renames events, changes their
+severity and opens cases. So a rule is not born live.
+
+- **`enabled: false` is a draft.** It is stored in the org's `classifiers` array like any
+  other rule, listed in the UI and fully dry-runnable — `customClassifiersFor()` simply
+  leaves it out when it compiles the chain. Only the literal `false` drafts a rule: a
+  rule written before drafts existed has no `enabled` key at all and must keep
+  classifying, so "absent" means live.
+- **Scout proposes, a human enables.** Scout's action creates a draft (audited as
+  `scout_draft`); switching it on is a separate, deliberate act under Classifiers. The
+  button used to say "Approve" and the rule was live the same second — accurate about
+  the write, misleading about the consequence. A rule added by hand starts as a draft
+  too, so both routes into the chain go through the same three steps: write → dry run →
+  switch on.
+- **The dry run answers "what would this have done", not "does it match".** The single-
+  line tester cannot show the failure that actually matters, which is *placement*: a new
+  rule is appended last among the custom rules, and the chain is custom → builtin →
+  syslog floor, first match wins. So `backtest()` classifies every scanned line with the
+  chain as it stands today and splits the matches three ways — **shadowed** (an earlier
+  custom rule wins, so the new rule never fires however well it matches), **takeover** (a
+  builtin or the syslog floor owns the line today, it would be renamed), **fresh**
+  (nothing classifies it today, genuinely new events). Plus the numbers a NOC actually
+  budgets for: distinct events after dedupe, and cases at severity ≥ 60.
+- **Bounded, and it says so.** Newest 20 000 lines, 2 s wall-clock — the pattern can come
+  from a text field, and a pathological regex over the log table is a stalled request.
+  Both limits are reported (`truncated`, `timedOut`) so a partial scan reads as a floor
+  rather than a total.
+- **The generated regex comes from the generator.** Scout's dialog shows the pattern the
+  rule will have, and it is returned by the same server function that writes it
+  (`templateToPattern()`), on the same request that just executed it. The alternative —
+  re-implementing the 14-entry mask table in the browser — puts the preview and the rule
+  in two places, and the copy that drifts is the one the admin was shown.
+
+## Frontend charts (why an SVG is measured, not stretched)
+
+`Spark`, `LineChart` and `StackedArea` (`web/src/ui.tsx`) all draw at the **measured
+pixel width of the box they sit in** (`useBoxWidth`), never from a `viewBox` scaled to
+`width="100%"`.
+
+The `viewBox` version looks like the responsive answer and silently scales *everything*:
+a 460×140 chart in an 1800px card is drawn at ~4×, so a 1.5px stroke lands at 6px, a
+2px dot becomes 8px, an 8px axis label becomes 31px — and with no `height` the card
+grows to 548px tall. That is precisely what the Pipeline throughput page looked like: a
+full screen of blown-up line art. Measuring keeps every constant meaning what it says.
+
+What the measured version has to get right, all of it found by measuring, none of it
+visible in the diff:
+
+- **The SVG may never widen its own box.** Until the observer fires the chart draws at
+  its fallback width, and a 460px drawing inside a grid item (`min-width: auto` = its
+  content) widens the track to 460px — the box then measures 460 and the chart stays
+  wrong on a phone forever. `max-width: 100%` on the `<svg>` breaks that loop: clipped
+  for one frame, never pushing the page sideways. Grid tracks holding charts use
+  `minmax(min(320px, 100%), 1fr)` for the same reason.
+- **Measure with a callback ref, not `useRef` + `useLayoutEffect`.** A chart returns its
+  skeleton while data is `null`, so the render the effect fires on has no node — and it
+  never fires again. The callback ref runs when the node actually attaches.
+- **The axis gutter is derived from the widest label at the size it will really be
+  drawn.** A fixed 46px gutter cut `176.6 KB` down to `76.6 KB`, which does not read as
+  a clipped label — it reads as a chart whose middle gridline is larger than its top
+  one. The label size is `--t-2xs`, which is 9px on desktop and **11px on a phone**, so
+  the hook reads the resolved value off the box rather than assuming one; label widths
+  are then arithmetic (JetBrains Mono advances 0.6em per character).
+- **How many x-labels fit is the chart's decision**, not the caller's: 8 labels are
+  comfortable in a 515px card and collide in a 308px one. Callers pass labels, the
+  chart thins them (`fitLabels`) and clamps the first/last so they stay inside.
+- **Axis maxima come from a fine "nice number" ladder** (1, 1.2, 1.5, 2, 2.5, 3, 4, 5,
+  6, 8, 10 × 10ⁿ). With only 1/2/5/10 a peak of 5.1k pushes the axis to 10k and the
+  whole series is drawn in the bottom half of the plot for nothing.
+- **A NOC chart states its values.** `LineChart` carries a hover readout (`tips` gives
+  the full label per point, `labels` is only the sparse axis) — a trend nobody can read
+  a number off is decoration.
+
+**Guard:** `web/scripts/check-charts.mjs` (part of `npm run check:ui`, therefore of the
+build and the deploy) fails on an `<svg>` outside `ui.tsx` / `icons.tsx`, and on
+`viewBox` + `width="100%"` / `preserveAspectRatio="none"` inside them. It is a *static*
+rule on purpose: the defect exists only on a wide screen, so `probe-mobile.mjs` — which
+measures a 390px phone, where the same viewBox scales down and nothing overflows — could
+not have caught it. And unlike control sizing, which only the browser can judge, a scaled
+viewBox is unconditionally wrong; there is no layout in which it means something else.
+Opt out of either rule with a `chart-exempt` comment stating the reason.
+
 ## Settings page (six tabs, addressable)
 
 `Settings.tsx` was one scroll of twelve unrelated cards — billing, platform fields,

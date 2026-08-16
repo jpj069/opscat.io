@@ -98,7 +98,9 @@ export function initials(name: string): string {
   return name.split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase();
 }
 export function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
+  // rounded: a byte count is an integer, but a DERIVED one (bytes per line, half a
+  // chart's axis maximum) is not — and `94.17753303964757 B` shipped to a KPI line
+  if (n < 1024) return `${Math.round(n)} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let v = n; let i = -1;
   do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);

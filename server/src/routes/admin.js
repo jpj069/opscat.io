@@ -597,7 +597,12 @@ router.put('/pipeline/classifiers', sec.requireRole('admin'), (req, res) => {
     if (severity < 0) return httpError(res, 400, 'each rule needs a severity between 0 and 100');
     const targetGroup = c.targetGroup == null || c.targetGroup === '' ? null : clampInt(c.targetGroup, 1, 9, 0);
     if (targetGroup === 0) return httpError(res, 400, 'targetGroup must be a capture group number 1-9');
-    cleaned.push({ pattern: c.pattern, flags, name: c.name, severity, ...(targetGroup ? { targetGroup } : {}) });
+    // A DRAFT is stored like any other rule and left out of the chain by the
+    // engine. Only the literal `false` drafts a rule: an older stored rule has no
+    // `enabled` key at all, and must keep classifying.
+    const draft = c.enabled === false;
+    cleaned.push({ pattern: c.pattern, flags, name: c.name, severity,
+      ...(targetGroup ? { targetGroup } : {}), ...(draft ? { enabled: false } : {}) });
   }
   setOrgSetting(req.orgId, 'classifiers', JSON.stringify(cleaned));
   pipelineEngine.loadClassifiers(req.orgId);
@@ -616,6 +621,27 @@ router.post('/pipeline/test', (req, res) => {
       source: match.source, pattern: match.pattern } : null,
     caseThreshold: pipelineEngine.CASE_THRESHOLD,
   });
+});
+
+// Dry-run a rule against the logs already stored: "what would this have done in
+// the last N hours", including whether an existing custom rule shadows it. Reads
+// only — nothing is classified, stored or alerted.
+router.post('/pipeline/dryrun', sec.requireRole('admin'), (req, res) => {
+  const pattern = req.body?.pattern;
+  if (!isStr(pattern, 300)) return httpError(res, 400, 'expected {pattern} (max 300 chars)');
+  const flags = req.body?.flags == null || req.body.flags === '' ? 'i' : String(req.body.flags);
+  if (!/^[imsu]{0,4}$/.test(flags)) return httpError(res, 400, `invalid regex flags "${flags}"`);
+  const name = isStr(req.body?.name, 50) && CLASSIFIER_NAME_RE.test(req.body.name) ? req.body.name : 'rule';
+  const targetGroup = req.body?.targetGroup ? clampInt(req.body.targetGroup, 1, 9, 0) || null : null;
+  try {
+    res.json(pipelineEngine.backtest({
+      orgId: req.orgId, pattern, flags, name,
+      severity: clampInt(req.body?.severity, 0, 100, 50),
+      targetGroup, hours: clampInt(req.body?.hours, 1, 720, 24),
+    }));
+  } catch (e) {
+    httpError(res, 400, String(e.message).slice(0, 200));
+  }
 });
 
 // ---- Scout: rule suggestions mined from unclassified lines ----
@@ -673,9 +699,42 @@ router.post('/scout/:id/suggest', sec.requireRole('admin'), async (req, res) => 
   }
 });
 
-// Approve: template becomes a real custom classifier rule (appended to the
-// org's rule list, live reload). targetIndex picks which placeholder (1-based)
-// is captured into the event target.
+/**
+ * What would this template become, and what would it have done?
+ *
+ * The generated regex is returned by the SERVER, from the same
+ * `templateToPattern()` that will write the rule — the browser never builds it.
+ * Re-implementing the mask table in the frontend would put 14 tag→regex pairs in
+ * two places, and the copy that drifts is the one the admin is shown: a preview
+ * that disagrees with the rule is worse than no preview. Returning it from the
+ * dry-run means the pattern displayed is literally the one just executed.
+ */
+router.post('/scout/:id/dryrun', sec.requireRole('admin'), (req, res) => {
+  const row = getScoutRow.get(req.params.id, req.orgId);
+  if (!row) return httpError(res, 404, 'template not found');
+  const targetIndex = clampInt(req.body?.targetIndex, 0, 9, 0);
+  const { pattern, captureGroup } = scoutEngine.templateToPattern(row.template, targetIndex);
+  const severity = clampInt(req.body?.severity, 0, 100, 50);
+  const name = isStr(req.body?.name, 50) && CLASSIFIER_NAME_RE.test(req.body.name)
+    ? req.body.name : 'scout_rule';
+  try {
+    res.json({
+      pattern, captureGroup, tooLong: pattern.length > 300,
+      ...pipelineEngine.backtest({
+        orgId: req.orgId, pattern, flags: 'i', name, severity,
+        targetGroup: captureGroup, hours: clampInt(req.body?.hours, 1, 720, 24),
+      }),
+    });
+  } catch (e) {
+    httpError(res, 400, String(e.message).slice(0, 200));
+  }
+});
+
+// Approve: template becomes a custom classifier rule, appended to the org's rule
+// list. It is created as a DRAFT (`enabled: false`) unless the caller explicitly
+// asks for a live rule — Scout proposes, a human switches it on under
+// Classifiers. targetIndex picks which placeholder (1-based) is captured into
+// the event target.
 router.post('/scout/:id/approve', sec.requireRole('admin'), (req, res) => {
   const row = getScoutRow.get(req.params.id, req.orgId);
   if (!row) return httpError(res, 404, 'template not found');
@@ -692,12 +751,15 @@ router.post('/scout/:id/approve', sec.requireRole('admin'), (req, res) => {
   }
   const custom = pipelineEngine.listClassifiers(req.orgId).custom;
   if (custom.length >= 100) return httpError(res, 400, 'rule limit reached (100) — remove rules first');
-  custom.push({ pattern, flags: 'i', name, severity, ...(captureGroup ? { targetGroup: captureGroup } : {}) });
+  const live = req.body?.enable === true;
+  custom.push({ pattern, flags: 'i', name, severity,
+    ...(captureGroup ? { targetGroup: captureGroup } : {}), ...(live ? {} : { enabled: false }) });
   setOrgSetting(req.orgId, 'classifiers', JSON.stringify(custom));
   pipelineEngine.loadClassifiers(req.orgId);
   db.prepare("UPDATE scout_templates SET status = 'approved' WHERE id = ?").run(row.id);
-  sec.audit(req.user.id, 'scout_approve', `${name} (sev ${severity}) ← ${row.template.slice(0, 120)}`, req.orgId);
-  res.json({ ok: true, pattern, name, severity });
+  sec.audit(req.user.id, live ? 'scout_approve' : 'scout_draft',
+    `${name} (sev ${severity}${live ? '' : ', draft'}) ← ${row.template.slice(0, 120)}`, req.orgId);
+  res.json({ ok: true, pattern, name, severity, enabled: live });
 });
 
 router.post('/scout/:id/dismiss', sec.requireRole('admin'), (req, res) => {

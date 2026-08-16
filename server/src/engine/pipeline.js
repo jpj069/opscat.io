@@ -39,10 +39,15 @@ function customClassifiersFor(orgId) {
   try {
     const raw = getOrgSetting(orgId, 'classifiers');
     if (raw) {
-      list = JSON.parse(raw).map((c) => ({
-        re: new RegExp(c.pattern, c.flags || 'i'),
-        name: c.name, sev: c.severity, target: c.targetGroup,
-      }));
+      list = JSON.parse(raw)
+        // `enabled: false` is a DRAFT — stored, listed and testable, but not part
+        // of the chain. Absent means enabled, so every rule written before drafts
+        // existed stays live.
+        .filter((c) => c.enabled !== false)
+        .map((c) => ({
+          re: new RegExp(c.pattern, c.flags || 'i'),
+          name: c.name, sev: c.severity, target: c.targetGroup,
+        }));
     }
   } catch { list = []; }
   customCache.set(orgId, list);
@@ -219,4 +224,72 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
   return { accepted: 1, events: 1 };
 }
 
-module.exports = { ingestLogs, ingestEvent, classify, loadClassifiers, listClassifiers, on, CASE_THRESHOLD };
+/**
+ * Dry-run a rule against the logs already stored — "what would this have done
+ * yesterday", instead of "does it match this one line I pasted".
+ *
+ * The counts only mean something if the rule is placed where it will really sit.
+ * A new custom rule is APPENDED, and `classify()` walks custom → builtin →
+ * syslog floor, first match wins. So per line there are three outcomes, and they
+ * are the three numbers an admin needs before switching a draft live:
+ *
+ *   shadowed  an existing CUSTOM rule already matches → the new rule never fires,
+ *             however well it matches. This is the failure the tester cannot show.
+ *   takeover  a builtin (or the syslog floor) classifies it today → the line keeps
+ *             producing an event, under the new name/severity.
+ *   fresh     nothing classifies it today → genuinely new events.
+ *
+ * Bounded on purpose: newest N lines, and a wall-clock budget, because the pattern
+ * can come from a text field and a bad regex over 20k lines is a stalled request.
+ * Both limits are reported rather than silently applied.
+ */
+const DRYRUN_MAX_LINES = 20000;
+const DRYRUN_BUDGET_MS = 2000;
+
+function backtest({ orgId = 1, pattern, flags = 'i', name = 'rule', severity = 50,
+  targetGroup = null, hours = 24 }) {
+  let re;
+  try { re = new RegExp(pattern, flags); } catch (e) { throw new Error(`invalid pattern: ${e.message}`); }
+  const since = now() - Math.min(720, Math.max(1, hours)) * 3600000;
+  const rows = db.prepare(`SELECT ts, device, line, sev FROM logs
+    WHERE org_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`).all(orgId, since, DRYRUN_MAX_LINES);
+
+  const out = {
+    hours, scanned: 0, matched: 0, shadowed: 0, takeover: 0, fresh: 0,
+    events: 0, cases: 0, samples: [],
+    truncated: rows.length >= DRYRUN_MAX_LINES, timedOut: false,
+  };
+  const keys = new Set();
+  const caseKeys = new Set();
+  const started = Date.now();
+  for (const r of rows) {
+    if (out.scanned % 500 === 0 && Date.now() - started > DRYRUN_BUDGET_MS) {
+      out.timedOut = true;
+      break;
+    }
+    out.scanned++;
+    const m = re.exec(r.line);
+    if (!m) continue;
+    out.matched++;
+    const current = classify(r.line, r.sev, orgId);
+    if (current && current.source === 'custom') { out.shadowed++; continue; }
+    if (current) out.takeover++; else out.fresh++;
+    const target = targetGroup && m[targetGroup] ? String(m[targetGroup]).slice(0, 200) : null;
+    const key = `${name}|${r.device}|${target || ''}`;
+    keys.add(key);
+    if (severity >= CASE_THRESHOLD) caseKeys.add(key);
+    if (out.samples.length < 5) {
+      out.samples.push({
+        ts: r.ts, device: r.device, line: r.line.slice(0, 300), target,
+        replaces: current ? { name: current.name, source: current.source } : null,
+      });
+    }
+  }
+  out.events = keys.size;
+  out.cases = caseKeys.size;
+  return out;
+}
+
+module.exports = {
+  ingestLogs, ingestEvent, classify, loadClassifiers, listClassifiers, backtest, on, CASE_THRESHOLD,
+};

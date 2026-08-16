@@ -81,6 +81,102 @@ export function Toggle({ on, onClick, disabled }: { on: boolean; onClick?: () =>
 }
 
 /**
+ * Measures the box a graphic is drawn into, so an SVG can be laid out in REAL
+ * pixels instead of being stretched out of a fixed `viewBox`.
+ *
+ * `viewBox` + `width="100%"` looks like the responsive answer and is a trap: the
+ * box scales the whole coordinate system, so on a wide screen a 460×140 chart in a
+ * 1800px card is drawn at ~4× — a 1.5px stroke lands at 6px, an 8px axis label at
+ * 31px, and (with no `height`) the card grows to 548px tall. That is exactly how
+ * the Pipeline throughput chart ended up a full screen of blown-up line art.
+ * Measuring keeps every constant meaning what it says: 1.5px is 1.5px at any width.
+ *
+ * Measured, and the first draft still got it wrong: until the observer fires the SVG
+ * is drawn at the FALLBACK width, and a 460px drawing inside a grid item (whose
+ * `min-width` is `auto`, i.e. its content) widens the track to 460px — so the box
+ * then measures 460 and the chart stays wrong, on a 390px phone, forever. Hence the
+ * `max-width: 100%` on the SVG itself: it may be clipped for one frame, it may never
+ * push its own box wider. The probe caught this; reading the diff did not.
+ */
+function useBoxWidth<T extends HTMLElement>(fallback: number, enabled = true) {
+  // fs = the RESOLVED --t-2xs of this box, i.e. the size the axis labels will
+  // actually be drawn at. It is 9px on a desktop and 11px on a phone, and an axis
+  // gutter sized for the desktop number clips its own labels on the phone — which
+  // is how "585.9 KB" reached a screenshot as "85.9 KB". Read it, do not assume it.
+  const [box, setBox] = React.useState({ w: 0, fs: 0 });
+  const roRef = React.useRef<ResizeObserver | null>(null);
+  // A CALLBACK ref, not useRef + useLayoutEffect. A chart returns its SKELETON while
+  // the data is null, so the one render the effect fires on has no node to measure —
+  // and with a stable dependency it never fires again, leaving the chart at its
+  // fallback width for good (measured: a width=460 attribute inside a 308px box on a
+  // phone). A callback ref runs when the node actually attaches, whenever that is.
+  const ref = React.useCallback((el: T | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!enabled || !el) return;
+    const read = () => setBox({
+      w: el.clientWidth,
+      fs: parseFloat(getComputedStyle(el).getPropertyValue('--t-2xs')) || AXIS_FS,
+    });
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    roRef.current = ro;
+  }, [enabled]);
+  // 0.6em is JetBrains Mono's advance width — the axis font is monospaced, so the
+  // width of a label is arithmetic rather than something to measure per string
+  return {
+    ref,
+    width: enabled ? (box.w || fallback) : fallback,
+    charW: (box.fs || AXIS_FS) * 0.6,
+  };
+}
+
+// Round an axis maximum up to something a human reads as a boundary, so gridlines
+// land on round numbers instead of on the sample. The ladder is deliberately fine:
+// with only 1/2/5/10 a peak of 5.1k jumps the axis to 10k and the whole series is
+// drawn in the bottom half of the plot for nothing. Every step halves cleanly, so
+// the middle gridline stays a round number too.
+const NICE = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+function niceMax(v: number) {
+  if (!(v > 0)) return 1;
+  const exp = Math.pow(10, Math.floor(Math.log10(v)));
+  const f = v / exp;
+  return (NICE.find((n) => f <= n) ?? 10) * exp;
+}
+
+// plot gutters: room for the y-axis labels on the left, the x-axis labels below.
+// `l` is a FLOOR, not the width — the gutter is derived from the widest label the
+// chart will actually print (see `gutter`). A fixed 46px silently cut "176.6 KB"
+// down to "76.6 KB", which does not look like a clipped label, it looks like a
+// chart whose middle gridline is bigger than its top one.
+const CHART_PAD = { l: 30, r: 10, t: 12, b: 18 };
+const AXIS_FS = 9; // fallback only — the real size is read off the box (useBoxWidth)
+const gutter = (labels: string[], charW: number) =>
+  Math.max(CHART_PAD.l, Math.ceil(Math.max(...labels.map((l) => l.length)) * charW) + 8);
+
+// Which x-axis labels fit side by side. Callers hand over one label per point (or a
+// pre-thinned array); how many there is ROOM for depends on the measured width,
+// which only the chart knows — 8 labels are comfortable in a 515px card and run
+// into each other in a 308px one.
+function fitLabels(labels: string[], innerW: number, charW: number) {
+  const idx = labels.map((l, i) => (l ? i : -1)).filter((i) => i >= 0);
+  if (!idx.length) return new Set<number>();
+  const widest = Math.max(...labels.map((l) => l.length));
+  const room = Math.max(1, Math.floor(innerW / (widest * charW + 12)));
+  const step = Math.ceil(idx.length / room);
+  return new Set(idx.filter((_, k) => k % step === 0));
+}
+
+// …and keeps the outer ones inside the drawing: the last label is centred on the
+// last point, which sits 10px from the right edge, so half of it hangs outside —
+// "07-24" rendered as "07-2".
+const labelX = (x: number, label: string, width: number, charW: number) => {
+  const half = (label.length * charW) / 2;
+  return Math.min(Math.max(x, half), width - half);
+};
+
+/**
  * Sparkline. `w` is a FIXED pixel width — right for a table cell, wrong for anything
  * that has to fit a box whose width comes from the viewport. `fluid` measures the
  * parent instead and draws at that width, with `w` as the pre-measurement fallback.
@@ -93,17 +189,7 @@ export function Toggle({ on, onClick, disabled }: { on: boolean; onClick?: () =>
  */
 export function Spark({ data, w = 56, h = 18, color = SEV.low, fill = true, dot = true, fluid = false }:
   { data: number[]; w?: number; h?: number; color?: string; fill?: boolean; dot?: boolean; fluid?: boolean }) {
-  const boxRef = React.useRef<HTMLSpanElement>(null);
-  const [boxW, setBoxW] = React.useState(0);
-  React.useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!fluid || !el) return;
-    setBoxW(el.clientWidth);
-    const ro = new ResizeObserver(() => setBoxW(el.clientWidth));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [fluid]);
-  const ww = fluid ? (boxW || w) : w;
+  const { ref: boxRef, width: ww } = useBoxWidth<HTMLSpanElement>(w, fluid);
 
   let svg: React.ReactElement;
   if (!data || data.length < 2) {
@@ -153,61 +239,142 @@ export function KpiCard({ label, value, color, spark, sub }:
   );
 }
 
+// axis text: a token, not a literal — an SVG label rides the phone type scale like
+// every other string in the app (presentation attributes cannot take a var(), a
+// style can)
+const AXIS_TEXT: React.CSSProperties = {
+  fontSize: 'var(--t-2xs)', fontFamily: "'JetBrains Mono', monospace",
+};
+
 // Stacked area chart (event volume by severity band). data == null → loading.
 export function StackedArea({ data, w = 460, h = 140 }:
   { data: { d: string; c: number; h: number; m: number; l: number }[] | null; w?: number; h?: number }) {
+  const { ref, width, charW } = useBoxWidth<HTMLDivElement>(w);
   if (data == null) return <ChartSkeleton h={h} />;
   if (!data.length) return <div className="text-text3 text-sm">no data yet</div>;
   const keys: ('l' | 'm' | 'h' | 'c')[] = ['l', 'm', 'h', 'c'];
   const colors = { l: SEV.low, m: SEV.medium, h: SEV.high, c: SEV.critical };
-  const totals = data.map((r) => r.c + r.h + r.m + r.l);
-  const max = Math.max(...totals, 1);
-  const px = (i: number) => data.length === 1 ? w / 2 : (i / (data.length - 1)) * (w - 20) + 10;
-  const py = (v: number) => h - 16 - (v / max) * (h - 26);
+  const top = niceMax(Math.max(...data.map((r) => r.c + r.h + r.m + r.l)));
+  const padL = gutter([0, 0.5, 1].map((f) => String(Math.round(top * f))), charW);
+  const innerW = Math.max(40, width - padL - CHART_PAD.r);
+  const innerH = Math.max(30, h - CHART_PAD.t - CHART_PAD.b);
+  const px = (i: number) => padL
+    + (data.length === 1 ? innerW / 2 : (i / (data.length - 1)) * innerW);
+  const py = (v: number) => CHART_PAD.t + innerH - (v / top) * innerH;
   let acc = data.map(() => 0);
   const layers = keys.map((k) => {
     const base = [...acc];
     acc = acc.map((a, i) => a + data[i][k]);
-    const top = acc.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+    const line = acc.map((v, i) => `${px(i)},${py(v)}`).join(' ');
     const bottom = base.map((v, i) => `${px(i)},${py(v)}`).reverse().join(' ');
-    return { k, points: `${top} ${bottom}` };
+    return { k, points: `${line} ${bottom}` };
   });
+  const shown = fitLabels(data.map((r) => r.d.slice(5)), innerW, charW);
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      {layers.map((l) => <polygon key={l.k} points={l.points} fill={alpha(colors[l.k], 0.18)}
-        stroke={colors[l.k]} strokeWidth={1} />)}
-      {data.map((r, i) => (
-        <text key={i} x={px(i)} y={h - 3} textAnchor="middle" fontSize={8}
-          fill="var(--text3)" fontFamily="'JetBrains Mono',monospace">{r.d.slice(5)}</text>
-      ))}
-    </svg>
+    <div ref={ref} style={{ width: '100%', minWidth: 0 }}>
+      <svg width={width} height={h} style={{ display: 'block', maxWidth: '100%' }}>
+        {[0, 0.5, 1].map((f) => (
+          <g key={f}>
+            <line x1={padL} x2={width - CHART_PAD.r} y1={py(top * f)} y2={py(top * f)}
+              stroke="var(--bg3)" strokeWidth={1} />
+            <text x={padL - 8} y={py(top * f) + 3} textAnchor="end" style={AXIS_TEXT}
+              fill="var(--text3)">{Math.round(top * f)}</text>
+          </g>
+        ))}
+        {layers.map((l) => <polygon key={l.k} points={l.points} fill={alpha(colors[l.k], 0.22)}
+          stroke={colors[l.k]} strokeWidth={1.2} />)}
+        {data.map((r, i) => (shown.has(i) ? (
+          <text key={i} x={labelX(px(i), r.d.slice(5), width, charW)} y={h - 4}
+            textAnchor="middle" style={AXIS_TEXT} fill="var(--text3)">{r.d.slice(5)}</text>
+        ) : null))}
+      </svg>
+    </div>
   );
 }
 
-// points == null → loading (an empty array stays the honest "no data yet").
-export function LineChart({ points, labels, color = SEV.green, w = 460, h = 140, fmt }:
-  { points: number[] | null; labels?: string[]; color?: string; w?: number; h?: number;
-    fmt?: (v: number) => string }) {
+/**
+ * Single-series line chart. points == null → loading (an empty array stays the
+ * honest "no data yet").
+ *
+ * Drawn at the measured width (see `useBoxWidth`), with a zero baseline, round
+ * gridline values and a hover readout — a NOC chart whose points cannot be read
+ * back is decoration. `tips` carries the full label per point (the `labels` array
+ * is deliberately sparse so the axis stays legible).
+ */
+export function LineChart({ points, labels, tips, color = SEV.green, w = 460, h = 140, fmt }:
+  { points: number[] | null; labels?: string[]; tips?: string[]; color?: string;
+    w?: number; h?: number; fmt?: (v: number) => string }) {
+  const { ref, width, charW } = useBoxWidth<HTMLDivElement>(w);
+  const [hi, setHi] = React.useState<number | null>(null);
   if (points == null) return <ChartSkeleton h={h} />;
   if (!points.length) return <div className="text-text3 text-sm">no data yet</div>;
-  const max = Math.max(...points, 1); const min = Math.min(...points, 0);
-  const range = max - min || 1;
-  const px = (i: number) => points.length === 1 ? w / 2 : (i / (points.length - 1)) * (w - 20) + 10;
-  const py = (v: number) => h - 16 - ((v - min) / range) * (h - 30);
+  const padB = labels ? CHART_PAD.b : 6;
+  const top = niceMax(Math.max(...points));
+  const ticks = [0, 0.5, 1].map((f) => top * f);
+  const fv = (v: number) => (fmt ? fmt(v) : String(Math.round(v)));
+  const padL = gutter(ticks.map(fv), charW);
+  const innerW = Math.max(40, width - padL - CHART_PAD.r);
+  const innerH = Math.max(30, h - CHART_PAD.t - padB);
+  const px = (i: number) => padL
+    + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+  const py = (v: number) => CHART_PAD.t + innerH - (v / top) * innerH;
   const line = points.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+  const shown = labels ? fitLabels(labels, innerW, charW) : null;
+  const base = CHART_PAD.t + innerH;
+  // touch as well as mouse: the readout is the only way to get a number off the
+  // chart, and a NOC's second screen is a phone
+  const at = (el: SVGRectElement, clientX: number) => {
+    const r = el.getBoundingClientRect();
+    const i = Math.round(((clientX - r.left) / (innerW || 1)) * (points.length - 1));
+    setHi(Math.max(0, Math.min(points.length - 1, i)));
+  };
+  const onMouse = (e: React.MouseEvent<SVGRectElement>) => at(e.currentTarget, e.clientX);
+  const onTouch = (e: React.TouchEvent<SVGRectElement>) =>
+    at(e.currentTarget, e.touches[0].clientX);
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <polygon points={`10,${h - 16} ${line} ${px(points.length - 1)},${h - 16}`} fill={alpha(color, 0.1)} />
-      <polyline points={line} fill="none" stroke={color} strokeWidth={1.5} />
-      {points.map((v, i) => <circle key={i} cx={px(i)} cy={py(v)} r={2} fill={color} />)}
-      {labels && labels.map((l, i) => (
-        <text key={i} x={px(i)} y={h - 3} textAnchor="middle" fontSize={8}
-          fill="var(--text3)" fontFamily="'JetBrains Mono',monospace">{l}</text>
-      ))}
-      <text x={10} y={10} fontSize={9} fill="var(--text2)" fontFamily="'JetBrains Mono',monospace">
-        {fmt ? fmt(max) : max}
-      </text>
-    </svg>
+    <div ref={ref} style={{ width: '100%', minWidth: 0, position: 'relative' }}>
+      <svg width={width} height={h} style={{ display: 'block', maxWidth: '100%' }}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} x2={width - CHART_PAD.r} y1={py(t)} y2={py(t)}
+              stroke="var(--bg3)" strokeWidth={1} />
+            <text x={padL - 8} y={py(t) + 3} textAnchor="end" style={AXIS_TEXT}
+              fill="var(--text3)">{fv(t)}</text>
+          </g>
+        ))}
+        <polygon points={`${px(0)},${base} ${line} ${px(points.length - 1)},${base}`}
+          fill={alpha(color, 0.12)} />
+        <polyline points={line} fill="none" stroke={color} strokeWidth={1.5}
+          strokeLinejoin="round" />
+        {points.length <= 40 && points.map((v, i) => (
+          <circle key={i} cx={px(i)} cy={py(v)} r={2} fill={color} />
+        ))}
+        {hi !== null && (
+          <g>
+            <line x1={px(hi)} x2={px(hi)} y1={CHART_PAD.t} y2={base}
+              stroke={color} strokeWidth={1} strokeDasharray="3 3" />
+            <circle cx={px(hi)} cy={py(points[hi])} r={4} fill={color}
+              stroke="var(--bg2)" strokeWidth={1.5} />
+          </g>
+        )}
+        {labels && labels.map((l, i) => (shown?.has(i) ? (
+          <text key={i} x={labelX(px(i), l, width, charW)} y={h - 4} textAnchor="middle"
+            style={AXIS_TEXT} fill="var(--text3)">{l}</text>
+        ) : null))}
+        <rect x={padL} y={0} width={innerW} height={h} fill="transparent"
+          onMouseMove={onMouse} onMouseLeave={() => setHi(null)}
+          onTouchStart={onTouch} onTouchMove={onTouch} onTouchEnd={() => setHi(null)} />
+      </svg>
+      {hi !== null && (
+        <div className="chart-tip mono text-2xs"
+          style={{ left: Math.min(Math.max(px(hi), 44), Math.max(44, width - 44)) }}>
+          <b style={{ color }}>{fv(points[hi])}</b>
+          {(tips?.[hi] || labels?.[hi]) && (
+            <span className="text-text3"> · {tips?.[hi] || labels?.[hi]}</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -256,6 +423,33 @@ export function Tabs<T extends string>({ tabs, value, onChange }: {
         <button key={id} role="tab" aria-selected={value === id}
           className={`tab${value === id ? ' active' : ''}`} onClick={() => onChange(id)}>
           {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * THE range/mode switch — a handful of mutually exclusive, self-describing options
+ * (24h · 7d · 30d) that belong ON the toolbar, not behind a dropdown.
+ *
+ * `Select` is for lists; this is for two to four fixed choices where showing them
+ * all is cheaper than opening a panel. It exists so the pattern stops being
+ * re-drawn per page: the Pipeline range switch was a hand-rolled `<span>` of bare
+ * buttons with six inline styles, which is how a second look creeps in.
+ */
+export function Segmented<T extends string>({ value, onChange, options, label }: {
+  value: T;
+  onChange: (v: T) => void;
+  options: readonly (readonly [T, string])[];
+  label?: string;
+}) {
+  return (
+    <div className="seg" role="group" aria-label={label}>
+      {options.map(([id, text]) => (
+        <button key={id} type="button" aria-pressed={value === id}
+          className={`seg-btn${value === id ? ' active' : ''}`} onClick={() => onChange(id)}>
+          {text}
         </button>
       ))}
     </div>
