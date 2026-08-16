@@ -647,8 +647,20 @@ export const COL = {
   time: '150px',
   /** a relative age or duration ("2.4d", "12m ago") */
   age: '92px',
-  /** an identifier with a known ceiling — "C-1002", an org id */
+  /** an identifier with a known ceiling — "C-1002", a check id, a vendor id */
   id: '84px',
+  /**
+   * A uuid. 36 monospace characters, and there is no shorter honest rendering:
+   * truncating one leaves a value nobody can paste into a query, which is the
+   * only reason a uuid is on screen at all.
+   *
+   * `id` is the wrong track for it — that one is 84px, sized for "C-1002", and
+   * `users.id` / `organizations.id` became uuids in the same migration that left
+   * the column reading `0000000…`. A row that carries one needs the table's
+   * `minWidth` raised to match: a track this wide does not fit a phone, it
+   * scrolls inside TableScroll like every other wide table.
+   */
+  uuid: '272px',
   /** a Toggle, or a one-word yes/no */
   toggle: '72px',
   /** a sparkline or other mini-chart cell */

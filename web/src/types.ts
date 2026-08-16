@@ -99,7 +99,7 @@ export interface Incident {
   id: number; label: string; title: string; severity: number;
   status: 'investigating' | 'identified' | 'monitoring' | 'resolved';
   published: boolean; startedAt: number; resolvedAt: number | null; durationMs: number;
-  assigneeId: number | null; assignee: string | null;
+  assigneeId: string | null; assignee: string | null;   // users.id is a uuid
   components: IncidentComponent[];
   links: IncidentLink[];
   updates: IncidentUpdate[];
@@ -148,7 +148,7 @@ export interface StatusPagesResponse {
 
 export type CompStatus = 'operational' | 'degraded' | 'partial' | 'major' | 'maintenance';
 export interface Component {
-  id: number; name: string; group: string; status: CompStatus; ownerId: number | null;
+  id: number; name: string; group: string; status: CompStatus; ownerId: string | null;
   uptimePct: string;
   days: { day: string; worst: CompStatus }[];
 }
@@ -386,13 +386,13 @@ export interface Overview {
   logs24h: number; events24h: number; byPlan: { plan: string; c: number }[]; mrrCents: number;
 }
 export interface SuperAdminOrg {
-  id: number; name: string; slug: string; plan: string; status: string;
+  id: string; name: string; slug: string; plan: string; status: string;
   subscriptionStatus: string | null; currentPeriodEnd: number | string | null;
   trialEndsAt: number | string | null; stripeCustomerId: string | null;
   userCount: number; checkCount: number; logCount: number; createdAt: number;
 }
 export interface AuditRow {
-  ts: number; org_id: number; action: string; detail: string;
+  ts: number; org_id: string; action: string; detail: string;
   email: string | null; org_name: string | null;
 }
 

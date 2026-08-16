@@ -176,7 +176,10 @@ function IncidentDetail({ incident, comps, reload }:
     await reload(incident.id);
   };
   const setAssignee = async (v: string) => {
-    await api.patch(`/api/incidents/${incident.id}`, { assigneeId: v === '' ? null : Number(v) });
+    // NOT Number(v): a user id is a uuid since migration 21, Number('7f3a…') is
+    // NaN, and JSON.stringify turns NaN into null — which this endpoint reads as
+    // "clear the assignee". Assigning somebody silently unassigned instead.
+    await api.patch(`/api/incidents/${incident.id}`, { assigneeId: v === '' ? null : v });
     await reload(incident.id);
   };
   const setComponents = async (v: { id: number; impact: Impact }[]) => {
@@ -330,7 +333,7 @@ function NewIncidentModal({ comps, onClose, onCreated }:
     try {
       const inc = await api.post<Incident>('/api/incidents', {
         title, severity, message,
-        assigneeId: assignee === '' ? null : Number(assignee),
+        assigneeId: assignee === '' ? null : assignee,   // uuid, never Number()
         components: impacted,
       });
       onCreated(inc?.id);

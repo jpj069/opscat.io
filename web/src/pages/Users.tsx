@@ -100,7 +100,13 @@ export default function Users() {
               <span style={{ minWidth: 0 }}>
                 <span className="text-base font-semibold text-text0" style={{ display: 'block',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</span>
-                <span className="mono text-2xs text-text3">ID #{u.id}</span>
+                {/* users.id is a uuid since migration 21. "ID #<36 chars>" under a
+                    name is a second line longer than the row, so this line is the
+                    e-mail's job — the uuid stays reachable, on hover, for the one
+                    person who needs to paste it into a query. */}
+                <span className="mono text-2xs text-text3" title={u.id}
+                  style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    display: 'block' }}>{u.id.slice(0, 8)}…</span>
               </span>
             </span>
             {/* email */}

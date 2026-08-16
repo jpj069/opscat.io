@@ -186,7 +186,9 @@ function Components() {
     load();
   };
   const setOwner = async (id: number, v: string) => {
-    await api.patch(`/api/admin/components/${id}`, { ownerId: v === '' ? null : Number(v) });
+    // uuid since migration 21 — Number() would make it NaN, JSON null, and the
+    // endpoint reads null as "clear the owner"
+    await api.patch(`/api/admin/components/${id}`, { ownerId: v === '' ? null : v });
     load();
   };
   const remove = async (c: Component) => {
