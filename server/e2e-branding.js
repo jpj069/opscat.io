@@ -57,6 +57,18 @@ process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
+// A mail transport, because `subscribers.available()` requires one — without it
+// subscribe() returns `unavailable` before it ever reaches the allowance check,
+// and the three subscriber checks below tested a switched-off path (they failed
+// for that reason, not for a product one). Only the PROVIDER call is stubbed, the
+// invite-harness pattern, so everything up to the HTTP request runs for real.
+process.env.RESEND_API_KEY = 're_e2e_stub';
+process.env.MAIL_TRANSPORT = 'resend';
+const realFetch = global.fetch;
+global.fetch = (url, opts) => (String(url).startsWith('https://api.resend.com/')
+  ? Promise.resolve(new Response('{"id":"stub"}', { status: 200 }))
+  : realFetch(url, opts));
+
 require('./src/index.js');
 
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util'); // boots the app on :3129

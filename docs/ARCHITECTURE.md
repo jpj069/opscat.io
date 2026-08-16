@@ -884,6 +884,36 @@ derived, never hand-drawn.**
   in the Docker build and the deploy) fails on any new ad-hoc `loading…` text outside
   `ui.tsx`. A deliberate text-only case opts out with a `skeleton-exempt` comment.
 
+## Cross-org access by a platform operator
+
+A super-admin resolves into ANY organization by naming it — `?org=<uuid>` or the
+`X-OpsCat-Org` header (`security.js`). Both doors are deliberate: the header is what
+the platform console sends, and the query parameter is what makes a view shareable
+("look at this tenant" pasted into a ticket), which a header cannot be.
+
+The override skips the membership check and nothing else, so it used to leave no
+trace on reads: writes call `sec.audit(...)` themselves and land in the target org's
+trail, but looking through a customer's events, logs or settings was invisible. The
+web server's access log was the accidental substitute — not an access record anyone
+keeps, and not visible to the customer's own org.
+
+Now entering a foreign org writes one `superadmin_org_access` row **in that org's**
+audit trail. Three decisions in it:
+
+- **Per entry, not per request.** Opening the Monitor fires a dozen calls; a row each
+  would bury the record it exists to make readable. The de-duplication key is
+  (session, target org) with a 30-minute TTL, so a session left open all day does not
+  collapse into a single timestamp. The marker is in memory on purpose — it is a hint,
+  not the record, and losing it on restart re-audits one access, which is the harmless
+  direction to fail in.
+- **The detail records `baseUrl + path`, never `originalUrl`.** A query string carries
+  log search terms and filters — the customer's data — and an audit trail is the last
+  place that should quietly accumulate it. It also names which door was used.
+- **An org the operator belongs to is not cross-org.** That is ordinary work and
+  already covered by `org_switch`.
+
+Guarded by `e2e-crossorg.js`.
+
 ## Identity keys: users and organizations are UUIDs
 
 `users.id` and `organizations.id` are `TEXT PRIMARY KEY NOT NULL` holding a v4

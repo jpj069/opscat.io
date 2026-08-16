@@ -111,6 +111,11 @@ function requireSession(req, res, next) {
     if (membership) { orgId = membership.org_id; setSessionOrg.run(orgId, sid); }
   }
   if (!membership && !user.is_super_admin) return httpError(res, 403, 'no organization membership');
+  // A platform operator looking at a customer's data leaves a record. Writes
+  // audit themselves; reads did not, so "who looked into org X, and when" had no
+  // answer other than the web server's access log — which nobody keeps as an
+  // access record and which the operator's own org cannot see at all.
+  if (superOverride && !membership) noteCrossOrgAccess(user, orgId, sid, req);
 
   const org = getOrg.get(orgId);
   if (!org) return httpError(res, 401, 'organization missing');
@@ -316,9 +321,46 @@ function securityHeaders(req, res, next) {
   next();
 }
 
+/**
+ * One audit row per (session, target org), not one per request.
+ *
+ * Per-request would be honest and useless: opening the Monitor fires a dozen
+ * calls, so a single support look-in would bury the log it is supposed to make
+ * readable. Entry is the event worth recording — and re-recorded after
+ * CROSS_ORG_TTL_MS so a session left open for a day does not stand for a single
+ * timestamp.
+ *
+ * The marker is in memory on purpose: it is a de-duplication hint, not the
+ * record. Losing it on restart re-audits one access, which is the harmless
+ * direction to fail in.
+ */
+const CROSS_ORG_TTL_MS = 30 * 60 * 1000;
+const CROSS_ORG_MAX = 5000;
+const crossOrgSeen = new Map();
+
+function noteCrossOrgAccess(user, orgId, sid, req) {
+  const key = `${sid}|${orgId}`;
+  const t = now();
+  const seen = crossOrgSeen.get(key);
+  if (seen && t - seen < CROSS_ORG_TTL_MS) return;
+  if (crossOrgSeen.size >= CROSS_ORG_MAX) {
+    for (const [k, ts] of crossOrgSeen) if (t - ts >= CROSS_ORG_TTL_MS) crossOrgSeen.delete(k);
+    if (crossOrgSeen.size >= CROSS_ORG_MAX) crossOrgSeen.clear();
+  }
+  crossOrgSeen.set(key, t);
+  // baseUrl + path, never originalUrl: the query string carries log search terms
+  // and filters, i.e. the customer's data, and an audit trail is the last place
+  // that should quietly accumulate it. `req.path` alone is relative to the
+  // router's mount point, so it would record `/events` for `/api/events`.
+  const via = req.headers['x-opscat-org'] ? 'header' : 'link';
+  const where = `${req.baseUrl || ''}${req.path}`;
+  audit(user.id, 'superadmin_org_access', `${via} · ${req.method} ${where}`, orgId);
+}
+
 function audit(userId, action, detail, orgId = DEFAULT_ORG_ID) {
   db.prepare('INSERT INTO audit_log (org_id, ts, user_id, action, detail) VALUES (?, ?, ?, ?, ?)')
-    .run(orgId || 1, now(), userId || null, action, detail ? String(detail).slice(0, 1000) : null);
+    .run(orgId || DEFAULT_ORG_ID, now(), userId || null, action,
+      detail ? String(detail).slice(0, 1000) : null);
 }
 
 module.exports = {
