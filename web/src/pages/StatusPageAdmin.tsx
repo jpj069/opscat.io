@@ -7,7 +7,7 @@ import { useApp, useTab } from '../state';
 import { api, ApiError } from '../api';
 import { alpha, relTime, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader,
-  Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton } from '../ui';
+  Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton, COL } from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusPage, StatusPagesResponse, StatusReportsResponse } from '../types';
 import {
@@ -16,7 +16,9 @@ import {
   XIcon,
 } from 'lucide-react';
 
-const GRID = '20px 1fr 100px 150px 150px 260px 70px';
+// (dot) | Name | Group | Status | Owner | 45-day uptime | Uptime %. The heat bar
+// is the widest thing in the row and the only one that benefits from more space.
+const GRID = [COL.tiny, COL.text, COL.label, COL.status, COL.label, COL.textWide, COL.num].join(' ');
 // colors, ranks and the status list all come from the shared scale
 // (format.ts STATUS_META — mirror of server/src/lib/status-scale.js)
 const COMP_COLOR = Object.fromEntries(
@@ -577,7 +579,8 @@ function DomainCard({ page, canCustomDomain, isAdmin, onChanged, onError }: {
   );
 }
 
-const DNS_GRID = '70px 1fr 1fr';
+// Type | Host | Value — a TXT challenge value is the longest thing here by far
+const DNS_GRID = [COL.label, COL.text, COL.textWide].join(' ');
 
 // ---- new page ----
 

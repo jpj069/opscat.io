@@ -2,7 +2,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 import { useApp } from './state';
-import { SEV, alpha, sevColor, age, fmtTime, initials, logSevColor } from './format';
+import { SEV, alpha, sevColor, age, fmtTime, fmtHistory, initials, logSevColor } from './format';
 import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import { topLayer } from './toplayer';
@@ -733,6 +733,8 @@ function Palette({ onClose }: { onClose: () => void }) {
 // ---------------------------------------------------------------- event slide-over
 
 // the label column is a grid TRACK, so no row's value can shift it (see below)
+// grid-exempt DETAIL_COLS: a label/value layout inside the slide-over, not a table —
+// two tracks, one label column and one value column, with no columns to weigh.
 const DETAIL_COLS = '90px minmax(0, 1fr)';
 
 // What an entry in the event history says it is. The verb is past tense on purpose:
@@ -864,7 +866,7 @@ function EventSlideOver({ id }: { id: number }) {
           {detail.timeline.map((t, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: DETAIL_COLS, gap: 8,
               alignItems: 'start', padding: '5px 0', borderBottom: '1px solid var(--bg3)' }}>
-              <span className="mono text-xs text-text3">{fmtTime(t.ts)}</span>
+              <span className="mono text-xs text-text3">{fmtHistory(t.ts)}</span>
               <span style={{ minWidth: 0 }}>
                 <span className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
                   {t.user

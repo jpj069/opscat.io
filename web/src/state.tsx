@@ -60,16 +60,65 @@ function tabFromPath(): string {
 }
 
 /**
- * The open event slide-over, as a deep link: `/app/monitor?event=123`.
+ * An open overlay, as a deep link: `/app/monitor?event=123`, `/app/platform/fleet?node=4`.
  *
- * A query parameter and not a path segment, because the slide-over is an OVERLAY on
- * whatever page is behind it — the path already says which page that is, and
- * `/app/<page>/<tab>` is spoken for by useTab.
+ * A query parameter and not a path segment, because an overlay sits ON a page — the
+ * path already says which page that is, and `/app/<page>/<tab>` is spoken for by
+ * useTab. "Which incident is on your screen?" is the first question of every handover,
+ * and an id that lives only in useState cannot be answered with a link.
  */
-function eventFromSearch(): number | null {
-  const raw = new URLSearchParams(location.search).get('event');
+function idFromSearch(key: string): number | null {
+  const raw = new URLSearchParams(location.search).get(key);
   const id = Number(raw);
   return raw && Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * THE history shape for an overlay, in one place, because getting the URL right is
+ * only half of it and the other half is what the back button does:
+ *
+ *  - opening **pushes**, so back closes the overlay — on a phone that is the gesture,
+ *    there is no × under a thumb;
+ *  - switching to another item **replaces**: one entry means "something is open", not
+ *    one per row an operator clicks through during a shift;
+ *  - closing steps **back** over the entry we pushed rather than stacking open/close
+ *    pairs the reader then has to walk through;
+ *  - a deep link landed on has no entry of ours (`history.state` says so), so closing
+ *    it **replaces** — never walk a reader out of the app they just arrived in.
+ */
+function writeOverlayParam(key: string, id: number | null) {
+  const url = new URL(location.href);
+  const ours = history.state?.overlay === key;
+  if (id === null) {
+    if (ours) { history.back(); return; }
+    url.searchParams.delete(key);
+    history.replaceState(null, '', url.pathname + url.search);
+    return;
+  }
+  url.searchParams.set(key, String(id));
+  const target = url.pathname + url.search;
+  if (ours) history.replaceState({ overlay: key, id }, '', target);
+  else history.pushState({ overlay: key, id }, '', target);
+}
+
+/**
+ * A page-local overlay in the URL. The event slide-over is opened from three places
+ * and lives on the app context; anything opened from ONE page uses this instead:
+ *
+ *   const [nodeId, setNodeId] = useOverlayParam('node');
+ */
+export function useOverlayParam(key: string): [number | null, (id: number | null) => void] {
+  const [id, setId] = useState<number | null>(() => idFromSearch(key));
+  useEffect(() => {
+    const onPop = () => setId(idFromSearch(key));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [key]);
+  const set = React.useCallback((v: number | null) => {
+    setId(v);
+    writeOverlayParam(key, v);
+  }, [key]);
+  return [id, set];
 }
 
 /**
@@ -126,7 +175,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [eventsLoading, setEventsLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(true);
   const [connected, setConnected] = useState(false);
-  const [selectedEvent, setSelectedEventState] = useState<number | null>(eventFromSearch);
+  const [selectedEvent, setSelectedEventState] = useState<number | null>(() => idFromSearch('event'));
   const [bridgeIncident, setBridgeIncident] = useState<number | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -148,33 +197,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * Open/close the event slide-over AND write it to the URL, so the panel can be
-   * linked, bookmarked and closed with the back button.
-   *
-   * History shape: opening PUSHES (back closes it), switching from one event to the
-   * next REPLACES (one entry means "an event is open", not one per row clicked), and
-   * closing steps back over the entry we pushed instead of stacking open/close pairs.
-   * A deep link landed on has no entry of ours to pop — it gets a replace, so closing
-   * never walks the reader off the app.
+   * Open/close the event slide-over AND write it to the URL. The history shape lives
+   * in writeOverlayParam, shared with every other overlay — see its comment.
+   * This one is on the context rather than a useOverlayParam hook because it is opened
+   * from three places (the Monitor list, the command palette, a deep link).
    */
   const setSelectedEvent = (id: number | null) => {
     setSelectedEventState(id);
-    const url = new URL(location.href);
-    const ours = !!history.state?.event;
-    if (id === null) {
-      if (ours) { history.back(); return; }
-      url.searchParams.delete('event');
-      history.replaceState(null, '', url.pathname + url.search);
-      return;
-    }
-    url.searchParams.set('event', String(id));
-    const target = url.pathname + url.search;
-    if (ours) history.replaceState({ event: id }, '', target);
-    else history.pushState({ event: id }, '', target);
+    writeOverlayParam('event', id);
   };
 
   useEffect(() => {
-    const onPop = () => { setNavState(navFromPath()); setSelectedEventState(eventFromSearch()); };
+    const onPop = () => { setNavState(navFromPath()); setSelectedEventState(idFromSearch('event')); };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);

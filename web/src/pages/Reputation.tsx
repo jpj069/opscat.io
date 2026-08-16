@@ -18,7 +18,7 @@ import { api } from '../api';
 import { SEV, relTime } from '../format';
 import { Card, Button,
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard, Input, HostInput} from '../ui';
+  Toggle, KpiCard, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
@@ -28,11 +28,15 @@ import type {
 const ROLE_RANK: Record<string, number> = { analyst: 0, lead: 1, cto: 2, admin: 3 };
 
 // one grid string for head, rows and skeleton — never inline it twice
-const GRID = 'minmax(150px,1.4fr) minmax(140px,1.2fr) 150px minmax(150px,1.4fr) 110px 70px';
+// Target | Role (rDNS) | Status | Lists | Checked | actions. "Lists" is the zone
+// names an asset is on — the longest content here, so it takes the slack.
+const GRID = [COL.text, COL.text, COL.label, COL.textWide, COL.age, COL.actions].join(' ');
 // head, rows and skeleton of the history table share this one string
-const HISTORY_GRID = 'minmax(120px,1.3fr) minmax(90px,1fr) 80px 90px 100px 80px';
+// List | Subject | Tier | From | Until | For
+const HISTORY_GRID = [COL.text, COL.text, COL.label, COL.age, COL.age, COL.age].join(' ');
 // same for the SPF discovery picker (checkbox · target · kind · source)
-const SPF_GRID = '24px minmax(120px,1.4fr) 74px minmax(90px,1fr)';
+// (status dot) | Target | Kind | From
+const SPF_GRID = [COL.tiny, COL.text, COL.label, COL.text].join(' ');
 
 const STATUS_UI: Record<ReputationStatus, { label: string; color: string }> = {
   listed: { label: 'listed', color: SEV.critical },

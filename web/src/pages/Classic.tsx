@@ -21,6 +21,9 @@ function palette(theme: string) {
   };
 }
 
+// grid-exempt EVENT_COLS: the Classic view is a terminal, not a table. Its columns
+// are character cells (`8ch`) so the rows line up like a console; COL's content-kind
+// tracks are the wrong model here, and widening anything breaks the monospace grid.
 const EVENT_COLS = '40px 128px 8ch minmax(90px,150px) 1fr';
 
 export default function Classic() {

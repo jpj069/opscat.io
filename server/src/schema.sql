@@ -231,6 +231,27 @@ CREATE TABLE IF NOT EXISTS sensor_nodes (
   created_at    INTEGER NOT NULL
 );
 
+-- What happened to a managed sensor location, append-only.
+--
+-- Deliberately NO foreign key and NO cascade: teardown DELETEs the
+-- synthetic_locations row (that is what revokes the probe key), and a history that
+-- disappears with its subject is worthless exactly when it is needed — "what did we
+-- do to the location we tore down last week?" is the question you ask AFTER it is
+-- gone. `label` is denormalised for the same reason: once the location row is gone
+-- there is nothing left to join a city name out of.
+-- user_id NULL = the platform acted (a probe checked in, reconcile ran), not a person.
+CREATE TABLE IF NOT EXISTS node_timeline (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  location_id   INTEGER NOT NULL,       -- no FK on purpose, see above
+  label         TEXT,                   -- "Frankfurt DE" as it was at the time
+  ts            INTEGER NOT NULL,
+  user_id       INTEGER REFERENCES users(id),
+  action        TEXT NOT NULL,          -- provisioned | instance_created | online |
+                                        -- visibility | premium | teardown | teardown_failed
+  detail        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_node_timeline ON node_timeline(location_id, ts);
+
 -- Encrypted cloud credentials: org-owned for BYO, org_id NULL = OpsCat
 -- platform credential (managed fleet, superadmin only). Secrets are AES-256-GCM
 -- encrypted with the app secret and are never returned by the API.

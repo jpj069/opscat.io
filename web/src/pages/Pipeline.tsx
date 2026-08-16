@@ -5,8 +5,7 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, relTime, sevColor } from '../format';
 import { Card, Button,
-  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs,
-} from '../ui';
+  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs, COL} from '../ui';
 import { Select } from '../Select';
 import { useTab } from '../state';
 import type {
@@ -110,7 +109,8 @@ function Throughput() {
 
 // ---------------------------------------------------------------- classifiers
 
-const GRID = 'minmax(220px,2fr) 60px 150px 80px 70px 40px';
+// Pattern (regex) | Flags | Event name | Severity | Target | delete
+const GRID = [COL.textWide, COL.num, COL.text, COL.num, COL.num, COL.tiny].join(' ');
 
 function Classifiers() {
   const app = useApp();
@@ -308,7 +308,8 @@ function Tester() {
 
 // ---------------------------------------------------------------- scout
 
-const SCOUT_GRID = '70px minmax(280px,3fr) 110px minmax(200px,2fr) 170px';
+// Seen | Template | Last seen | AI suggestion | actions
+const SCOUT_GRID = [COL.num, COL.textWide, COL.age, COL.text, COL.actions].join(' ');
 
 // OpsCat Scout: templates mined from unclassified lines, ordered by frequency.
 // Admins ask the org's LLM for a name/severity, approve into a classifier

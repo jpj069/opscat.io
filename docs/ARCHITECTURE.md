@@ -697,7 +697,7 @@ because they answer three different questions:
 |---|---|---|
 | which page | `/app/<page>` | `setNav` (`state.tsx`) |
 | which tab of that page | `/app/<page>/<tab>` | `useTab` (`state.tsx`) |
-| which **overlay** is open on top | `?event=<id>` | `setSelectedEvent` (`state.tsx`) |
+| which **overlay** is open on top | `?event=<id>`, `?node=<id>` | `setSelectedEvent` / `useOverlayParam` (`state.tsx`) |
 
 The event slide-over is the overlay case. It is rendered by the shell, not by a page —
 it floats over whatever is behind it — so it cannot own a path segment: the path already
@@ -719,6 +719,12 @@ The history shape is the part that is easy to get wrong, so it is fixed in one p
   state has to follow the URL, not outlive it.
 - An id for an event that does not exist (finished, other org, typo) resolves to a 404,
   and the loader clears both the panel and the stale parameter.
+
+The shape itself lives in **one function**, `writeOverlayParam`. An overlay opened from
+a single page uses the `useOverlayParam(key)` hook (the fleet detail: `?node=4`); the
+event slide-over keeps its place on the app context because three different screens
+open it, but it writes its URL through the same function. Adding a second
+implementation of "push on open, replace on switch, back on close" is how the two drift.
 
 `scripts/probe-mobile.mjs` asserts the link exists after a row click — a deep link that
 silently stops being written looks exactly like one that works.
@@ -757,6 +763,82 @@ trustworthy:
 
 `cases.note` stays as the case's latest note (the Cases editor's field); the timeline is
 the record. Nothing is lost any more, but the column is still last-write-wins by design.
+
+## Page header (one band, every page)
+
+`PageHeader` is a row whose height must not depend on whether the page has a CTA. It
+used to: the row was sized by its tallest child, so a page with a button was 32px and
+the same page on a tab without one was 24px — and the tab bar underneath jumped 8px as
+you switched tabs (measured on `/app/platform/overview` vs `/app/platform/organizations`).
+Synthetics had the opposite version of the same bug: it put its tab bar *inside* the
+header's action slot, making that one header 44.5px and starting the page content 12px
+lower than everywhere else in the app.
+
+- `.page-head` reserves `--page-head-h` — the height of a default `.btn`, i.e. the
+  tallest thing the action slot normally holds. With a CTA or without, the band is the
+  same, so every page and every tab starts its content at the same y.
+- The token is **32px on a desktop and 41px on a phone**, because the same button grows
+  with the type scale. That was not a guess: the probe check below failed the moment the
+  desktop number shipped alone.
+- It lives in the *first* `:root` (next to the type scale), not the later one with the
+  z-index tokens. The phone override is a `:root` of equal specificity, so it only wins
+  over a definition that **precedes** it — put the token in the later block and the
+  phone silently keeps the desktop value, with no visible symptom.
+- The shape is title + actions, then `<Tabs>` **below**, never inside. `probe-mobile.mjs`
+  compares the header height across routes and fails when they diverge.
+
+## Table column widths
+
+Every table is a CSS grid whose track list is one constant per table (~30 of them).
+The components are shared; the widths were not, and the recurring failure is always the
+same: a track list made almost entirely of FIXED tracks. The grid then cannot use the
+width it is given, one flexible column absorbs all the slack, and the column with the
+longest content truncates while there is free space on screen. The managed fleet shipped
+as `minmax(120px,1fr) 110px 150px 92px 64px 70px 90px` — six fixed of seven — so
+"Backed by" (`AWS eu-central-1 · standard`) was capped at 150px while "Location" grew
+unbounded. Rebuilt from `COL`, the same table gives that column 344px.
+
+- **Compose from `COL` (`ui.tsx`)**, which names tracks by what the column contains:
+  `text`, `textWide`, `label`, `num`, `status`, `time`, `age`, `id`, `toggle`, `spark`,
+  `tiny`, `actions`. Picking a width becomes "what goes in here?", a question with a
+  right answer. **All 25 table grids in the app are composed from it** — there is no
+  hand-picked pixel track list left to copy from.
+- **At least one flexible track per grid.** `web/scripts/check-table-grids.mjs` runs in
+  `npm run check:ui` (therefore in the build and the deploy) and fails on an all-fixed
+  track list. Opt out with a `grid-exempt <NAME>: <why>` comment.
+- **Fixed is for content with a ceiling** — a pill, a count, a timestamp. Never for a
+  name, a URL, a description or anything joined out of several fields.
+- **Give the slack to the column whose CONTENT is longest**, which is not always the one
+  that looks most important. Three of the migrated tables had it backwards and only the
+  measurement said so: Cases weighted "Root Cause" (a short phrase) over "Server" (an
+  FQDN); Synthetics weighted the uptime heat bar (a flex element that looks the same at
+  any width) over the check target; the audit log treated an action name like a short
+  label. All three truncated a cell at 1440px until they were swapped.
+- Four constants are deliberately **not** tables and carry a `grid-exempt` comment: the
+  Classic terminal view (character cells, `8ch`), the live log stream (`max-content`, so
+  the scroller sizes to the widest line), the slide-over's label/value layout, and the
+  Component Lab's own skeleton demo.
+
+## Managed fleet history
+
+`node_timeline` records what happened to a managed sensor location: provisioned,
+instance created (or the attempt failed), first probe check-in, visibility and tier
+changes, teardown and whether the VM destroy succeeded. `user_id NULL` = the platform
+acted, not a person.
+
+It carries **no foreign key to `synthetic_locations` and no cascade**, which is
+deliberate and is the one thing to preserve if this table is ever touched: teardown
+DELETEs the location row — that is what revokes the probe key — and a history that
+disappears with its subject is worthless exactly when it is wanted. "What did we do to
+the location we tore down last week?" is a question you only ask afterwards. For the
+same reason each row stores a denormalised `label` ("Frankfurt DE"): once the location
+is gone there is nothing left to join a city name out of.
+
+The detail slide-over (`?node=<id>`) is also where the facts that only ever existed in
+the database finally surface — provider instance id, which platform credential paid for
+it, agent version, provisioned-at. The list row deliberately does not carry them: a
+fleet table with an instance id in it is unreadable, and this is the screen you open
+when you need one.
 
 ## Frontend loading states (skeletons)
 

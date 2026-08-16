@@ -550,6 +550,23 @@ const MIGRATIONS = [
     // the rebuild above is correctly skipped — would otherwise never get it
     db.exec('CREATE INDEX IF NOT EXISTS idx_status_subs_page ON status_subscribers(page_id, confirmed_at)');
   },
+  // idx 18 -> version 19: managed sensor location history. No FK and no cascade —
+  // teardown deletes the synthetic_locations row, and the history has to outlive it.
+  // Mirrors schema.sql.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS node_timeline (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        location_id   INTEGER NOT NULL,
+        label         TEXT,
+        ts            INTEGER NOT NULL,
+        user_id       INTEGER REFERENCES users(id),
+        action        TEXT NOT NULL,
+        detail        TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_node_timeline ON node_timeline(location_id, ts);
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

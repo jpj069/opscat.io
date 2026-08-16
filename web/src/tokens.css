@@ -44,6 +44,13 @@
   --t-md: 13px;
   --t-lg: 14px;
   --t-xl: 16px;
+
+  /* Height reserved for a page header's action slot, so the row is the same height
+     with a CTA and without one (see .page-head). It belongs HERE, next to the type
+     scale, and not further down with the z-index tokens: the phone override below is
+     a `:root` of equal specificity, so it only wins over a definition that PRECEDES
+     it. Put it in the later block and the phone silently keeps the desktop value. */
+  --page-head-h: 32px;
 }
 
 /* THE point of the whole token exercise: a phone at arm's length is not a 27" screen
@@ -62,6 +69,12 @@
       silently lose. */
 @media (max-width: 720px) {
   :root {
+    /* The action slot grows with the type scale: the same `.btn` is 32px on a desktop
+       and 41px here, so a header that reserves 32px still jumps by 9px the moment a
+       CTA appears. Measured, by the probe, immediately after the desktop number was
+       introduced — which is the entire reason this is a token and not a literal. */
+    --page-head-h: 41px;
+
     --t-2xs: 11px;
     --t-xs: 12px;
     --t-sm: 13px;
@@ -276,6 +289,14 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .tbl-sticky1 .tbl-row:hover > :first-child {
   background: color-mix(in srgb, var(--bg3) 40%, var(--bg2));
 }
+/* Page header (PageHeader in ui.tsx). --page-head-h is the height of a default
+   `.btn` — 6px + 6px padding, its line box, and 1px of border top and bottom — i.e.
+   the tallest thing the action slot normally holds. Reserving it means the row is the
+   same height with a CTA and without one, so the tab bar below does not jump 8px as
+   you move between a tab that has a CTA and one that does not.
+   `align-items` comes from `.row`; the min-height is what makes it a fixed band.
+   The token itself lives with the other geometry tokens at the top of this file. */
+.page-head { justify-content: space-between; gap: 10px; min-height: var(--page-head-h); }
 .page-title { font-size: var(--t-xl); font-weight: 700; color: var(--text0); margin: 0; }
 .micro {
   font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;

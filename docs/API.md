@@ -236,6 +236,21 @@ Managed sensor fleet: `GET|POST /api/superadmin/platform-credentials`,
 platform AWS/GCP credentials; PATCH toggles `visible`/`premium`; teardown
 revokes the probe key before destroying the VM).
 
+- `GET /api/superadmin/managed-locations/:id` → one location in full: everything the
+  list row carries, plus `providerInstanceId`, `agentVersion`, `credential
+  {id,label,hint}`, `nodeCreatedAt`, `lastSeenAt`, `checks`, `tenantOrgs
+  [{id,name,plan}]` and `timeline`. The list keeps `tenants` as a COUNT and so does
+  this — one field name, one shape, both endpoints.
+- `timeline: [{ts, user:{id,n,i,c}|null, action, detail}]`, oldest first. `user: null`
+  = the platform acted (a probe checked in), not a person. Actions: `provisioned`,
+  `instance_created`, `provision_failed`, `online`, `visibility`, `premium`,
+  `teardown`, `instance_destroyed`, `teardown_failed`.
+- The rows are written by POST (provision, and the failure path), PATCH (only for a
+  field that actually changed) and DELETE, plus the probe's first check-in. They live
+  in `node_timeline`, which has **no foreign key to the location on purpose**: teardown
+  deletes the location row, and the history has to outlive its subject — see
+  `docs/ARCHITECTURE.md` § Managed fleet history.
+
 | Method & path | Notes |
 |---|---|
 | GET `/overview` | platform KPIs: orgs, users, MRR, ingest volume |

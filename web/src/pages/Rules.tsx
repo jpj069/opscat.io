@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, fmtTime } from '../format';
-import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea} from '../ui';
+import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { Rule, NotificationRow } from '../types';
 import { PlusIcon } from 'lucide-react';
@@ -13,8 +13,11 @@ const CHAN_COLORS: Record<string, string> = {
   slack: '#e01e5a', telegram: '#29a9eb', discord: '#7289da', ntfy: '#3fb950', pushover: '#249df1',
 };
 const chanColor = (ch: string) => CHAN_COLORS[ch] || SEV.info;
-const RULE_COLS = '1fr 90px 140px 70px 80px 60px 165px';
-const NOTIF_COLS = '80px 1fr 90px 90px 70px';
+// Rule | Channel | Trigger | Min Sev | Cooldown | On | actions
+const RULE_COLS = [COL.text, COL.label, COL.text, COL.num, COL.num, COL.toggle, COL.actions].join(' ');
+// Time | Rule | Event | Channel | Status — the time is fmtTime, but time-of-day
+// only, so it needs an age-sized track and not a full timestamp one.
+const NOTIF_COLS = [COL.age, COL.text, COL.text, COL.label, COL.status].join(' ');
 const DEFAULT_TRIGGERS = ['ddos', 'out_of_memory', 'synthetic_check_failed', 'snmp_unreachable',
   'agent_offline', 'host_disk_high', 'sentry_error', 'tls_cert_expiring', 'heartbeat_missed', 'container_down',
   'bridge_insight', 'incident_created', 'incident_status_changed', 'incident_resolved'];

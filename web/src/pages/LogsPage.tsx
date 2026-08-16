@@ -3,12 +3,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { fmtDateTime, logSevColor } from '../format';
-import { Card, Button, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, TableSkeleton, PageHeader, Input, COL} from '../ui';
 import { Select } from '../Select';
 import type { LogRow } from '../types';
 
 const HOURS = [1, 2, 6, 12, 24];
-const COLS = '150px 150px 1fr';
+// Time | Device | Line
+const COLS = [COL.time, COL.text, COL.textWide].join(' ');
 
 export default function LogsPage() {
   const app = useApp();

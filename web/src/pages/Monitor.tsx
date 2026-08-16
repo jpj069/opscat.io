@@ -3,7 +3,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
-import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input} from '../ui';
+import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input, COL} from '../ui';
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -17,10 +17,16 @@ const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
   critical: [80, 101], high: [60, 80], medium: [40, 60], low: [20, 40],
 };
 // one source of truth per grid: the rows AND their loading placeholder read it
-const EVENT_COLS = '44px 86px 52px 60px minmax(120px,0.8fr) minmax(160px,1.2fr) 30px';
+// finish/downgrade | severity | hits | sparkline | device + age | name + description |
+// assignee. `actions` leads here rather than trails: the two icon buttons size the
+// track exactly, which a fixed 44px only happened to do at the current icon size.
+const EVENT_COLS = [COL.actions, COL.status, COL.num, COL.spark,
+  COL.text, COL.textWide, COL.tiny].join(' ');
 // minmax, not 1fr: the real rows need the track to grow to the longest line
 // (that is what makes the list scroll sideways), and the SKELETON needs it not
 // to collapse to a bar's intrinsic width. One constant feeds both.
+// grid-exempt LOG_COLS: a log stream, not a table. `max-content` sizes the scroller
+// to the widest line on purpose, so the row borders span the full scrolled width.
 const LOG_COLS = '64px 130px minmax(240px, max-content)';
 
 export default function Monitor() {

@@ -8,7 +8,7 @@ import { SEV } from '../format';
 import { Card, Button,
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, HostInput, Textarea} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, HostInput, Textarea, COL} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -48,7 +48,8 @@ const STATUS_COLOR: Record<CheckStatus, string> = {
 
 type Hop = { hop: number; ip: string; ms: number | null };
 
-const CHECK_GRID = 'minmax(150px,1.3fr) 92px 118px minmax(180px,2fr) 56px 108px 92px 76px';
+// Target | Check | Agents | (uptime bar) | % | Latency | Status | Actions
+const CHECK_GRID = [COL.textWide, COL.label, COL.label, COL.text, COL.num, COL.age, COL.status, COL.actions].join(' ');
 
 const fmtT = (ts: number, withDate: boolean) => {
   const d = new Date(ts);
@@ -186,11 +187,11 @@ export default function Synthetics() {
   return (
     <div className="page">
       <TipHost />
-      {/* header: title, tabs, range, actions */}
+      {/* Title + actions, then the tab bar UNDER it — the same three-part shape every
+          other page has. The tab bar used to live inside PageHeader's action slot,
+          which made this one header 44.5px against everyone else's 32px, so the page
+          content started 12px lower here than anywhere else in the app. */}
       <PageHeader title="Synthetics">
-          <Tabs value={tab} onChange={setTab} tabs={[
-            ['checks', `Checks ${checks?.length ?? ''}`],
-            ['agents', `Sensor Agents ${locations?.length ?? ''}`]] as const} />
         <div className="row row-wrap" style={{ gap: 10 }}>
           {tab === 'checks' && (
             <span className="row" style={{ gap: 4 }}>
@@ -213,6 +214,10 @@ export default function Synthetics() {
           )}
         </div>
       </PageHeader>
+
+      <Tabs value={tab} onChange={setTab} tabs={[
+        ['checks', `Checks ${checks?.length ?? ''}`],
+        ['agents', `Sensor Agents ${locations?.length ?? ''}`]] as const} />
 
       {tab === 'checks' && (
         <>

@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV } from '../format';
-import { Card, Button, Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput} from '../ui';
+import { Card, Button, Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import {
   PlusIcon,
@@ -22,7 +22,8 @@ interface AutomationRow {
 }
 interface RunRow { ts: number; detail: string; }
 
-const GRID = 'minmax(160px,1.4fr) minmax(150px,1.2fr) minmax(220px,2fr) 90px 80px 60px';
+// Name | Trigger | Actions | Cooldown | Enabled | delete
+const GRID = [COL.text, COL.text, COL.textWide, COL.num, COL.toggle, COL.actions].join(' ');
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 
 function actionSummary(a: AutomationAction, team: TeamMember[]): string {

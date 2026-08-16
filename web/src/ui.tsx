@@ -343,6 +343,58 @@ export function Modal({ title, onClose, children, width = 420, hideClose = false
  * It is per call site on purpose: it earns its keep when column one is the row's
  * identity (case id, hostname) and gets in the way when it is not.
  */
+/**
+ * Column tracks for a table's `gridTemplateColumns`, by what the column CONTAINS.
+ *
+ * The tables were the standard components; the widths were not. Every table hand-picked
+ * pixel values, ~30 constants of them, and the failure mode is always the same one:
+ * enough fixed tracks that the flexible one absorbs all the slack alone. The managed
+ * fleet read `minmax(120px,1fr) 110px 150px 92px 64px 70px 90px` — six fixed of seven —
+ * so on a wide screen every column stayed narrow while "Location" ate the free space,
+ * and "Backed by" (`AWS eu-central-1 · standard`, the longest content in the table)
+ * truncated at 150px.
+ *
+ * Composing from these instead means a width is chosen by asking "what goes in here?",
+ * which is a question with a right answer, rather than by guessing a number:
+ *
+ *   const FLEET_GRID = [COL.text, COL.label, COL.textWide, COL.status,
+ *                       COL.num, COL.status, COL.actions].join(' ');
+ *
+ * Two rules go with it, both about the same thing — the table has to survive a window
+ * it was not authored at:
+ *  - **At least one track must be flexible** (an `fr`), or the grid cannot use the
+ *    space it is given. `check-table-grids.mjs` fails the build on an all-fixed grid.
+ *  - **Give the slack to the column that needs it.** `textWide` takes 2fr against
+ *    `text`'s 1fr; a fixed track is for content with a known ceiling — a pill, a
+ *    count, a timestamp — never for a name, a URL or a description.
+ */
+export const COL = {
+  /** free text that absorbs slack: a name, a device, a target */
+  text: 'minmax(140px, 1fr)',
+  /** the column that should get MOST of the slack — descriptions, URLs, joined fields */
+  textWide: 'minmax(180px, 2fr)',
+  /** short but variable: a region, a group, a class, an assignee */
+  label: 'minmax(90px, 0.6fr)',
+  /** a right-aligned count */
+  num: '72px',
+  /** one StatusPill or SevBadge */
+  status: '104px',
+  /** an absolute timestamp (fmtTime / fmtDate) */
+  time: '150px',
+  /** a relative age or duration ("2.4d", "12m ago") */
+  age: '92px',
+  /** an identifier with a known ceiling — "C-1002", an org id */
+  id: '84px',
+  /** a Toggle, or a one-word yes/no */
+  toggle: '72px',
+  /** a sparkline or other mini-chart cell */
+  spark: '64px',
+  /** an icon, a dot, an avatar, a drag handle — no label of its own */
+  tiny: '34px',
+  /** trailing buttons — as wide as the widest row needs, no wider */
+  actions: 'max-content',
+} as const;
+
 export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, fit = false, children }:
   { minWidth?: number | string; stickyFirst?: boolean; peek?: boolean; fit?: boolean;
     children: React.ReactNode }) {
@@ -430,10 +482,24 @@ export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, 
 // WRAPS — a toolbar that cannot wrap pushes the whole page sideways on phones
 // (a `<select>` fed by user data is the usual culprit; see tokens.css). Use this
 // instead of hand-rolling `.row` + `.page-title` per page.
+/**
+ * THE page header: title left, actions right, and a height that does not depend on
+ * whether there ARE actions.
+ *
+ * That last part is the whole point. The row used to be sized by its tallest child, so
+ * a page with a CTA was 32px tall and the same page on a tab without one was 24px —
+ * and the tab bar underneath jumped 8px as you switched tabs (measured on
+ * /app/platform/overview vs /app/platform/organizations). `.page-head` reserves the
+ * action slot's height whether or not anything is in it, so every page and every tab
+ * of every page starts its content at the same y.
+ *
+ * The geometry is a CLASS, not an inline style: a media query cannot beat an inline
+ * style, and the phone has to be able to override this.
+ */
 export function PageHeader({ title, children }:
   { title: string; children?: React.ReactNode }) {
   return (
-    <div className="row row-wrap" style={{ justifyContent: 'space-between', gap: 10 }}>
+    <div className="page-head row row-wrap">
       <h1 className="page-title">{title}</h1>
       {children && (
         <div className="row row-wrap" style={{ gap: 10, minWidth: 0 }}>{children}</div>

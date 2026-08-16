@@ -50,6 +50,26 @@ export function fmtDateTime(ts: number): string {
   const d = new Date(ts);
   return `${d.toISOString().slice(0, 10)} ${d.toTimeString().slice(0, 8)}`;
 }
+/**
+ * A timestamp for a HISTORY: the time of day for something that happened today, the
+ * date and time for anything older.
+ *
+ * `fmtTime` alone is wrong here and looks like a sorting bug rather than a formatting
+ * one — a fleet location provisioned three days ago rendered as "09:47:14" directly
+ * above today's "09:47:25", so a correctly ordered list read as shuffled. A history
+ * is the one place where entries routinely span days.
+ */
+export function fmtHistory(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const hhmmss = d.toTimeString().slice(0, 8);
+  if (sameDay) return hhmmss;
+  // local date, not toISOString() — that is UTC and would show the wrong day near midnight
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${day} ${hhmmss.slice(0, 5)}`;
+}
 export function age(ms: number): string {
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(2)}s`;

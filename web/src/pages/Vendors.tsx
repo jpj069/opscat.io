@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import {
   CheckIcon,
@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import type { Component, VendorCatalogEntry, VendorDetail, VendorFeedType, VendorRow } from '../types';
 
-const COLS = '1fr 130px 90px 100px 110px 60px';
+// Vendor | Status | Incidents | Feed | Checked | actions
+const COLS = [COL.text, COL.status, COL.num, COL.label, COL.age, COL.actions].join(' ');
 
 const STATUS_UI: Record<string, { label: string; color: string }> = {
   operational: { label: 'operational', color: SEV.green },

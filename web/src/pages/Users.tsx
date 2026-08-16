@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { alpha, initials, relTime } from '../format';
-import { Card, Button, Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Avatar, GlowDot, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, COL} from '../ui';
 import { Select } from '../Select';
 import type { UserRow } from '../types';
 import { PlusIcon } from 'lucide-react';
@@ -13,7 +13,9 @@ const ROLE_COLOR: Record<string, string> = {
   admin: '#f85149', cto: '#38b6ff', lead: '#bc8cff', analyst: '#388bfd',
 };
 const roleColor = (r: string) => ROLE_COLOR[r] || '#8b949e';
-const GRID = '260px 220px 90px 90px 110px 170px';
+// User | Email | Role | Status | Last seen | Actions. Every track was fixed, so the
+// table simply stopped at 940px and left the rest of a wide window empty.
+const GRID = [COL.text, COL.textWide, COL.label, COL.status, COL.age, COL.actions].join(' ');
 
 // Two possible outcomes of an invite or a reset, and the UI has to say WHICH.
 // With a mail transport the colleague gets an activation link and no secret ever

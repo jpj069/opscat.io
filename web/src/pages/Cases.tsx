@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration } from '../format';
-import { Card, Button, SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea} from '../ui';
+import { Card, Button, SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -12,7 +12,10 @@ type Tab = typeof TABS[number];
 const STATUS_COLORS: Record<CaseRow['status'], string> = {
   open: '#e3b341', assigned: '#388bfd', closed: '#8b949e',
 };
-const COLS = '90px 90px 1fr 140px 90px 140px 140px 80px';
+// Case | Sev | Event | Server | Status | Assignee | Root Cause | Duration.
+// Seven of the eight tracks were fixed, so "Event" absorbed the whole window while
+// Root Cause — free text an analyst wrote — stayed at 140px and truncated.
+const COLS = [COL.id, COL.status, COL.text, COL.textWide, COL.status, COL.label, COL.text, COL.age].join(' ');
 
 export default function Cases() {
   const app = useApp();

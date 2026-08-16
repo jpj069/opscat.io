@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input, COL} from '../ui';
 import {
   AppWindowIcon,
   HeartPulseIcon,
@@ -19,7 +19,10 @@ import { CreateKeyModal, RegisterAgentModal, AddTargetModal, OnceSecretModal } f
 import type { SecretInfo } from './Settings';
 import type { AssetRow } from '../types';
 
-const COLS = '1fr 110px 1fr 110px 110px 34px';
+// Name | Type | Detail | Status | Last seen | delete. Detail holds the hostname,
+// URL or target, so it is the one that gets the slack — Name and Detail were both
+// `1fr` before, which split it evenly between a short name and a long address.
+const COLS = [COL.text, COL.label, COL.textWide, COL.status, COL.age, COL.tiny].join(' ');
 
 const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   agent: { label: 'agent', color: '#38b6ff' },

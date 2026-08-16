@@ -11,7 +11,7 @@ import { useApp, useTab } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
 import { Card, Button,
   Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy,
-  PageHeader, Tabs, Input, HostInput, DateTime} from '../ui';
+  PageHeader, Tabs, Input, HostInput, DateTime, COL} from '../ui';
 import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
@@ -26,10 +26,15 @@ import {
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 
 // one source of truth per table: head, rows and TableSkeleton all read these
-const KEYS_GRID = '1fr 120px 140px 110px 120px 90px';
-const AGENTS_GRID = '1fr 100px 140px 100px 80px 100px 90px 60px';
-const TARGETS_GRID = '1fr 160px 70px 90px 110px 110px 80px';
-const CONNECTIONS_GRID = '1fr 130px 120px 120px 90px';
+// Name | Prefix | Scopes | Created | Last used | Active
+const KEYS_GRID = [COL.text, COL.label, COL.textWide, COL.age, COL.age, COL.toggle].join(' ');
+// Name | Group | Hostname | Platform | Status | Last seen | Auto-upd | delete
+const AGENTS_GRID = [COL.text, COL.label, COL.textWide, COL.label, COL.status, COL.age, COL.toggle, COL.actions].join(' ');
+// Name | Host | Port | Interval | Enabled | Last status | delete
+const TARGETS_GRID = [COL.text, COL.textWide, COL.num, COL.num,
+  COL.toggle, COL.status, COL.actions].join(' ');
+// Application | Permissions | Connected | Last used | revoke
+const CONNECTIONS_GRID = [COL.text, COL.textWide, COL.age, COL.age, COL.actions].join(' ');
 
 // Grouped by the job, not by the API that happens to serve them: the two cards
 // that PATCH /api/admin/settings sit in the two tabs their fields belong to.

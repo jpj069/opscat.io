@@ -322,8 +322,16 @@ router.get('/synthetics/checks', requireProbeKey, (req, res) => {
   const loc = req.probeLocation;
   db.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?').run(now(), loc.id);
   if (loc.node_id) {
-    db.prepare("UPDATE sensor_nodes SET status = 'online' WHERE id = ? AND status = 'provisioning'")
+    const r = db.prepare("UPDATE sensor_nodes SET status = 'online' WHERE id = ? AND status = 'provisioning'")
       .run(loc.node_id);
+    // The provisioning -> online transition happens exactly once, when the VM's probe
+    // first calls home. It is the moment a managed location actually starts working,
+    // so it belongs in the history — with no user, because nobody clicked it.
+    if (r.changes) {
+      db.prepare(`INSERT INTO node_timeline (location_id, label, ts, user_id, action, detail)
+        VALUES (?, ?, ?, NULL, 'online', ?)`)
+        .run(loc.id, `${loc.city} ${loc.cc}`, now(), 'first probe check-in');
+    }
   }
   const rows = loc.kind === 'managed'
     ? db.prepare(`SELECT c.* FROM synthetic_checks c
