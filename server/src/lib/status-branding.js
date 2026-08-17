@@ -39,6 +39,17 @@ const MAGIC = [
   { mime: 'image/x-icon', test: (b) => b.length > 4 && b[0] === 0 && b[1] === 0 && b[2] === 1 && b[3] === 0 },
 ];
 const MAX_ASSET_BYTES = 512 * 1024;
+/**
+ * How long the base64 STRING of a maximum-size asset may be.
+ *
+ * The route needs a length bound before it decodes, and the bound has to be
+ * derived from the byte limit rather than picked. It was not: the guard read
+ * `isStr(data)`, whose default ceiling is 500 characters, so every image larger
+ * than ~375 bytes was refused with "data (base64) required" — the logo upload
+ * never worked for a real file. Base64 is 4 characters per 3 bytes, plus a
+ * `data:image/png;base64,` prefix the browser's FileReader adds.
+ */
+const MAX_ASSET_B64_CHARS = Math.ceil(MAX_ASSET_BYTES / 3) * 4 + 64;
 
 // The declared content type is a claim by the uploader; the bytes are the fact.
 // Sniffing means a .png that is really something else cannot be stored and then
@@ -164,7 +175,7 @@ function brandingFor(page, base) {
 }
 
 module.exports = {
-  DEFAULT_ACCENT, HEX_RE, MAX_ASSET_BYTES, MAX_CSS_BYTES, THEMES,
+  DEFAULT_ACCENT, HEX_RE, MAX_ASSET_BYTES, MAX_ASSET_B64_CHARS, MAX_CSS_BYTES, THEMES,
   accentOf, safeUrl, readableOn, shade, sniffMime, cssProblem,
   getAsset, assetMeta, putAsset, deleteAsset, brandingFor,
 };

@@ -91,6 +91,10 @@ function pageByDomain(host) {
 
 const pageBySlug = (slug) => q.bySlug.get(String(slug || '').toLowerCase()) || null;
 
+// True when the request arrived on the configured status host (status.<domain>).
+const onStatusHost = (req) =>
+  !!config.statusHost && normalizeHost(req.hostname || req.headers.host) === config.statusHost;
+
 // The page a request is for, or null. `slug` is the :slug segment when the route
 // had one. A request arriving on a custom domain wins over everything else.
 function resolvePage(req, slug) {
@@ -112,6 +116,10 @@ function onOwnDomain(req, page) {
 // page lives at the ROOT of that host, so the prefix is empty.
 function basePath(req, page) {
   if (onOwnDomain(req, page)) return '';
+  // On the status host every page is addressed by slug, including the default one:
+  // status.example.com/acme is a URL somebody can read, and a bare root that means
+  // "whichever page the origin org happens to own" is not.
+  if (onStatusHost(req)) return `/${encodeURIComponent(page.slug)}`;
   return page.is_default ? '/status' : `/status/${encodeURIComponent(page.slug)}`;
 }
 
@@ -120,6 +128,10 @@ function basePath(req, page) {
 function absoluteUrl(page) {
   if (page.domain && page.domain_verified_at && hasFeature(page.org_id, 'status_domain')) {
     return `https://${page.domain}`;
+  }
+  if (config.statusHost) {
+    const scheme = config.baseUrl.startsWith('http://') ? 'http' : 'https';
+    return `${scheme}://${config.statusHost}/${encodeURIComponent(page.slug)}`;
   }
   return page.is_default ? `${config.baseUrl}/status`
     : `${config.baseUrl}/status/${encodeURIComponent(page.slug)}`;
@@ -201,7 +213,7 @@ module.exports = {
   q,
   planOf, hasFeature,
   pageById, defaultPage, listPages, pageCount, pageBySlug, pageByDomain, resolvePage,
-  normalizeHost, onOwnDomain, basePath, absoluteUrl,
+  normalizeHost, onOwnDomain, onStatusHost, basePath, absoluteUrl,
   published, canView, rememberAccess, newAccessToken, readCookie,
   componentIdsFor, pagesForIncidentComponents,
   whitelabel, customCss,

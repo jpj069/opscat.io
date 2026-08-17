@@ -4,7 +4,7 @@ import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
 import { HAS_POPOVER, topLayer } from './toplayer';
 import markLight from './assets/opscat-mark.png';
 import markDark from './assets/opscat-mark-dark.png';
-import { CheckIcon, CopyIcon, XIcon } from 'lucide-react';
+import { AlertTriangleIcon, CheckIcon, CopyIcon, XIcon } from 'lucide-react';
 
 // The OpsCat brand mark (transparent line art). Renders both stroke variants;
 // tokens.css shows the one matching body[data-theme].
@@ -1005,15 +1005,52 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement,
  * The geometry stays in tokens.css and never moves inline: on a phone the label
  * goes ABOVE the field, and a media query cannot beat an inline style.
  */
-export function FormRow({ label, hint, children }:
-  { label: React.ReactNode; hint?: React.ReactNode; children: React.ReactNode }) {
+export function FormRow({ label, hint, wide, children }:
+  { label: React.ReactNode; hint?: React.ReactNode; wide?: boolean; children: React.ReactNode }) {
   return (
     <div className="form-row">
       <span className="form-row-label text-sm text-text2">
         {label}
         {hint && <span className="text-xs text-text3" style={{ display: 'block' }}>{hint}</span>}
       </span>
-      <div className="form-row-field">{children}</div>
+      {/* `wide` drops the 420px field cap for a value that is only useful WHOLE —
+          a private status-page link is ~80 characters and was being shown in a box
+          that fits about 55, so the half somebody needed was the half cut off. It is
+          a deliberate opt-out, not a default: 420px is what keeps a form scannable. */}
+      <div className={wide ? 'form-row-field form-row-field-wide' : 'form-row-field'}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * THE way a failed action reports itself.
+ *
+ * The app had three lookalikes — a red `<Card>`, a red `<div>`, a bare red `<span>` —
+ * across ~99 call sites, in two different reds. None of them announced itself to a
+ * screen reader, and a line of red prose beside a form field reads as decoration
+ * rather than as "this did not save". So: one shape, `role="alert"`, an icon, and a
+ * tinted panel that is legible as an error at a glance.
+ *
+ * It stays INLINE, next to what failed, rather than becoming a toast. A toast is the
+ * wrong tool for a save error: it leaves before the person has finished reading, and
+ * it is nowhere near the field that needs fixing. Toasts are for things that
+ * SUCCEEDED and need no action.
+ */
+export function ErrorNote({ children, onDismiss }:
+  { children: React.ReactNode; onDismiss?: () => void }) {
+  if (!children) return null;
+  return (
+    <div role="alert" className="row text-sm" style={{
+      gap: 8, alignItems: 'flex-start', margin: '10px 0', padding: '8px 10px', borderRadius: 6,
+      color: 'var(--text0)', background: 'color-mix(in srgb, #f85149 12%, transparent)',
+      border: '1px solid color-mix(in srgb, #f85149 38%, transparent)' }}>
+      <AlertTriangleIcon size={14} style={{ flexShrink: 0, marginTop: 2, color: '#f85149' }} />
+      <span style={{ minWidth: 0 }}>{children}</span>
+      {onDismiss && (
+        <button type="button" aria-label="Dismiss" onClick={onDismiss}
+          className="text-text3" style={{ background: 'none', border: 0, cursor: 'pointer',
+            flexShrink: 0, display: 'inline-flex' }}><XIcon size={13} /></button>
+      )}
     </div>
   );
 }

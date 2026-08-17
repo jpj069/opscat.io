@@ -3,16 +3,20 @@
 // CSS/custom domain/private audience pages), e-mail subscribers, and anonymous
 // user problem reports (Downdetector-style).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useApp, useTab } from '../state';
+import { useApp, useOverlayParam, useTab } from '../state';
 import { api, ApiError } from '../api';
 import { alpha, relTime, SEV, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader,
   Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton, COL,
-  FormRow, CardNote, SwitchRow, CopyField } from '../ui';
+  FormRow, CardNote, SwitchRow, CopyField, ErrorNote, StatusPill } from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusPage, StatusPagesResponse, StatusReportsResponse } from '../types';
 import {
+  AlertTriangleIcon,
+  CheckIcon,
+  ChevronLeftIcon,
   ExternalLinkIcon,
+  EyeIcon,
   PlusIcon,
   XIcon,
 } from 'lucide-react';
@@ -280,105 +284,234 @@ const THEME_OPTIONS = [{ value: 'dark', label: 'Dark' }, { value: 'light', label
 // the status page's own origin), so the picker must not offer it either.
 const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/x-icon';
 
+/**
+ * Branding & pages — a LIST of the org's status pages, and one page's settings
+ * opened from it.
+ *
+ * It shipped as a dropdown at the top of the settings themselves, which reads as
+ * "these settings, for whichever page this select happens to be on" — the page
+ * being edited was a control, not a place. A list makes the pages the subject:
+ * you see how many there are, what each is called, where it lives and who may see
+ * it, before you open one. The opened page is in the URL (`?page=<id>`), so it is
+ * linkable and the back button closes it (state.tsx § URL state).
+ */
 function Branding({ isAdmin }: { isAdmin: boolean }) {
   const [data, setData] = useState<StatusPagesResponse | null>(null);
-  const [sel, setSel] = useState<number | null>(null);
+  const [sel, setSel] = useOverlayParam('page');
   const [err, setErr] = useState('');
   const [showNew, setShowNew] = useState(false);
+  const [preview, setPreview] = useState(false);
 
-  const load = (keep?: number) => api.get<StatusPagesResponse>('/api/admin/status-pages')
-    .then((d) => {
-      setData(d);
-      setSel((cur) => {
-        const want = keep ?? cur;
-        return d.pages.some((p) => p.id === want) ? want! : (d.pages[0]?.id ?? null);
-      });
-    })
-    .catch(() => setData(null));
+  const load = () => api.get<StatusPagesResponse>('/api/admin/status-pages')
+    .then(setData).catch(() => setData(null));
   useEffect(() => { load(); }, []);
 
-  const page = data?.pages.find((p) => p.id === sel) ?? null;
+  if (data === null) {
+    return <Busy><Card><Skeleton h={40} /><Skeleton h={40} /><Skeleton h={40} /></Card></Busy>;
+  }
+  const page = data.pages.find((p) => p.id === sel) ?? null;
 
-  if (data === null) return <Busy><Card><Skeleton h={120} /></Card></Busy>;
-  if (!page) return <Card>No status page yet.</Card>;
-
-  const multi = data.pages.length > 1 || data.limits.canMultiPage;
+  if (!page) {
+    return (
+      <>
+        <ErrorNote onDismiss={() => setErr('')}>{err}</ErrorNote>
+        <PageList pages={data.pages} limits={data.limits} isAdmin={isAdmin}
+          onOpen={setSel} onNew={() => setShowNew(true)} />
+        {showNew && <NewPageModal onClose={() => setShowNew(false)}
+          onCreated={(id) => { setShowNew(false); load(); setSel(id); }} />}
+      </>
+    );
+  }
 
   return (
     <>
-      {/* The address of the page being edited, at the top of the page that edits
-          it. It used to be nowhere: the only link was the header button, which
-          points at the org's DEFAULT page and therefore lies as soon as a second
-          page exists. */}
-      <Card title="Status page" actions={
-        <span className="row" style={{ gap: 8 }}>
-          {isAdmin && data.limits.canMultiPage && (
-            <Button size="sm" onClick={() => setShowNew(true)}>
-              <PlusIcon size={13} /> New page</Button>
-          )}
-          <a className="btn btn-sm" href={pagePath(page)} target="_blank" rel="noreferrer">
-            Open <ExternalLinkIcon size={13} /></a>
+      <div className="row row-wrap" style={{ gap: 10, marginBottom: 12 }}>
+        <Button size="sm" onClick={() => setSel(null)}>
+          <ChevronLeftIcon size={13} /> All status pages</Button>
+        <span className="text-base font-semibold text-text0" style={{ alignSelf: 'center' }}>
+          {page.name}{page.isDefault && <span className="text-xs text-text3"> · main</span>}
         </span>
-      }>
-        {multi && (
-          <FormRow label="Page" hint={data.limits.canMultiPage
-            ? 'Each page has its own branding, audience and subscribers'
-            : undefined}>
-            <Select title="Status page" value={String(page.id)}
-              onChange={(v) => setSel(Number(v))}
-              options={data.pages.map((p) => ({
-                value: String(p.id),
-                label: `${p.name}${p.isDefault ? ' (main)' : ''}${p.visibility === 'private' ? ' · private' : ''}`,
-              }))} />
-          </FormRow>
-        )}
-        <FormRow label="Public address"
-          hint={page.domainVerifiedAt ? 'Served on your own domain' : 'Send this to whoever asks for it'}>
-          <CopyField label="Status page address" value={`${location.origin}${pagePath(page)}`} />
-        </FormRow>
-        {page.domainVerifiedAt && page.domain && (
-          <FormRow label="Custom domain">
-            <CopyField label="Custom domain address" value={`https://${page.domain}/`} />
-          </FormRow>
-        )}
-      </Card>
+        <span style={{ flex: 1 }} />
+        <Button size="sm" onClick={() => setPreview(true)}><EyeIcon size={13} /> Preview</Button>
+        <a className="btn btn-sm" href={pageHref(page)} target="_blank" rel="noreferrer">
+          Open <ExternalLinkIcon size={13} /></a>
+      </div>
+
+      <ErrorNote onDismiss={() => setErr('')}>{err}</ErrorNote>
 
       <PageEditor key={page.id} page={page} limits={data.limits} isAdmin={isAdmin}
-        defaultAccent={data.defaultAccent} onChanged={() => load(page.id)}
-        onDeleted={() => { setSel(null); load(); }} onError={setErr} err={err} />
+        defaultAccent={data.defaultAccent} onChanged={load}
+        onDeleted={() => { setSel(null); load(); }} onError={setErr} />
 
-      {showNew && <NewPageModal onClose={() => setShowNew(false)}
-        onCreated={(id) => { setShowNew(false); load(id); }} />}
+      {preview && <PreviewPanel page={page} onClose={() => setPreview(false)} />}
     </>
   );
 }
 
-// The in-app link to a page. Private pages carry their secret, because that IS
-// the link the admin is meant to hand out.
-function pagePath(p: StatusPage): string {
-  const base = p.isDefault ? '/status' : `/status/${p.slug}`;
-  return p.visibility === 'private' && p.accessToken ? `${base}?k=${p.accessToken}` : base;
+// Name | Address | Visibility | Components | open
+const PAGES_GRID = [COL.text, COL.textWide, COL.status, COL.label, COL.actions].join(' ');
+
+function PageList({ pages, limits, isAdmin, onOpen, onNew }: {
+  pages: StatusPage[]; limits: StatusPagesResponse['limits']; isAdmin: boolean;
+  onOpen: (id: number) => void; onNew: () => void;
+}) {
+  return (
+    <Card style={{ padding: 0 }} title="Status pages" actions={
+      isAdmin && limits.canMultiPage
+        ? <Button size="sm" onClick={onNew}><PlusIcon size={13} /> New page</Button>
+        : <span className="text-xs text-text3">Additional pages: Enterprise plan</span>
+    }>
+      <TableScroll cols={PAGES_GRID} minWidth={760}>
+        <div className="tbl-head">
+          <span>Name</span><span>Public address</span><span>Visibility</span>
+          <span>Components</span><span style={{ textAlign: 'right' }}>Actions</span>
+        </div>
+        {pages.map((p) => (
+          <div key={p.id} className="tbl-row" style={{ cursor: 'pointer' }}
+            onClick={() => onOpen(p.id)}>
+            <span style={{ minWidth: 0 }}>
+              <span className="text-base font-semibold text-text0" style={{ display: 'block',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <span className="mono text-2xs text-text3">{p.slug}{p.isDefault ? ' · main' : ''}</span>
+            </span>
+            <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.url}>
+              {p.url.replace(/^https?:\/\//, '')}
+              {p.domainVerifiedAt && p.domain
+                && <span className="text-text3"> · own domain</span>}
+            </span>
+            <StatusPill text={p.visibility === 'private' ? 'private' : (p.published ? 'public' : 'unpublished')}
+              color={p.visibility === 'private' ? SEV.purple
+                : (p.published ? STATUS_META.operational.color : SEV.info)} />
+            <span className="text-xs text-text2">
+              {p.componentIds === null ? 'all' : `${p.componentIds.length} selected`}</span>
+            <span className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>
+              <Button size="sm" onClick={(e) => { e.stopPropagation(); onOpen(p.id); }}>Edit</Button>
+              <a className="btn btn-sm" href={pageHref(p)} target="_blank" rel="noreferrer"
+                onClick={(e) => e.stopPropagation()} aria-label={`Open ${p.name}`}>
+                <ExternalLinkIcon size={13} /></a>
+            </span>
+          </div>
+        ))}
+      </TableScroll>
+    </Card>
+  );
 }
 
-function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted, onError, err }: {
+/**
+ * The link to a page, from the admin UI.
+ *
+ * The address itself comes from the SERVER (`page.url`) — it is the only side that
+ * knows whether a dedicated status host is configured, whether a custom domain is
+ * verified, and which of those wins. Building it here from the slug produced a
+ * `/status/<slug>` that was merely usually right. The private link secret is added
+ * here, because that IS the link the admin is meant to hand out.
+ */
+function pageHref(p: StatusPage): string {
+  return p.visibility === 'private' && p.accessToken ? `${p.url}?k=${p.accessToken}` : p.url;
+}
+
+/**
+ * The preview, in a slide-over rather than inline.
+ *
+ * Inline it sat between the settings that feed it and the ones that do not, which
+ * made it read as another form section; it is not, it is the OUTPUT. On demand,
+ * over the page, it can also be looked at while scrolling the form underneath.
+ */
+function PreviewPanel({ page, onClose }: { page: StatusPage; onClose: () => void }) {
+  const r = page.resolved;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="overlay-dim" onClick={onClose} />
+      <div className="slide-over" role="dialog" aria-label="Status page preview">
+        <div className="row" style={{ gap: 10, padding: '14px 16px',
+          borderBottom: '1px solid var(--bg3)' }}>
+          <span className="text-base font-semibold text-text0">Preview</span>
+          <span style={{ flex: 1 }} />
+          <a className="btn btn-sm" href={pageHref(page)} target="_blank" rel="noreferrer">
+            Open the real page <ExternalLinkIcon size={13} /></a>
+          <Button size="sm" onClick={onClose} aria-label="Close preview"><XIcon size={13} /></Button>
+        </div>
+        <div style={{ padding: 16 }}>
+          <div style={{ background: r.palette.bg, border: `1px solid ${r.palette.borderStrong}`,
+            borderRadius: 8, padding: 16 }}>
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              {r.logoUrl
+                ? <img src={r.logoUrl} alt="" style={{ height: 32, maxWidth: 220, objectFit: 'contain' }} />
+                : <span style={{ width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+                  background: `linear-gradient(135deg, ${r.accent}, ${r.accentDark})` }} />}
+              <span className="text-lg font-bold" style={{ color: r.palette.heading }}>
+                {page.name} Status</span>
+            </div>
+            {r.description && (
+              <div className="text-sm" style={{ color: r.palette.muted, marginTop: 8 }}>{r.description}</div>)}
+            <div className="row" style={{ gap: 10, marginTop: 12, padding: 12, borderRadius: 8,
+              background: r.palette.surface, border: `1px solid ${r.palette.borderStrong}` }}>
+              <GlowDot color={STATUS_META.operational.color} size={10} />
+              <span className="text-sm font-semibold" style={{ color: r.palette.heading }}>
+                All Systems Operational</span>
+            </div>
+            <div className="row row-wrap" style={{ gap: 10, marginTop: 12, alignItems: 'center' }}>
+              <span style={{ background: r.accent, color: r.accentInk, borderRadius: 6,
+                padding: '6px 14px', fontWeight: 600 }} className="text-xs">Subscribe</span>
+              <span className="text-2xs" style={{ color: r.palette.faint }}>
+                {r.hidePowered ? '' : 'Powered by OpsCat · '}Atom feed
+                {r.supportUrl ? ' · Support' : ''}{r.legalUrl ? ' · Legal' : ''}</span>
+            </div>
+          </div>
+          <CardNote>
+            Rendered from the same values the public page uses — but it is a mock-up of
+            the header, not the page: it shows no components, no incidents, and
+            <strong> custom CSS is not applied here</strong>. Open the real page to see those.
+          </CardNote>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted, onError }: {
   page: StatusPage;
   limits: StatusPagesResponse['limits'];
   isAdmin: boolean; defaultAccent: string;
   onChanged: () => void; onDeleted: () => void;
-  onError: (m: string) => void; err: string;
+  onError: (m: string) => void;
 }) {
   const [name, setName] = useState(page.name);
   const [desc, setDesc] = useState(page.description);
   const [support, setSupport] = useState(page.supportUrl);
   const [legal, setLegal] = useState(page.legalUrl);
   const [css, setCss] = useState(page.customCss);
+  const [cssOn, setCssOn] = useState(!!page.customCss);
+  // Which field was refused, and why. A rejected value used to revert to the stored
+  // one with nothing said — the accent field snapped back to the default and the
+  // person was left guessing whether they had mistyped or the feature was broken.
+  // The draft now STAYS so it can be corrected, and the reason sits under the field.
+  const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
+  const clearErr = (k: string) => setFieldErr((c) => { const n = { ...c }; delete n[k]; return n; });
 
-  // One saver for every field: PATCH, then re-read so the preview shows what the
-  // PUBLIC page will show rather than what this form hopes.
-  const save = async (patch: Record<string, unknown>, revert?: () => void) => {
+  /**
+   * One saver for every field: PATCH, then re-read so the form shows what the PUBLIC
+   * page will show rather than what this form hopes.
+   *
+   * `field` names the control the failure belongs to. Without it the only report was
+   * a page-level line, which for a refused colour or a refused stylesheet is nowhere
+   * near the thing that needs fixing.
+   */
+  const save = async (patch: Record<string, unknown>, field?: string) => {
     onError('');
-    try { await api.patch(`/api/admin/status-pages/${page.id}`, patch); onChanged(); }
-    catch (e) { revert?.(); onError(e instanceof ApiError ? e.message : 'could not save'); }
+    if (field) clearErr(field);
+    try { await api.patch(`/api/admin/status-pages/${page.id}`, patch); onChanged(); return true; }
+    catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'could not save';
+      if (field) setFieldErr((c) => ({ ...c, [field]: msg })); else onError(msg);
+      return false;
+    }
   };
 
   const r = page.resolved;
@@ -391,7 +524,8 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
         <FormRow label="Page name">
           <Input value={name} disabled={!isAdmin} maxLength={80}
             onChange={(e) => setName(e.target.value)}
-            onBlur={() => name !== page.name && save({ name })} />
+            onBlur={() => name !== page.name && save({ name }, 'name')} />
+          <FieldError msg={fieldErr.name} />
         </FormRow>
         <FormRow label="Logo" hint="PNG, JPEG, WebP or ICO · max 512 KB · shown at 32px tall">
           <AssetField pageId={page.id} kind="logo" asset={page.logo} url={r.logoUrl}
@@ -401,9 +535,10 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
           <AssetField pageId={page.id} kind="favicon" asset={page.favicon} url={r.faviconUrl}
             disabled={!isAdmin} onChanged={onChanged} onError={onError} />
         </FormRow>
-        <FormRow label="Accent colour">
+        <FormRow label="Accent colour" hint="#rrggbb — the page derives its tints from it">
           <ColorPicker value={page.accent || defaultAccent} disabled={!isAdmin}
-            onChange={(v) => save({ accent: v })} />
+            onChange={(v) => save({ accent: v }, 'accent')} />
+          <FieldError msg={fieldErr.accent} />
         </FormRow>
         <FormRow label="Theme">
           <Select title="Theme" value={page.theme} disabled={!isAdmin}
@@ -413,54 +548,23 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
           <Textarea value={desc} maxLength={300} disabled={!isAdmin} rows={2}
             placeholder="Live and historical status for the Acme platform."
             onChange={(e) => setDesc(e.target.value)}
-            onBlur={() => desc !== page.description && save({ description: desc })} />
+            onBlur={() => desc !== page.description && save({ description: desc }, 'description')} />
+          <FieldError msg={fieldErr.description} />
         </FormRow>
         <FormRow label="Support link" hint="Optional — linked in the footer">
           <HostInput value={support} disabled={!isAdmin}
             placeholder="https://acme.example/support"
             onChange={(e) => setSupport(e.target.value)}
-            onBlur={() => support !== page.supportUrl && save({ supportUrl: support })} />
+            onBlur={() => support !== page.supportUrl && save({ supportUrl: support }, 'supportUrl')} />
+          <FieldError msg={fieldErr.supportUrl} />
         </FormRow>
         <FormRow label="Legal / imprint link" hint="Optional — linked in the footer">
           <HostInput value={legal} disabled={!isAdmin}
             placeholder="https://acme.example/imprint"
             onChange={(e) => setLegal(e.target.value)}
-            onBlur={() => legal !== page.legalUrl && save({ legalUrl: legal })} />
+            onBlur={() => legal !== page.legalUrl && save({ legalUrl: legal }, 'legalUrl')} />
+          <FieldError msg={fieldErr.legalUrl} />
         </FormRow>
-        {err && <div className="text-sm" style={{ color: SEV.critical }}>{err}</div>}
-      </Card>
-
-      <Card title="Preview">
-        <div style={{ background: r.palette.bg, border: `1px solid ${r.palette.borderStrong}`,
-          borderRadius: 8, padding: 16 }}>
-          <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-            {r.logoUrl
-              ? <img src={r.logoUrl} alt="" style={{ height: 32, maxWidth: 220, objectFit: 'contain' }} />
-              : <span style={{ width: 26, height: 26, borderRadius: 6, flexShrink: 0,
-                background: `linear-gradient(135deg, ${r.accent}, ${r.accentDark})` }} />}
-            <span className="text-lg font-bold" style={{ color: r.palette.heading }}>
-              {page.name} Status</span>
-          </div>
-          {r.description && (
-            <div className="text-sm" style={{ color: r.palette.muted, marginTop: 8 }}>{r.description}</div>)}
-          <div className="row" style={{ gap: 10, marginTop: 12, padding: 12, borderRadius: 8,
-            background: r.palette.surface, border: `1px solid ${r.palette.borderStrong}` }}>
-            <GlowDot color={STATUS_META.operational.color} size={10} />
-            <span className="text-sm font-semibold" style={{ color: r.palette.heading }}>
-              All Systems Operational</span>
-          </div>
-          <div className="row" style={{ gap: 10, marginTop: 12, alignItems: 'center' }}>
-            <span style={{ background: r.accent, color: r.accentInk, borderRadius: 6,
-              padding: '6px 14px', fontWeight: 600 }} className="text-xs">Subscribe</span>
-            <span className="text-2xs" style={{ color: r.palette.faint }}>
-              {r.hidePowered ? '' : 'Powered by OpsCat · '}Atom feed
-              {r.supportUrl ? ' · Support' : ''}{r.legalUrl ? ' · Legal' : ''}</span>
-          </div>
-        </div>
-        <div className="text-2xs text-text3" style={{ marginTop: 8 }}>
-          Rendered from the same values the public page uses. Custom CSS is not applied
-          here — <a href={pagePath(page)} target="_blank" rel="noreferrer">open the page</a> to see it.
-        </div>
       </Card>
 
       <VisibilityCard page={page} limits={limits} isAdmin={isAdmin} save={save}
@@ -484,12 +588,33 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
           disabled={!isAdmin || !limits.canWhitelabel}
           note={limits.canWhitelabel ? undefined : 'Business plan'}
           onClick={() => save({ hidePowered: !page.hidePowered })} />
-        <FormRow label="Custom CSS" hint="Appended to the page’s own stylesheet · a closing &lt;/style&gt; tag is refused">
-          <Textarea className="mono" value={css} rows={6} disabled={!isAdmin || !limits.canCustomCss}
-            placeholder=".comp { border-radius: 12px }"
-            onChange={(e) => setCss(e.target.value)}
-            onBlur={() => css !== page.customCss && save({ customCss: css }, () => setCss(page.customCss))} />
-        </FormRow>
+        {/* Behind a switch: an always-open code box implies the page WANTS custom CSS,
+            which is the opposite of true — it is the escape hatch for the one rule the
+            settings above cannot express. Switching it off clears the stylesheet, so
+            "off" means the page is running our CSS and nothing else. */}
+        <SwitchRow label="Custom CSS" hint="Override any rule the settings above cannot reach"
+          on={cssOn && limits.canCustomCss} disabled={!isAdmin || !limits.canCustomCss}
+          note={limits.canCustomCss ? undefined : 'Business plan'}
+          onClick={() => {
+            const next = !cssOn;
+            setCssOn(next);
+            if (!next && page.customCss) { setCss(''); save({ customCss: '' }, 'customCss'); }
+          }} />
+        {cssOn && limits.canCustomCss && (
+          <FormRow label="Stylesheet" wide
+            hint={<>Appended to the page’s own &lt;style&gt; block · max 20 KB · a closing
+              &lt;/style&gt; tag is refused</>}>
+            <Textarea className="mono" value={css} rows={8} disabled={!isAdmin}
+              placeholder={'.comp { border-radius: 12px }\n.sp-head { padding: 32px 0 }'}
+              onChange={(e) => setCss(e.target.value)}
+              onBlur={async () => {
+                if (css === page.customCss) return;
+                if (!await save({ customCss: css }, 'customCss')) return;  // keep the draft
+              }} />
+            <FieldError msg={fieldErr.customCss} />
+            <CssClassReference />
+          </FormRow>
+        )}
       </Card>
 
       {isAdmin && !page.isDefault && (
@@ -507,6 +632,70 @@ function PageEditor({ page, limits, isAdmin, defaultAccent, onChanged, onDeleted
         </Card>
       )}
     </>
+  );
+}
+
+/** A refused value, reported under the control that holds it (never a toast). */
+function FieldError({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return (
+    <div role="alert" className="row text-xs" style={{ gap: 5, marginTop: 5, color: '#f85149' }}>
+      <AlertTriangleIcon size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ minWidth: 0 }}>{msg}</span>
+    </div>
+  );
+}
+
+/**
+ * The selectors the public page actually renders, so custom CSS is written against
+ * the real markup instead of View-Source archaeology.
+ *
+ * The list is short on purpose and mirrors `routes/status.js`. It is a REFERENCE,
+ * not a contract: renaming a class there means updating it here in the same commit,
+ * which is cheaper than the alternative — a documented selector we then cannot
+ * rename because somebody's stylesheet depends on it.
+ */
+const CSS_CLASSES: [string, string][] = [
+  ['.wrap', 'the page column (max width, padding)'],
+  ['.brand / .logo / .tagline', 'header: mark, image, description'],
+  ['.banner', 'the overall-status bar at the top'],
+  ['.card', 'each panel — components, incidents, subscribe'],
+  ['.grp', 'a component group heading'],
+  ['.comp / .comp-head / .name / .dot', 'one component row'],
+  ['.strip / .sq', 'the 45-day uptime strip and its cells'],
+  ['.pct', 'the uptime percentage'],
+  ['.inc / .inc-head / .upd', 'an incident and its updates'],
+  ['.report / .report-form / .rcount', 'the "report a problem" block'],
+  ['.hp', 'the footer (powered-by, feed, links)'],
+];
+
+function CssClassReference() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <Button size="sm" type="button" onClick={() => setOpen(!open)}>
+        {open ? 'Hide' : 'Show'} the classes this page uses
+      </Button>
+      {open && (
+        <div style={{ marginTop: 8, border: '1px solid var(--bg3)', borderRadius: 6, padding: '8px 10px' }}>
+          {CSS_CLASSES.map(([sel, what]) => (
+            <div key={sel} className="row row-wrap" style={{ gap: 8, padding: '2px 0' }}>
+              <span className="mono text-xs text-text0" style={{ minWidth: 190 }}>{sel}</span>
+              <span className="text-xs text-text3" style={{ minWidth: 0 }}>{what}</span>
+            </div>
+          ))}
+          <div className="text-xs text-text3" style={{ marginTop: 6 }}>
+            The page's own custom properties are there to build on, so a rule stays in
+            the palette you picked: <span className="mono">--accent</span>,
+            {' '}<span className="mono">--accent-dark</span>, <span className="mono">--accent-ink</span>,
+            {' '}<span className="mono">--bg</span>, <span className="mono">--surface</span>,
+            {' '}<span className="mono">--border</span>, <span className="mono">--text</span>,
+            {' '}<span className="mono">--heading</span>, <span className="mono">--muted</span>,
+            {' '}<span className="mono">--faint</span>.
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -533,9 +722,12 @@ function VisibilityCard({ page, limits, isAdmin, save, onChanged, onError }: {
       )}
 
       {page.visibility === 'private' && page.accessToken && (
-        <FormRow label="Secret link">
+        // `wide`: the link is ~80 characters and the 420px field showed about 55 of
+        // them — the half that mattered was the half cut off.
+        <FormRow label="Secret link" wide
+          hint="Anyone with this link can read the page — rotating it revokes every copy">
           <div className="row row-wrap" style={{ gap: 8 }}>
-            <CopyField label="Private page link" value={`${location.origin}${pagePath(page)}`} />
+            <CopyField label="Private page link" value={pageHref(page)} />
             <Button size="sm" disabled={!isAdmin} onClick={async () => {
               if (!window.confirm('Rotate the link? Everyone who has the current one loses access.')) return;
               try { await api.post(`/api/admin/status-pages/${page.id}/rotate-token`); onChanged(); }
@@ -672,12 +864,30 @@ const DNS_GRID = [COL.label, COL.text, COL.textWide].join(' ');
 
 // ---- new page ----
 
+interface SlugCheck { slug: string; available: boolean; reason: string }
+
 function NewPageModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => void }) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [priv, setPriv] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // The slug is checked WHILE it is typed. It used to be checked by the submit — so
+  // the way to find out a name was taken was to fill the whole form and be refused,
+  // and the slug is the one field somebody has to invent rather than know.
+  const [check, setCheck] = useState<SlugCheck | null>(null);
+  useEffect(() => {
+    if (!slug) { setCheck(null); return undefined; }
+    setCheck(null);
+    // debounce: a keystroke is not a question, a pause is
+    const t = setTimeout(() => {
+      api.get<SlugCheck>(`/api/admin/status-pages/slug-available?slug=${encodeURIComponent(slug)}`)
+        // ignore an answer that arrived after the field moved on
+        .then((r) => setCheck((cur) => (r.slug === slug ? r : cur)))
+        .catch(() => setCheck(null));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [slug]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr('');
@@ -702,13 +912,21 @@ function NewPageModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
         <Field label="URL slug">
           <Input required value={slug} className="mono" maxLength={41}
             onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="partners" />
+          <span className="row text-xs" style={{ gap: 5, marginTop: 5, minHeight: 18,
+            color: !check ? 'var(--text3)' : check.available ? SEV.green : '#f85149' }}>
+            {slug && !check && 'checking…'}
+            {check && check.available && <><CheckIcon size={12} /> free</>}
+            {check && !check.available && <><AlertTriangleIcon size={12} /> {check.reason}</>}
+          </span>
         </Field>
         <label className="row" style={{ gap: 8, marginBottom: 10 }}>
           <input type="checkbox" checked={priv} onChange={(e) => setPriv(e.target.checked)} />
           <span className="text-sm text-text1">Private — reachable only with a secret link</span>
         </label>
-        {err && <div className="text-sm" style={{ color: '#f85149', marginBottom: 8 }}>{err}</div>}
-        <Button variant="primary" block disabled={busy || !name || !slug}>
+        <ErrorNote>{err}</ErrorNote>
+        {/* disabled until the slug is known to be free: the submit is the expensive
+            way to learn what the field above already says */}
+        <Button variant="primary" block disabled={busy || !name || !slug || !check?.available}>
           {busy ? '…' : 'Create page'}</Button>
       </form>
     </Modal>

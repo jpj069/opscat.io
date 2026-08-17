@@ -310,6 +310,8 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .form-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
 .form-row-label { width: 200px; flex-shrink: 0; }
 .form-row-field { flex: 1; max-width: 420px; min-width: 0; }
+/* opt-out for a value that is only useful whole — a private link, a long token */
+.form-row-field-wide { max-width: none; }
 
 /* Component Lab entry rows (ComponentLab.tsx) — same story as .form-row: a fixed name
    column beside a demo, which on a phone has to stack instead of widening the page. */

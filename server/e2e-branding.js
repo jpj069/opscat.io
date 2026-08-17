@@ -54,6 +54,9 @@ process.env.OPSCAT_SECRET = 'e2e-brand-secret';
 process.env.PORT = '3129';
 process.env.OPSCAT_EDITION = 'cloud';           // the whole point — see header
 process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
+// the dedicated status host: status.<domain>/<slug>. Set here so the whole file
+// exercises the configured shape rather than only the /status fallback.
+process.env.OPSCAT_STATUS_HOST = 'status.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
@@ -93,15 +96,32 @@ function chunk(type, data) {
   const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
   return Buffer.concat([len, body, crc(body)]);
 }
-function makePng(side = 4) {
+function makePng(side = 4, noisy = false) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(side, 0); ihdr.writeUInt32BE(side, 4); ihdr[8] = 8; ihdr[9] = 2;
-  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(side * 3, 0x7a)]);
-  const raw = Buffer.concat(Array.from({ length: side }, () => row));
+  // noisy: deflate cannot squeeze a pseudo-random sequence, so the encoded file
+  // lands in the tens of kilobytes like a real logo. A flat colour compresses to a
+  // few hundred bytes however many pixels it has, which is how the fixture stayed
+  // small enough to sail under a 500-character length guard.
+  let st = 1;
+  const px = () => { st = (st * 1103515245 + 12345) & 0x7fffffff; return (st >>> 16) & 255; };
+  const rows = Array.from({ length: side }, () => Buffer.concat([Buffer.from([0]),
+    Buffer.from(Array.from({ length: side * 3 }, () => (noisy ? px() : 0x7a)))]));
+  const raw = Buffer.concat(rows);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const PNG = makePng();
+/**
+ * A logo of a size somebody would actually upload.
+ *
+ * `PNG` above is 4x4 and base64-encodes to 96 characters — which is why every
+ * check here passed while the route rejected every real file: the length guard
+ * capped at 500 characters (`isStr`'s default) and a 96-character fixture sailed
+ * under it. A test small enough to dodge the bug tests nothing. 160x160 of noise
+ * does not compress, so this lands in the tens of kilobytes like a real logo.
+ */
+const BIG_PNG = makePng(160, true);
 
 async function login(email, password) {
   for (let i = 0; i < 40; i++) {
@@ -219,6 +239,19 @@ async function main() {
 
   const ok = await upload(admin, MAIN, 'logo', PNG);
   chk('a real PNG is accepted', ok.status === 200 && ok.j.mime === 'image/png', JSON.stringify(ok.j));
+  // The check this file existed without: a logo of a size somebody would really
+  // pick. Everything above passed for months while this failed with
+  // "data (base64) required", because the length guard defaulted to 500 chars.
+  const bigB64 = BIG_PNG.toString('base64');
+  chk('the realistic fixture is actually big enough to matter',
+    bigB64.length > 5000, `${bigB64.length} base64 chars`);
+  const big = await upload(admin, MAIN, 'logo', BIG_PNG);
+  chk('a logo of a realistic size is accepted (not just a 4x4 pixel fixture)',
+    big.status === 200 && big.j.bytes === BIG_PNG.length,
+    `${big.status} ${JSON.stringify(big.j)} for ${bigB64.length} base64 chars`);
+  chk('…and as a data: URI, which is what the browser actually sends',
+    (await call(admin, 'PUT', `/api/admin/status-pages/${MAIN}/asset/logo`,
+      { data: `data:image/png;base64,${bigB64}` })).status === 200);
   chk('the sniffed type is stored, not the claimed one',
     db.prepare('SELECT mime FROM status_assets WHERE page_id = ? AND kind = ?').get(MAIN, 'logo').mime === 'image/png');
 
@@ -319,6 +352,54 @@ async function main() {
     (await call(admin, 'POST', '/api/admin/status-pages', { name: 'X', slug: 'confirm' })).status === 400);
   chk('a duplicate slug is refused',
     (await call(admin, 'POST', '/api/admin/status-pages', { name: 'X', slug: 'partners' })).status === 409);
+  // Slugs that would shadow the APPLICATION once a status host is configured: there
+  // the slug is the first path segment, so a page called "api" sits in front of the
+  // API on that host. An unknown slug falls through, which is why this collision
+  // would stay invisible until somebody created exactly that page.
+  for (const shadow of ['api', 'app', 'assets', 'v1']) {
+    chk(`a slug that would shadow /${shadow} is refused`,
+      (await call(admin, 'POST', '/api/admin/status-pages', { name: 'X', slug: shadow })).status === 400);
+  }
+
+  // ── the slug check the create dialog asks while you type ──────────────────
+  const slugCheck = async (v) =>
+    (await call(admin, 'GET', `/api/admin/status-pages/slug-available?slug=${encodeURIComponent(v)}`)).j;
+  chk('an unused slug is free', (await slugCheck('brand-new')).available === true);
+  chk('a taken slug is not', (await slugCheck('partners')).available === false);
+  chk('…and says why', (await slugCheck('partners')).reason === 'already taken');
+  chk('a reserved slug is not free', (await slugCheck('api')).available === false);
+  chk('a malformed slug is not free', (await slugCheck('Not A Slug!')).available === false);
+  chk('an empty slug answers rather than 500ing', (await slugCheck('')).available === false);
+  chk('the answer names the slug it is about, so a late reply can be discarded',
+    (await slugCheck('brand-new')).slug === 'brand-new');
+
+  // ── the dedicated status host (OPSCAT_STATUS_HOST) ────────────────────────
+  // Configured at the top of this file, so every URL the admin API prints is the
+  // status-host shape. The /status paths must keep working regardless: a status
+  // page URL ends up in runbooks, and a nicer name is not worth breaking one.
+  const H = 'status.e2e.test';
+  const pageUrl = (id, l) => l.pages.find((x) => x.id === id).url;
+  const listH = (await call(admin, 'GET', '/api/admin/status-pages')).j;
+  chk('the admin API prints the status-host URL',
+    pageUrl(MAIN, listH) === `https://${H}/default`, pageUrl(MAIN, listH));
+  chk('…by slug for the DEFAULT page too, not a bare root',
+    !pageUrl(MAIN, listH).endsWith(`${H}/`), pageUrl(MAIN, listH));
+  chk('the page renders on the status host',
+    (await onHost(H, '/default')).text.includes('Systems Operational'));
+  chk('…and its own links stay on that host',
+    (await onHost(H, '/default')).text.includes('/default/feed.xml'));
+  chk('the JSON and the feed resolve there too',
+    (await onHost(H, '/default/summary.json')).status === 200
+    && (await onHost(H, '/default/feed.xml')).status === 200);
+  chk('the old /status path still resolves — no shared link breaks',
+    (await raw('/status')).status === 200);
+  chk('…including /status/<slug>', (await onHost(H, '/status/partners')).status !== 500);
+  chk('a bare root on the status host goes to the default page',
+    (await onHost(H, '/')).status === 302);
+  chk('an unknown slug on the status host does NOT swallow the app',
+    (await onHost(H, '/api/health')).status === 200);
+  chk('a private page still needs its secret on the status host',
+    !(await onHost(H, '/partners')).text.includes('Systems Operational'));
   chk('the main page cannot be made private',
     (await patchPage(admin, MAIN, { visibility: 'private' })).status === 400);
   chk('the main page cannot be deleted',
@@ -419,6 +500,8 @@ async function main() {
   chk('…nor change the accent', (await patchPage(leadSess, MAIN, { accent: '#000000' })).status === 403);
   chk('…nor create a page',
     (await call(leadSess, 'POST', '/api/admin/status-pages', { name: 'Z', slug: 'zpage' })).status === 403);
+  chk('…nor ask whether a slug is free (same surface as creating one)',
+    (await call(leadSess, 'GET', '/api/admin/status-pages/slug-available?slug=x')).status === 403);
   chk('…nor claim a domain',
     (await call(leadSess, 'POST', `/api/admin/status-pages/${MAIN}/domain`, { domain: 'z.acme.example' })).status === 403);
 

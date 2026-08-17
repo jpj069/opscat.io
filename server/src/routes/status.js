@@ -471,6 +471,30 @@ router.use((req, res, next) => {
   return domainRoutes(req, res, next);
 });
 
+// ---- the dedicated status host (status.<domain>/<slug>) -----------------------
+//
+// Same sub-router as a custom domain, one segment deeper: every page is addressed
+// by slug here, the default one included. `/status/<slug>` on the app host keeps
+// working — a status page URL is the kind of thing that ends up in a runbook, and
+// retiring one to gain a nicer name is not a trade worth making.
+if (config.statusHost) {
+  router.use('/:slug', (req, res, next) => {
+    if (!pages.onStatusHost(req)) return next();
+    const page = pages.pageBySlug(req.params.slug);
+    if (!page) return next();
+    req.statusPage = page;
+    return domainRoutes(req, res, next);
+  });
+  // A bare root on the status host has no page to name, so send it to the origin
+  // org's default rather than 404 — that is the one page the host itself implies.
+  router.get('/', (req, res, next) => {
+    if (!pages.onStatusHost(req)) return next();
+    const page = pages.resolvePage(req, null);
+    if (!page) return next();
+    return res.redirect(302, `/${encodeURIComponent(page.slug)}`);
+  });
+}
+
 // ---- Caddy on-demand TLS ------------------------------------------------------
 //
 // Caddy asks this before issuing a certificate for a hostname it has never seen.

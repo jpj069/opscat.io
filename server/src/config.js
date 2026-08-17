@@ -16,6 +16,16 @@ module.exports = {
   // host that serves the public vendor-status grid at / (see routes/public.js);
   // publishing is additionally gated by the vendor_grid_published setting
   gridHost: (process.env.OPSCAT_GRID_HOST || 'radar.opscat.io').toLowerCase(),
+  // Optional dedicated host for status pages: `status.<domain>/<slug>`, which is
+  // what people expect a status page to look like. Unset = pages stay on the app
+  // host under /status/<slug>. Setting it does NOT retire the /status paths —
+  // they keep resolving, so a link somebody already shared does not break.
+  //
+  // Worth being honest about what this does and does not buy: the usual argument
+  // for a separate status host is that it survives the app being down, and that
+  // only holds when it is separate INFRASTRUCTURE. Here it is the same process,
+  // so this is naming, not resilience.
+  statusHost: (process.env.OPSCAT_STATUS_HOST || '').trim().toLowerCase(),
   // OPSCAT_SECRET encrypts SNMP communities and signs nothing else; generated+persisted if absent.
   secret: process.env.OPSCAT_SECRET || null,
   resendApiKey: process.env.RESEND_API_KEY || null,

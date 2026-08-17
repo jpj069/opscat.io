@@ -367,7 +367,36 @@ router.get('/status-pages', sec.requireRole(PAGE_ROLE), (req, res) => {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 // Slugs that would collide with the fixed segments under /status.
-const RESERVED_SLUGS = ['confirm', 'unsubscribe', 'subscribe', 'report', 'logo', 'favicon', 'feed'];
+/**
+ * Slugs a page may not take.
+ *
+ * The first group are the page's OWN routes (`/status/<slug>/logo` and friends) —
+ * a page called "logo" would swallow them. The second group only matters once
+ * `OPSCAT_STATUS_HOST` is set: there the slug IS the first path segment, so a page
+ * named "api" or "app" would shadow the application on that host. It resolves by
+ * falling through today (an unknown slug calls next()), which is exactly why the
+ * collision would be silent until somebody actually created the page.
+ */
+const RESERVED_SLUGS = [
+  'confirm', 'unsubscribe', 'subscribe', 'report', 'logo', 'favicon', 'feed',
+  'api', 'app', 'agent', 'assets', 'oauth', 'mcp', 'v1', 'status', 'admin',
+  'well-known', '.well-known', 'index.html', 'robots.txt',
+];
+
+// Is this slug free? Asked while somebody types a new page's slug, so the answer
+// arrives before the submit rather than as a 409 after it. Deliberately says only
+// free/taken with the reason — the slug namespace is global (a slug resolves a page
+// on any host), so a "which org has it" answer would leak tenants to each other.
+router.get('/status-pages/slug-available', canEditPages, (req, res) => {
+  const slug = String(req.query.slug || '').trim().toLowerCase();
+  if (!slug) return res.json({ slug, available: false, reason: 'enter a slug' });
+  if (!SLUG_RE.test(slug)) {
+    return res.json({ slug, available: false, reason: '2-41 characters of a-z, 0-9 and -' });
+  }
+  if (RESERVED_SLUGS.includes(slug)) return res.json({ slug, available: false, reason: 'reserved' });
+  if (statusPages.pageBySlug(slug)) return res.json({ slug, available: false, reason: 'already taken' });
+  return res.json({ slug, available: true, reason: '' });
+});
 
 router.post('/status-pages', canEditPages, (req, res) => {
   if (!plans.hasFeature(req.org.plan, 'status_pages_multi')) {
@@ -516,7 +545,12 @@ router.put('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
   const kind = req.params.kind;
   if (!['logo', 'favicon'].includes(kind)) return httpError(res, 404, 'unknown asset');
   const data = req.body?.data;
-  if (!isStr(data)) return httpError(res, 400, 'data (base64) required');
+  // The length bound is DERIVED from MAX_ASSET_BYTES, never defaulted: `isStr(data)`
+  // alone caps at 500 characters, which is ~375 bytes of image, so this route
+  // answered "data (base64) required" for every real logo anyone ever picked.
+  if (!isStr(data, branding.MAX_ASSET_B64_CHARS)) {
+    return httpError(res, 400, 'image data required (base64 or a data: URI, max 512 KB)');
+  }
   // strip a data: URI prefix so the browser's FileReader output can be posted as-is
   const b64 = data.replace(/^data:[^;,]*;base64,/, '');
   let buf;

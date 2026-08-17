@@ -1228,6 +1228,29 @@ not have caught it. And unlike control sizing, which only the browser can judge,
 viewBox is unconditionally wrong; there is no layout in which it means something else.
 Opt out of either rule with a `chart-exempt` comment stating the reason.
 
+## Errors the user can see (ErrorNote / FieldError)
+
+There was no pattern — there were three lookalikes across ~99 call sites: a red
+`<Card>`, a red `<div>`, a bare red `<span>`, in two different reds, none of them
+announcing itself to a screen reader. A line of red prose next to a form field reads
+as decoration, which is how "data (base64) required" appeared beside the logo picker
+and looked like a caption.
+
+- **`ErrorNote`** (`ui.tsx`) is the surface-level one: `role="alert"`, an icon, a
+  tinted panel. Optional `onDismiss`.
+- **`FieldError`** (`StatusPageAdmin.tsx`) is the one-line variant under a single
+  control, for a value the server refused.
+- **Neither is a toast, deliberately.** A toast leaves before the sentence is read
+  and sits nowhere near the field to correct. Toasts are for things that SUCCEEDED
+  and need no action.
+- **A refused value keeps its draft.** The branding form used to revert to the stored
+  value with nothing said — the accent snapped back to the default and the person was
+  left guessing whether they had mistyped or the feature was broken. The save helper
+  now takes the field name, reports under that control, and leaves the text alone so
+  it can be fixed.
+
+The ~99 legacy call sites are not swept yet; new work uses these two.
+
 ## Frontend form rows (FormRow / SwitchRow / CardNote / CopyField)
 
 The geometry of a settings form — a fixed label column beside a bounded field,
