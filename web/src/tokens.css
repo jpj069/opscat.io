@@ -388,14 +388,39 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 
 /* tables */
 .tbl { width: 100%; }
+/* ONE track list per table, owned by the wrapper.
+   `<TableScroll cols={…}>` sets `--tbl-cols` here and nowhere else; the header, the
+   rows and the skeleton all read it. They used to be handed the same constant
+   separately, which guaranteed the same STRING and nothing more: `.tbl-head` and
+   `.tbl-row` are separate grids, so a track sized by content (`COL.actions` was
+   `max-content`) resolved against each element's own cells and the header ended up
+   217px off its own data on Platform › Organizations. One variable makes that
+   arithmetic impossible to get wrong; subgrid below makes it impossible full stop. */
+.tbl { display: grid; grid-template-columns: var(--tbl-cols); }
+/* Everything directly in a table spans it: the header, a row, and equally the
+   "no data yet" line, a note or a <Busy> wrapper — none of which is a row and all
+   of which would otherwise be squeezed into track one. */
+.tbl > * { grid-column: 1 / -1; min-width: 0; }
+
 .tbl-head {
-  display: grid; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--bg3);
+  display: grid; grid-template-columns: var(--tbl-cols);
+  gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--bg3);
   font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--text2); align-items: center;
 }
 .tbl-row {
-  display: grid; gap: 8px; padding: var(--row-py) 16px; border-bottom: 1px solid var(--bg3);
+  display: grid; grid-template-columns: var(--tbl-cols);
+  gap: 8px; padding: var(--row-py) 16px; border-bottom: 1px solid var(--bg3);
   font-size: var(--t-sm); align-items: center;
+}
+/* The guarantee. A subgrid does not resolve tracks at all — it USES the parent's, so
+   a header and its rows cannot disagree even if someone reintroduces an intrinsic
+   track. Only direct children can be subgrids; skeleton rows sit inside <Busy> and
+   keep `var(--tbl-cols)` above, which is the same list. `@supports` matters: an
+   unsupported `subgrid` is a dropped declaration, and a grid with no template puts
+   every cell in one column — a far worse failure than the one this replaces. */
+@supports (grid-template-columns: subgrid) {
+  .tbl > .tbl-head, .tbl > .tbl-row { grid-template-columns: subgrid; }
 }
 .tbl-row:hover { background: color-mix(in srgb, var(--bg3) 40%, transparent); }
 

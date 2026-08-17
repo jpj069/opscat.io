@@ -222,8 +222,8 @@ function Components() {
           Status follows the worst impact of open incidents — a manual change is
           recomputed away on the next incident transition. Owner feeds auto-assign.
         </div>
-        <TableScroll stickyFirst minWidth={940}>
-        <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
+        <TableScroll cols={GRID} stickyFirst minWidth={940}>
+        <div className="tbl-head">
           <span />
           <span>Name</span>
           <span>Group</span>
@@ -233,14 +233,14 @@ function Components() {
           <span style={{ textAlign: 'right' }}>Uptime</span>
           <span />
         </div>
-        {components === null && <TableSkeleton cols={GRID} rows={5} />}
+        {components === null && <TableSkeleton rows={5} />}
         {components && components.length === 0 && (
           <div className="text-text3 text-sm" style={{ padding: 20}}>No components yet.</div>
         )}
         {components?.map((c) => {
           const pct = c.uptimePct.replace(/%/g, '');
           return (
-            <div key={c.id} className="tbl-row" style={{ gridTemplateColumns: GRID }}>
+            <div key={c.id} className="tbl-row">
               <GlowDot color={COMP_COLOR[c.status]} />
               <span className="text-base font-semibold text-text0">{c.name}</span>
               <GroupPicker value={c.group} groups={groups} disabled={!canEdit}
@@ -644,11 +644,11 @@ function DomainCard({ page, canCustomDomain, isAdmin, onChanged, onError }: {
       {page.dns && !verified && (
         <div style={{ marginTop: 12 }}>
           <div className="text-xs micro" style={{ marginBottom: 4 }}>Add these two DNS records</div>
-          <TableScroll minWidth={520}>
-            <div className="tbl-head" style={{ gridTemplateColumns: DNS_GRID }}>
+          <TableScroll cols={DNS_GRID} minWidth={520}>
+            <div className="tbl-head">
               <span>Type</span><span>Host</span><span>Value</span></div>
             {[page.dns.challenge, page.dns.routing].map((rec) => (
-              <div key={rec.type} className="tbl-row" style={{ gridTemplateColumns: DNS_GRID }}>
+              <div key={rec.type} className="tbl-row">
                 <span className="mono text-xs text-text2">{rec.type}</span>
                 <span className="mono text-xs text-text1" style={{ overflowWrap: 'anywhere' }}>{rec.host}</span>
                 <span className="mono text-xs text-text1" style={{ overflowWrap: 'anywhere' }}>{rec.value}</span>

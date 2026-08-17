@@ -339,16 +339,15 @@ function AccessTab({ leadPlus }: { leadPlus: boolean }) {
           actions={<Button size="sm" onClick={() => setModal(true)}><PlusIcon size={13} /> Create key</Button>}>
           <CardNote>Machine credentials for log ingest, server agents and remote probes.
             A key is shown once, at creation.</CardNote>
-          <TableScroll minWidth={720}>
-            <div className="tbl-head" style={{ gridTemplateColumns: KEYS_GRID, padding: '8px 0' }}>
+          <TableScroll cols={KEYS_GRID} minWidth={720}>
+            <div className="tbl-head" style={{ padding: '8px 0' }}>
               <span>Name</span><span>Prefix</span><span>Scopes</span>
               <span>Created</span><span>Last used</span><span>Active</span>
             </div>
-            {keys === null && <TableSkeleton cols={KEYS_GRID} rows={3} flush />}
+            {keys === null && <TableSkeleton rows={3} flush />}
             {keys?.length === 0 && <Empty>No API keys yet.</Empty>}
             {keys?.map((k) => (
-              <div key={k.id} style={{ display: 'grid', gridTemplateColumns: KEYS_GRID,
-                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <div key={k.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
                 <span className="text-sm text-text0">{k.name}</span>
                 <span className="mono text-sm text-text2">{k.prefix}…</span>
                 <span className="mono text-xs text-text2">{k.scopes.join(', ')}</span>
@@ -365,16 +364,15 @@ function AccessTab({ leadPlus }: { leadPlus: boolean }) {
       <Card title="Connected apps">
         <CardNote>AI clients you authorized to act on your behalf in this organization.
           Revoking takes effect immediately.</CardNote>
-        <TableScroll minWidth={620}>
-          <div className="tbl-head" style={{ gridTemplateColumns: CONNECTIONS_GRID, padding: '8px 0' }}>
+        <TableScroll cols={CONNECTIONS_GRID} minWidth={620}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
             <span>Application</span><span>Permissions</span>
             <span>Connected</span><span>Last used</span><span></span>
           </div>
-          {connections === null && <TableSkeleton cols={CONNECTIONS_GRID} rows={2} flush />}
+          {connections === null && <TableSkeleton rows={2} flush />}
           {connections?.length === 0 && <Empty>No connected apps.</Empty>}
           {connections?.map((c) => (
-            <div key={c.clientId} style={{ display: 'grid', gridTemplateColumns: CONNECTIONS_GRID,
-              gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+            <div key={c.clientId} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
               <span className="text-sm text-text0">{c.name}</span>
               <span className="mono text-xs text-text2">{c.scopes.join(', ')}</span>
               <span className="mono text-xs text-text2">{relTime(c.createdAt)}</span>
@@ -422,16 +420,15 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
           actions={leadPlus && <Button size="sm" onClick={() => setModal('agent')}><PlusIcon size={13} /> Register agent</Button>}>
           <CardNote>Server agents shipping metrics, containers and logs. Registering one
             hands out an install one-liner with a token shown only once.</CardNote>
-          <TableScroll minWidth={840}>
-            <div className="tbl-head" style={{ gridTemplateColumns: AGENTS_GRID, padding: '8px 0' }}>
+          <TableScroll cols={AGENTS_GRID} minWidth={840}>
+            <div className="tbl-head" style={{ padding: '8px 0' }}>
               <span>Name</span><span>Group</span><span>Hostname</span><span>Platform</span>
               <span>Status</span><span>Last seen</span><span>Auto-upd</span><span></span>
             </div>
-            {agents === null && <TableSkeleton cols={AGENTS_GRID} rows={3} flush />}
+            {agents === null && <TableSkeleton rows={3} flush />}
             {agents?.length === 0 && <Empty>No agents registered.</Empty>}
             {agents?.map((a) => (
-              <div key={a.id} style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID,
-                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <div key={a.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
                 <span className="mono text-sm text-text0">{a.name}
                   {a.version && <span className="text-text3"> v{a.version}</span>}</span>
                 <span className="mono text-xs text-text2">{a.group}</span>
@@ -461,16 +458,15 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
           actions={<Button size="sm" onClick={() => setModal('target')}><PlusIcon size={13} /> Add target</Button>}>
           <CardNote>Devices polled over SNMP v2c or v3. Credentials are stored encrypted
             and never read back.</CardNote>
-          <TableScroll minWidth={780}>
-            <div className="tbl-head" style={{ gridTemplateColumns: TARGETS_GRID, padding: '8px 0' }}>
+          <TableScroll cols={TARGETS_GRID} minWidth={780}>
+            <div className="tbl-head" style={{ padding: '8px 0' }}>
               <span>Name</span><span>Host</span><span>Port</span><span>Interval</span>
               <span>Enabled</span><span>Last status</span><span></span>
             </div>
-            {targets === null && <TableSkeleton cols={TARGETS_GRID} rows={3} flush />}
+            {targets === null && <TableSkeleton rows={3} flush />}
             {targets?.length === 0 && <Empty>No SNMP targets configured.</Empty>}
             {targets?.map((t) => (
-              <div key={t.id} style={{ display: 'grid', gridTemplateColumns: TARGETS_GRID,
-                gap: 8, padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <div key={t.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
                 <span className="text-sm text-text0">{t.name}</span>
                 <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.host}</span>
@@ -923,7 +919,7 @@ function BillingCard() {
       <Card title="Plan &amp; Billing">
         {bannerEl}
         <Skeleton w={92} h={18} radius={10} />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
+        <div style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
           gap: 14, marginTop: 16 }}>
           {USAGE_METRICS.map((m) => <UsageBar key={m.key} label={m.label} used={null} limit={0} />)}
         </div>
@@ -972,7 +968,7 @@ function BillingCard() {
       </div>
 
       {/* usage grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
+      <div style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
         gap: 14, marginTop: 16 }}>
         {USAGE_METRICS.map((m) => (
           <UsageBar key={m.key} label={m.label} used={s.usage[m.key]} limit={s.limits[m.key]} />

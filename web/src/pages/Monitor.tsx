@@ -105,8 +105,8 @@ export default function Monitor() {
           sideways anyway (overflow-y: auto computes overflow-x to auto next to it) but
           with no fade and no affordance, so it read as clipped. */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        <TableScroll minWidth={620}>
-        {app.eventsLoading && <TableSkeleton cols={EVENT_COLS} rows={7} />}
+        <TableScroll cols={EVENT_COLS} minWidth={620}>
+        {app.eventsLoading && <TableSkeleton rows={7} />}
         {!app.eventsLoading && events.length === 0 && (
           <div className="text-text3 text-sm" style={{ padding: 40, textAlign: 'center'}}>
             No active events{filter !== 'all' ? ` in band "${filter}"` : ''} — all quiet.
@@ -116,10 +116,8 @@ export default function Monitor() {
           const c = sevColor(e.severity);
           const selected = app.selectedEvent === e.id;
           return (
-            <div key={e.id} onClick={() => app.setSelectedEvent(e.id)}
-              style={{ display: 'grid', cursor: 'pointer', alignItems: 'center',
-                gridTemplateColumns: EVENT_COLS,
-                gap: 8, padding: 'var(--row-py) 16px', borderBottom: '1px solid var(--bg3)',
+            <div key={e.id} className="tbl-row" onClick={() => app.setSelectedEvent(e.id)}
+              style={{ cursor: 'pointer',
                 borderLeft: selected ? `2px solid ${c}` : '2px solid transparent',
                 background: selected ? alpha(c, 0.06) : undefined }}>
               <span className="row" style={{ gap: 4 }}>
@@ -182,11 +180,10 @@ export default function Monitor() {
               scroller to the widest line so borders span the whole scrolled width. */}
           {/* peek off: the nudge animation is an affordance for a static table; on a
               stream that appends a row a second it reads as the list twitching. */}
-          <TableScroll fit peek={false}>
-          {app.logsLoading && <TableSkeleton cols={LOG_COLS} rows={10} dense />}
+          <TableScroll cols={LOG_COLS} fit peek={false}>
+          {app.logsLoading && <TableSkeleton rows={10} dense />}
           {logs.map((l, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: LOG_COLS, gap: 10,
-              padding: 'var(--log-py) 16px', borderBottom: '1px solid var(--bg3)' }}>
+            <div key={i} className="tbl-row" style={{ gap: 10, padding: 'var(--log-py) 16px' }}>
               <span className="mono text-xs text-text3">{fmtTime(l.ts)}</span>
               <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>

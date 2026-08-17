@@ -15,7 +15,10 @@ const ROLE_COLOR: Record<string, string> = {
 const roleColor = (r: string) => ROLE_COLOR[r] || '#8b949e';
 // User | Email | Role | Status | Last seen | Actions. Every track was fixed, so the
 // table simply stopped at 940px and left the rest of a wide window empty.
-const GRID = [COL.text, COL.textWide, COL.label, COL.status, COL.age, COL.actions].join(' ');
+// actionsBar: Edit / Deactivate / Reset password is 239px, and 249 when the row is a
+// pending invitation ("Resend invitation"). In the 84px icon track it wrapped to three
+// lines and spilled 8px over its neighbour.
+const GRID = [COL.text, COL.textWide, COL.label, COL.status, COL.age, COL.actionsBar].join(' ');
 
 // Two possible outcomes of an invite or a reset, and the UI has to say WHICH.
 // With a mail transport the colleague gets an activation link and no secret ever
@@ -77,13 +80,13 @@ export default function Users() {
       {err && <Card className="text-base" style={{ color: '#f85149'}}>{err}</Card>}
 
       <Card style={{ padding: 0 }}>
-        <TableScroll stickyFirst minWidth={960}>
-        <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
+        <TableScroll cols={GRID} stickyFirst minWidth={960}>
+        <div className="tbl-head">
           <span>User</span><span>Email</span><span>Role</span>
           <span>Status</span><span>Last seen</span><span>Actions</span>
         </div>
 
-        {users === null && <TableSkeleton cols={GRID} rows={5} />}
+        {users === null && <TableSkeleton rows={5} />}
         {users !== null && users.length === 0 && (
           <div className="text-text3 text-base" style={{ padding: 30, textAlign: 'center'}}>
             No users yet.
@@ -91,9 +94,7 @@ export default function Users() {
         )}
 
         {users?.map((u) => (
-          <div key={u.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
-            padding: 'var(--row-py) 16px', borderBottom: '1px solid var(--bg3)', alignItems: 'center',
-            opacity: u.active ? 1 : 0.5 }}>
+          <div key={u.id} className="tbl-row" style={{ opacity: u.active ? 1 : 0.5 }}>
             {/* user */}
             <span className="row" style={{ gap: 8, minWidth: 0 }}>
               <Avatar i={initials(u.name)} c={u.color || roleColor(u.role)} size={28} />

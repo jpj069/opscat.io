@@ -848,6 +848,18 @@ unbounded. Rebuilt from `COL`, the same table gives that column 344px.
 - **At least one flexible track per grid.** `web/scripts/check-table-grids.mjs` runs in
   `npm run check:ui` (therefore in the build and the deploy) and fails on an all-fixed
   track list. Opt out with a `grid-exempt <NAME>: <why>` comment.
+- **One definition, owned by the component.** `<TableScroll cols={GRID}>` sets
+  `--tbl-cols` on the box it scrolls, and that box is the table's grid. The header and
+  the rows are `grid-template-columns: subgrid` children of it, so they do not resolve
+  tracks of their own at all — the arithmetic that produced the drift below simply has
+  nowhere to happen. `@supports` guards the subgrid: an unsupported declaration is
+  dropped, and a grid with no template stacks every cell into column one, which is a
+  worse failure than the one it replaces — so both paths are spelled out, and the
+  fallback reads the same `--tbl-cols`. `TableSkeleton` takes the track count from a
+  context rather than a second copy of the constant; two tables cannot use it without
+  a `TableScroll` (Logs' rows scroll vertically in their own box, so head and rows are
+  not siblings) and those set `--tbl-cols` on their own wrapper — still one definition,
+  just without the subgrid half.
 - **No track sized by CONTENT.** `.tbl-head` and `.tbl-row` are separate CSS grids —
   each has its own `display: grid` in `tokens.css` — and share only the track *string*.
   An intrinsic track (`max-content`, `min-content`, `auto`, `fit-content`) therefore

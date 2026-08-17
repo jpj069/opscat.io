@@ -66,20 +66,19 @@ export default function Automation() {
           When an event matches the trigger, the actions run — at most once per event
           and cooldown window. Every run is recorded in the audit trail below.
         </div>
-        <TableScroll stickyFirst minWidth={780}>
-          <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
+        <TableScroll cols={GRID} stickyFirst minWidth={780}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
             <span>Name</span><span>Trigger</span><span>Actions</span>
             <span>Cooldown</span><span>Enabled</span><span></span>
           </div>
-          {rows === null && <TableSkeleton cols={GRID} rows={3} flush />}
+          {rows === null && <TableSkeleton rows={3} flush />}
           {rows?.length === 0 && (
             <div className="text-text3 text-base" style={{ padding: 20, textAlign: 'center'}}>
               No automations yet{canEdit ? ' — create the first one, e.g. a lifecycle rule that closes an event when its recovery event arrives.' : '.'}
             </div>
           )}
           {rows?.map((r) => (
-            <div key={r.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
-              padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+            <div key={r.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
               <button onClick={canEdit ? () => setEditing(r) : undefined} title={canEdit ? 'Edit' : undefined}
                 className="text-sm text-text0 font-semibold" style={{ textAlign: 'left',
                   cursor: canEdit ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis',

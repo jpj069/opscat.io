@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const config = require('./src/config');
+const { DEFAULT_ORG_ID } = require('./src/util');
 
 const B = 'http://127.0.0.1:3000';
 const R = [];
@@ -14,8 +15,20 @@ const db = new Database(config.dbFile);
 
 async function main() {
   // ── a real browser session for the seeded admin ──────────────────────────
-  const user = db.prepare('SELECT id, email FROM users ORDER BY id LIMIT 1').get();
-  const org = db.prepare('SELECT id, name FROM organizations ORDER BY id LIMIT 1').get();
+  // A user and an org that actually belong together. `ORDER BY id LIMIT 1` on each
+  // was fine while ids were integers — user 1 and org 1 were the seeded pair. Since
+  // migration 21 they are uuids, so that ordering is effectively random and the two
+  // queries pair an arbitrary user with an arbitrary org: on any instance with more
+  // than one of either, /oauth/authorize bounces to login and the harness fails 40
+  // checks that have nothing wrong with them. Join through memberships instead, and
+  // prefer the platform org so the pair is the seeded admin wherever one exists.
+  const seat = db.prepare(`SELECT u.id AS user_id, u.email, o.id AS org_id, o.name
+    FROM memberships m JOIN users u ON u.id = m.user_id JOIN organizations o ON o.id = m.org_id
+    WHERE u.active = 1 AND u.pass_hash != ''
+    ORDER BY (o.id = ?) DESC, u.created_at LIMIT 1`).get(DEFAULT_ORG_ID);
+  if (!seat) throw new Error('no active user with a membership — seed an instance first');
+  const user = { id: seat.user_id, email: seat.email };
+  const org = { id: seat.org_id, name: seat.name };
   const sid = crypto.randomBytes(32).toString('hex');
   const t = Date.now();
   db.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)

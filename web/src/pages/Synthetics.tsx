@@ -241,13 +241,13 @@ export default function Synthetics() {
 
           {/* checks table */}
           <Card style={{ padding: 0 }}>
-            <TableScroll stickyFirst minWidth={960}>
-              <div className="tbl-head" style={{ gridTemplateColumns: CHECK_GRID }}>
+            <TableScroll cols={CHECK_GRID} stickyFirst minWidth={960}>
+              <div className="tbl-head">
                 <span>Target</span><span>Check</span><span>Agents</span>
                 <span>Uptime · {range}</span><span>%</span><span>Latency</span>
                 <span>Status</span><span style={{ textAlign: 'right' }}>Actions</span>
               </div>
-              {checks === null && <TableSkeleton cols={CHECK_GRID} rows={6} />}
+              {checks === null && <TableSkeleton rows={6} />}
               {checks && visible.length === 0 && (
                 <div className="text-text3 text-sm" style={{ padding: 20}}>
                   {checks.length === 0 ? 'No checks configured yet.' : 'No checks match this filter.'}
@@ -261,7 +261,7 @@ export default function Synthetics() {
                 return (
                   <div key={c.id} className="tbl-row"
                     onClick={() => setFlyId(c.id)}
-                    style={{ gridTemplateColumns: CHECK_GRID, cursor: 'pointer',
+                    style={{ cursor: 'pointer',
                       background: st === 'failing' ? 'rgba(248,81,73,0.04)' : undefined }}>
                     <span className="mono text-text0" style={{ overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.target}</span>
@@ -971,7 +971,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
                 ))}
               </div>
               <div className="micro text-2xs" style={{ marginBottom: 6 }}>City</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              <div style={{ gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
                 {!region && <span className="mono text-xs text-text3" style={{ gridColumn: '1/-1' }}>
                   pick a region above</span>}
                 {region && cityChoices.filter((e) => e.region === region).map((e) => {

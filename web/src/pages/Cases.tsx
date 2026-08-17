@@ -45,20 +45,20 @@ export default function Cases() {
         tabs={TABS.map((t) => [t, t === 'all' ? 'All' : `${t[0].toUpperCase()}${t.slice(1)} ${counts[t]}`] as const)} />
 
       <Card style={{ padding: 0 }}>
-        <TableScroll stickyFirst minWidth={900}>
-        <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
+        <TableScroll cols={COLS} stickyFirst minWidth={900}>
+        <div className="tbl-head">
           <span>Case</span><span>Sev</span><span>Event</span><span>Server</span>
           <span>Status</span><span>Assignee</span><span>Root Cause</span>
           <span style={{ textAlign: 'right' }}>Duration</span>
         </div>
         {!cases ? (
-          <TableSkeleton cols={COLS} rows={6} />
+          <TableSkeleton rows={6} />
         ) : rows.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             {tab === 'all' ? 'no cases yet' : `no ${tab} cases`}
           </div>
         ) : rows.map((c) => (
-          <div key={c.id} className="tbl-row" style={{ gridTemplateColumns: COLS, cursor: 'pointer' }}
+          <div key={c.id} className="tbl-row" style={{ cursor: 'pointer' }}
             onClick={() => setEditing(c)}>
             <span className="mono text-sm" style={{ color: '#388bfd' }}>{c.label}</span>
             <SevBadge score={c.severity} />

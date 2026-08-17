@@ -68,19 +68,18 @@ export default function Rules() {
       </PageHeader>
 
       <Card style={{ padding: 0 }}>
-        <TableScroll stickyFirst minWidth={700}>
-        <div className="tbl-head" style={{ gridTemplateColumns: RULE_COLS }}>
+        <TableScroll cols={RULE_COLS} stickyFirst minWidth={700}>
+        <div className="tbl-head">
           <span>Rule</span><span>Channel</span><span>Trigger</span><span>Min Sev</span>
           <span>Cooldown</span><span>On</span><span />
         </div>
         {!rules ? (
-          <TableSkeleton cols={RULE_COLS} rows={4} />
+          <TableSkeleton rows={4} />
         ) : rules.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             no rules yet</div>
         ) : rules.map((r) => (
-          <div key={r.id} className="tbl-row" style={{ gridTemplateColumns: RULE_COLS,
-            opacity: r.enabled ? 1 : 0.5 }}>
+          <div key={r.id} className="tbl-row" style={{ opacity: r.enabled ? 1 : 0.5 }}>
             <span className="text-base font-semibold text-text0" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
             <StatusPill text={channelLabel(r.channel)} color={channelColor(r.channel)} />
@@ -112,17 +111,17 @@ export default function Rules() {
 
       <Card style={{ padding: 0 }}>
         <div className="card-title" style={{ padding: '14px 16px 0' }}>Recent Notifications</div>
-        <TableScroll minWidth={560}>
-        <div className="tbl-head" style={{ gridTemplateColumns: NOTIF_COLS }}>
+        <TableScroll cols={NOTIF_COLS} minWidth={560}>
+        <div className="tbl-head">
           <span>Time</span><span>Rule</span><span>Event</span><span>Channel</span><span>Status</span>
         </div>
         {!notifs ? (
-          <TableSkeleton cols={NOTIF_COLS} rows={4} />
+          <TableSkeleton rows={4} />
         ) : notifs.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 24, textAlign: 'center'}}>
             no notifications yet</div>
         ) : notifs.map((n, i) => (
-          <div key={i} className="tbl-row" style={{ gridTemplateColumns: NOTIF_COLS }}>
+          <div key={i} className="tbl-row">
             <span className="mono text-xs text-text3">{fmtTime(n.ts)}</span>
             <span className="text-sm text-text1" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.rule}</span>

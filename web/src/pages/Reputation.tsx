@@ -196,13 +196,13 @@ export default function Reputation() {
           </span>
         </div>
 
-        <TableScroll minWidth={760}>
-          <div className="tbl-head" style={{ gridTemplateColumns: GRID }}>
+        <TableScroll cols={GRID} minWidth={760}>
+          <div className="tbl-head">
             <span>Target</span><span>Role (rDNS)</span><span>Status</span>
             <span>Lists</span><span>Checked</span><span />
           </div>
 
-          {assets === null && <TableSkeleton cols={GRID} rows={5} />}
+          {assets === null && <TableSkeleton rows={5} />}
 
           {assets !== null && assets.length === 0 && (
             <div className="text-sm text-text2" style={{ padding: '18px 12px' }}>
@@ -216,7 +216,7 @@ export default function Reputation() {
             const actionable = a.listings.filter((l) => l.tier !== 'informational');
             const shown = actionable.length ? actionable : a.listings;
             return (
-              <div key={a.id} className="tbl-row" style={{ gridTemplateColumns: GRID, cursor: 'pointer' }}
+              <div key={a.id} className="tbl-row" style={{ cursor: 'pointer' }}
                 onClick={() => setSelId(selId === a.id ? null : a.id)}>
                 <span className="mono text-sm text-text0">{a.target}</span>
                 <span className="mono text-2xs text-text3">{a.rdns || (a.kind === 'domain' ? 'domain' : '—')}</span>
@@ -501,14 +501,13 @@ function ListingHistory({ assetId }: { assetId: number }) {
           is ~560px at its minimum, so outside it the slide-over pushed the page
           sideways for as long as the history was loading. */}
       {(rows === null || rows.length > 0) && (
-        <TableScroll minWidth={520}>
-          <div className="tbl-head" style={{ gridTemplateColumns: HISTORY_GRID }}>
+        <TableScroll cols={HISTORY_GRID} minWidth={520}>
+          <div className="tbl-head">
             <span>List</span><span>Subject</span><span>Tier</span><span>From</span><span>Until</span><span>For</span>
           </div>
-          {rows === null && <TableSkeleton cols={HISTORY_GRID} rows={3} flush />}
+          {rows === null && <TableSkeleton rows={3} flush />}
           {rows?.map((l) => (
-            <div key={`${l.zone}-${l.subject ?? ''}-${l.firstSeen}`} className="tbl-row"
-              style={{ gridTemplateColumns: HISTORY_GRID }}>
+            <div key={`${l.zone}-${l.subject ?? ''}-${l.firstSeen}`} className="tbl-row">
               <span className="mono text-2xs text-text0">{l.name}</span>
               <span className="mono text-2xs text-text3">{l.subject || 'the asset'}</span>
               <span><StatusPill text={l.tier} color={TIER_COLOR[l.tier]} /></span>
@@ -754,7 +753,7 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
       </form>
 
       {/* skeleton-exempt: SPF_GRID is ~330px at its minimum and fits a phone. */}
-      {scanning && <div style={{ marginTop: 14 }}><TableSkeleton cols={SPF_GRID} rows={4} /></div>}
+      {scanning && <div style={{ marginTop: 14 }}><TableSkeleton rows={4} /></div>}
 
       {result && !scanning && (
         <div style={{ marginTop: 16 }}>
@@ -795,13 +794,12 @@ function FromSpf({ intervalS, onAdded }: { intervalS: number; onAdded: () => voi
                   {picked.size === fresh.length ? 'select none' : 'select all'}
                 </button>
               </div>
-              <TableScroll minWidth={420}>
-                <div className="tbl-head" style={{ gridTemplateColumns: SPF_GRID }}>
+              <TableScroll cols={SPF_GRID} minWidth={420}>
+                <div className="tbl-head">
                   <span /><span>Target</span><span>Kind</span><span>From</span>
                 </div>
                 {fresh.map((c) => (
-                  <label key={c.target} className="tbl-row" style={{ gridTemplateColumns: SPF_GRID,
-                    cursor: 'pointer', alignItems: 'center' }}>
+                  <label key={c.target} className="tbl-row" style={{ cursor: 'pointer', alignItems: 'center' }}>
                     <input type="checkbox" checked={picked.has(c.target)}
                       onChange={() => toggle(c.target)} style={{ width: 14, height: 14 }} />
                     <span className="mono text-2xs text-text0">{c.target}</span>

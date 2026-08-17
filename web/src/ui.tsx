@@ -646,7 +646,7 @@ export const COL = {
   /** an absolute timestamp (fmtTime / fmtDate) */
   time: '150px',
   /** a relative age or duration ("2.4d", "12m ago") */
-  age: '92px',
+  age: '100px',
   /** an identifier with a known ceiling — "C-1002", a check id, a vendor id */
   id: '84px',
   /**
@@ -689,14 +689,31 @@ export const COL = {
    */
   /** one or two icon buttons, no labels (measured: 31–71px) */
   actions: '84px',
-  /** short labelled buttons — "Test  Edit  Del" (measured: 130px) */
-  actionsWide: '148px',
+  /**
+   * Short labelled buttons — "Test  Edit  Del" (130px at rest).
+   * Sized for 180px, not 130: while a test is in flight the button reads "Sending…"
+   * and the bar grows to 163 — a track has to hold the widest STATE of its contents,
+   * not the one that happens to be on screen when it is measured. The last 17px are
+   * the PHONE: `--t-*` is one step larger below 720px, so every label in here grows
+   * while the number does not. Both remaining overflows in this table's history were
+   * 390px-only for exactly that reason. Measure a fixed track on a phone, not on the
+   * machine it is written on.
+   */
+  actionsWide: '180px',
   /** a full bar: a control plus labelled buttons (measured: 305px) */
   actionsBar: '312px',
 } as const;
 
-export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, fit = false, children }:
-  { minWidth?: number | string; stickyFirst?: boolean; peek?: boolean; fit?: boolean;
+/**
+ * The track list of the table this scroller holds. Set ONCE, by `TableScroll`, and
+ * read by `TableSkeleton` — which needs the column COUNT and used to be handed the
+ * same constant a second time. "Never inline the same grid string twice" was a rule
+ * a reader had to remember; now there is only one place to write it.
+ */
+const TableCols = React.createContext<string>('');
+
+export function TableScroll({ cols, minWidth = 620, stickyFirst = false, peek = true, fit = false, children }:
+  { cols?: string; minWidth?: number | string; stickyFirst?: boolean; peek?: boolean; fit?: boolean;
     children: React.ReactNode }) {
   const box = React.useRef<HTMLDivElement>(null);
   const sc = React.useRef<HTMLDivElement>(null);
@@ -770,8 +787,17 @@ export function TableScroll({ minWidth = 620, stickyFirst = false, peek = true, 
             scrolled width; `min-width: 100%` keeps short content filling the panel.
             Without the max-content half, rows overflow a 100%-wide wrapper and their
             borders visibly stop where the viewport did. */}
-        <div style={fit ? { width: 'max-content', minWidth: '100%' } : { minWidth }}>
-          {children}
+        {/* With `cols` this div IS the table's grid: it owns the track list, and the
+            header and rows below become subgrids of it (tokens.css `.tbl`). That is
+            what makes a header/row disagreement structurally impossible rather than
+            merely discouraged. Without `cols` it stays a plain box — a log stream or
+            a card list is not a column plan. */}
+        <div className={cols ? 'tbl' : undefined}
+          style={{
+            ...(fit ? { width: 'max-content', minWidth: '100%' } : { minWidth }),
+            ...(cols ? { ['--tbl-cols' as string]: cols } : null),
+          }}>
+          {cols ? <TableCols.Provider value={cols}>{children}</TableCols.Provider> : children}
         </div>
       </div>
     </div>
@@ -1311,13 +1337,17 @@ function gridTracks(template: string): string[] {
 // metrics automatically. `flush` drops the horizontal row padding for tables
 // that sit inside an already-padded card; `dense` matches log-density rows.
 export function TableSkeleton({ cols, rows = 5, flush = false, dense = false }:
-  { cols: string; rows?: number; flush?: boolean; dense?: boolean }) {
-  const tracks = gridTracks(cols);
+  { cols?: string; rows?: number; flush?: boolean; dense?: boolean }) {
+  // The track list comes from the TableScroll around it. `cols` stays as an override
+  // for a skeleton that is not inside one — passing it when the scroller already
+  // knows is the duplication this context exists to remove.
+  const fromCtx = React.useContext(TableCols);
+  const tracks = gridTracks(cols || fromCtx);
   const py = dense ? 'var(--log-py)' : 'var(--row-py)';
   return (
     <Busy>
       {Array.from({ length: rows }, (_, r) => (
-        <div key={r} className="tbl-row" style={{ gridTemplateColumns: cols,
+        <div key={r} className="tbl-row" style={{ ...(cols ? { gridTemplateColumns: cols } : null),
           padding: `${py} ${flush ? '0' : '16px'}` }}>
           {tracks.map((_t, c) => (
             // percentage width fits any track type (px, fr, minmax) — the grid

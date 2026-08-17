@@ -89,17 +89,17 @@ export default function Assets() {
       </div>
 
       <Card style={{ padding: 0 }}>
-        <TableScroll stickyFirst minWidth={700}>
-        <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
+        <TableScroll cols={COLS} stickyFirst minWidth={700}>
+        <div className="tbl-head">
           <span>Name</span><span>Type</span><span>Detail</span><span>Status</span><span>Last seen</span><span />
         </div>
         {!shown ? (
-          <TableSkeleton cols={COLS} rows={6} />
+          <TableSkeleton rows={6} />
         ) : shown.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             nothing monitored yet — hit “+ Add” to bring in your first server, device, app or check</div>
         ) : shown.map((r, i) => (
-          <div key={`${r.kind}-${r.id ?? r.name}-${i}`} className="tbl-row" style={{ gridTemplateColumns: COLS }}>
+          <div key={`${r.kind}-${r.id ?? r.name}-${i}`} className="tbl-row">
             <span className="mono text-base font-semibold text-text0" style={{
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
             <StatusPill text={KIND_UI[r.kind].label} color={KIND_UI[r.kind].color} />

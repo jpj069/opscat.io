@@ -104,7 +104,7 @@ function Throughput() {
         </span>
         <Segmented label="Time range" value={range} onChange={setRange} options={RANGES} />
       </div>
-      <div style={{ display: 'grid', gap: 12,
+      <div style={{ gap: 12,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))' }}>
         <KpiCard label="LOG LINES" value={stats ? fmtCount(lines) : null} color={SEV.cyan}
           spark={stats?.buckets.map((b) => b.lines)}
@@ -124,7 +124,7 @@ function Throughput() {
             ? `≈ ${peakMin.perSecond.toFixed(peakMin.perSecond < 10 ? 1 : 0)} lines/s · ${fmtHistory(peakMin.at!)}`
             : 'minute counters only cover the last 48h'} />
       </div>
-      <div style={{ display: 'grid', gap: 14,
+      <div style={{ gap: 14,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))' }}>
         <Card title={`Log lines per ${stepLabel}`}>
           <LineChart points={stats?.buckets.map((b) => b.lines) ?? null} labels={labels} tips={tips}
@@ -212,8 +212,8 @@ function Classifiers() {
           of logs, then switch it live.
         </div>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <TableScroll minWidth={760}>
-          <div className="tbl-head" style={{ gridTemplateColumns: GRID, padding: '8px 0' }}>
+        <TableScroll cols={GRID} minWidth={760}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
             <span>Pattern (regex)</span><span>Flags</span><span>Event name</span>
             <span>Severity</span><span>Target</span><span>State</span><span></span>
           </div>
@@ -223,8 +223,7 @@ function Classifiers() {
             </div>
           )}
           {custom.map((c, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8,
-              padding: '5px 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+            <div key={i} className="tbl-row" style={{ padding: '5px 0' }}>
               <Input className="mono text-sm" disabled={!isAdmin} value={c.pattern} placeholder="disk (full|usage)"
                  onChange={(e) => edit(i, { pattern: e.target.value })} />
               <Input className="mono text-sm" disabled={!isAdmin} value={c.flags ?? 'i'} placeholder="i"
@@ -279,15 +278,14 @@ function Classifiers() {
             sideways for as long as the fetch takes — which reads as the page
             "jumping" when you switch to this tab, and disappears before you can
             look at it. */}
-        <TableScroll minWidth={640}>
-          <div className="tbl-head" style={{ gridTemplateColumns: BUILTIN_GRID, padding: '8px 0' }}>
+        <TableScroll cols={BUILTIN_GRID} minWidth={640}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
             <span>Pattern (regex)</span><span>Flags</span><span>Event name</span>
             <span>Severity</span><span>Target</span>
           </div>
-          {builtin === null && <TableSkeleton cols={BUILTIN_GRID} rows={5} flush />}
+          {builtin === null && <TableSkeleton rows={5} flush />}
           {builtin?.map((c) => (
-              <div key={c.name + c.pattern} style={{ display: 'grid', gridTemplateColumns: BUILTIN_GRID, gap: 8,
-                padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+              <div key={c.name + c.pattern} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
                 <span className="mono text-xs text-text2" style={{ overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.pattern}>{c.pattern}</span>
                 <span className="mono text-xs text-text3">{c.flags}</span>
@@ -328,7 +326,7 @@ function DryRunResult({ run }: { run: DryRun }) {
   );
   return (
     <>
-      <div style={{ display: 'grid', gap: 8, marginTop: 10,
+      <div style={{ gap: 8, marginTop: 10,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(130px, 100%), 1fr))' }}>
         {cell('MATCHED', run.matched, SEV.cyan, `of ${run.scanned.toLocaleString()} lines`)}
         {cell('NEW', run.fresh, SEV.green, 'unclassified today')}
@@ -519,19 +517,18 @@ function Scout() {
           dry-run it against real logs, edit it, and switch it live under Classifiers.
         </div>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
-        <TableScroll minWidth={880}>
-          <div className="tbl-head" style={{ gridTemplateColumns: SCOUT_GRID, padding: '8px 0' }}>
+        <TableScroll cols={SCOUT_GRID} minWidth={880}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
             <span>Seen</span><span>Template</span><span>Last seen</span><span>AI suggestion</span><span></span>
           </div>
-          {rows === null && <TableSkeleton cols={SCOUT_GRID} rows={4} flush />}
+          {rows === null && <TableSkeleton rows={4} flush />}
           {rows?.length === 0 && (
             <div className="text-base text-text3" style={{ padding: 20, textAlign: 'center' }}>
               Nothing pending — every recent log line matched a rule, or no unmatched lines arrived yet.
             </div>
           )}
           {rows?.map((t) => (
-            <div key={t.id} style={{ display: 'grid', gridTemplateColumns: SCOUT_GRID, gap: 8,
-              padding: 'var(--row-py) 0', borderBottom: '1px solid var(--bg3)', alignItems: 'center' }}>
+            <div key={t.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
               <span className="mono text-sm font-bold text-text0">
                 {t.count >= 1000 ? `${(t.count / 1000).toFixed(1)}k` : t.count}×</span>
               <span className="mono text-xs text-text1" title={t.sample || undefined}

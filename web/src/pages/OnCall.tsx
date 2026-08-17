@@ -73,19 +73,19 @@ export default function OnCall() {
 
       {tab === 'schedules' && (
         <Card style={{ padding: 0 }}>
-          <TableScroll stickyFirst minWidth={760}>
-            <div className="tbl-head" style={{ gridTemplateColumns: SCHED_COLS }}>
+          <TableScroll cols={SCHED_COLS} stickyFirst minWidth={760}>
+            <div className="tbl-head">
               <span>Schedule</span><span>Timezone</span><span>On call now</span>
               <span>Via</span><span>Team</span><span />
             </div>
             {!schedules ? (
-              <TableSkeleton cols={SCHED_COLS} rows={4} />
+              <TableSkeleton rows={4} />
             ) : schedules.length === 0 ? (
               <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center' }}>
                 no schedules yet — nobody is on call
               </div>
             ) : schedules.map((s) => (
-              <div key={s.id} className="tbl-row" style={{ gridTemplateColumns: SCHED_COLS }}>
+              <div key={s.id} className="tbl-row">
                 <button className="link-cell text-base font-semibold text-text0"
                   onClick={() => setDetail(s.id)} title="Open the rotation">{s.name}</button>
                 <span className="mono text-sm text-text2">{s.timezone}</span>
@@ -115,18 +115,18 @@ export default function OnCall() {
 
       {tab === 'teams' && (
         <Card style={{ padding: 0 }}>
-          <TableScroll minWidth={560}>
-            <div className="tbl-head" style={{ gridTemplateColumns: TEAM_COLS }}>
+          <TableScroll cols={TEAM_COLS} minWidth={560}>
+            <div className="tbl-head">
               <span>Team</span><span>Members</span><span />
             </div>
             {!teams ? (
-              <TableSkeleton cols={TEAM_COLS} rows={3} />
+              <TableSkeleton rows={3} />
             ) : teams.length === 0 ? (
               <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center' }}>
                 no teams yet
               </div>
             ) : teams.map((t) => (
-              <div key={t.id} className="tbl-row" style={{ gridTemplateColumns: TEAM_COLS }}>
+              <div key={t.id} className="tbl-row">
                 <span className="text-base font-semibold text-text0">{t.name}</span>
                 <span className="row row-wrap" style={{ gap: 6 }}>
                   {t.members.length === 0 && <span className="text-sm text-text3">nobody yet</span>}
@@ -376,7 +376,7 @@ function RotationEditor({ scheduleId, canEdit, onClose, onSaved }:
           ) : (
             // A week grid is a wide table and would push the page sideways on a
             // phone; the shift list says the same thing and wraps.
-            <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ gap: 4 }}>
               {shifts.slice(0, 40).map((s, i) => (
                 <div key={i} className="row row-wrap" style={{ gap: 8, alignItems: 'baseline' }}>
                   <span className="mono text-xs text-text3" style={{ minWidth: 0 }}>

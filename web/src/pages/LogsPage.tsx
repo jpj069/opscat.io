@@ -102,13 +102,18 @@ export default function LogsPage() {
             head + rows scroll sideways together, rows scroll vertically inside */}
         <div className="tbl-scroll" style={{ flex: 1, minHeight: 0, display: 'flex',
           flexDirection: 'column' }}>
-        <div style={{ minWidth: 620, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
+        {/* --tbl-cols once, here, for the head AND the rows below it. This table
+            cannot use `TableScroll`/subgrid: its rows scroll vertically inside their
+            own box, so head and rows are not siblings of one grid. The variable still
+            gives them one definition, which is the half that was drifting. */}
+        <div style={{ minWidth: 620, flex: 1, minHeight: 0, display: 'flex',
+          flexDirection: 'column', ['--tbl-cols' as string]: COLS }}>
+        <div className="tbl-head">
           <span>Time</span><span>Device</span><span>Line</span>
         </div>
         <div className="fill-scroll">
           {!fetched ? (
-            <TableSkeleton cols={COLS} rows={14} dense />
+            <TableSkeleton rows={14} dense />
           ) : rows.length === 0 ? (
             <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
               {filter.trim() ? 'no matching log lines' : 'no logs in window'}
@@ -123,8 +128,7 @@ export default function LogsPage() {
               )}
             </div>
           ) : rows.map((l, i) => (
-            <div key={`${l.ts}-${i}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 8,
-              padding: 'var(--log-py) 16px', borderBottom: '1px solid var(--bg3)' }}>
+            <div key={`${l.ts}-${i}`} className="tbl-row" style={{ padding: 'var(--log-py) 16px' }}>
               <span className="mono text-xs text-text3">{fmtDateTime(l.ts)}</span>
               <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>

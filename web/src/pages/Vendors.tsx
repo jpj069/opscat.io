@@ -79,19 +79,19 @@ export default function Vendors() {
       )}
 
       <Card style={{ padding: 0 }}>
-        <TableScroll stickyFirst minWidth={720}>
-        <div className="tbl-head" style={{ gridTemplateColumns: COLS }}>
+        <TableScroll cols={COLS} stickyFirst minWidth={720}>
+        <div className="tbl-head">
           <span>Vendor</span><span>Status</span><span>Incidents</span><span>Feed</span><span>Checked</span><span />
         </div>
         {!rows ? (
-          <TableSkeleton cols={COLS} rows={6} />
+          <TableSkeleton rows={6} />
         ) : rows.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             no vendors monitored yet — hit “+ Add vendor” to watch the status pages of the services you depend on</div>
         ) : rows.map((v) => {
           const ui = STATUS_UI[v.status] || STATUS_UI.unknown;
           return (
-            <div key={v.id} className="tbl-row" style={{ gridTemplateColumns: COLS, cursor: 'pointer' }}
+            <div key={v.id} className="tbl-row" style={{ cursor: 'pointer' }}
               onClick={() => setDetailId(v.id)}>
               <span style={{ minWidth: 0 }}>
                 <span className="mono text-base font-semibold text-text0" style={{
