@@ -338,11 +338,32 @@ router.get('/synthetics/checks', requireProbeKey, (req, res) => {
         JOIN org_location_access a ON a.org_id = c.org_id AND a.location_id = ?
         WHERE c.enabled = 1`).all(loc.id)
     : db.prepare('SELECT * FROM synthetic_checks WHERE org_id = ? AND enabled = 1').all(loc.org_id);
+  // The location filter is IN THE QUERY, not in a JS predicate, and that is a
+  // tenant-isolation property rather than a tidy-up.
+  //
+  // It used to be `.filter(c => { const assigned = db…all(c.id); return … })`.
+  // The moment the storage layer becomes async that callback returns a PROMISE,
+  // a Promise is truthy, and the predicate keeps EVERY row — so a managed probe
+  // location would be handed the check list of every organisation that booked
+  // it. 200 OK, no log line, no test failure. See risk #1 in
+  // docs/POSTGRES-MIGRATION-PLAN.md.
+  //
+  // As one statement there is no callback to get wrong, and it also stops being
+  // N+1: one query per work-list request instead of one per check.
+  const ids = rows.map((c) => c.id);
+  const restricted = new Set();   // has at least one location row
+  const assigned = new Set();     // …and one of them is THIS location
+  if (ids.length) {
+    for (const r of db.prepare(`SELECT check_id, location_id FROM check_locations
+      WHERE check_id IN (${ids.map(() => '?').join(',')})`).all(...ids)) {
+      restricted.add(r.check_id);
+      if (r.location_id === loc.id) assigned.add(r.check_id);
+    }
+  }
   res.json(rows
-    .filter((c) => {
-      const assigned = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?').all(c.id);
-      return assigned.length === 0 || assigned.some((a) => a.location_id === loc.id);
-    })
+    // a check with no location rows runs everywhere; one with rows runs only
+    // where it was assigned — the same rule, expressed without a query inside it
+    .filter((c) => !restricted.has(c.id) || assigned.has(c.id))
     .map((c) => ({ id: c.id, type: c.type, target: c.target,
       intervalS: c.interval_s, timeoutMs: c.timeout_ms })));
 });

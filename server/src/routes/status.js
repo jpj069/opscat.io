@@ -62,12 +62,25 @@ function statusData(page) {
   // An incident belongs on this page when it touches one of the page's
   // components — or when it names no component at all, which is how an org-wide
   // announcement is expressed and therefore belongs everywhere.
-  const compsOfIncident = db.prepare('SELECT component_id FROM incident_components WHERE incident_id = ?');
-  const incidents = db.prepare(`SELECT * FROM incidents WHERE org_id = ? AND published = 1
-    ORDER BY started_at DESC LIMIT 25`).all(orgId)
+  // Same reason as the probe work list: the per-incident query moved OUT of the
+  // predicate. Left inside, an async storage layer makes the callback return a
+  // truthy Promise and the page publishes every incident it was configured to
+  // hide. One query for all 25 rows, then a pure predicate.
+  const recent = db.prepare(`SELECT * FROM incidents WHERE org_id = ? AND published = 1
+    ORDER BY started_at DESC LIMIT 25`).all(orgId);
+  const linkedByIncident = new Map();
+  if (onlySet && recent.length) {
+    for (const r of db.prepare(`SELECT incident_id, component_id FROM incident_components
+      WHERE incident_id IN (${recent.map(() => '?').join(',')})`).all(...recent.map((i) => i.id))) {
+      if (!linkedByIncident.has(r.incident_id)) linkedByIncident.set(r.incident_id, []);
+      linkedByIncident.get(r.incident_id).push(r.component_id);
+    }
+  }
+  const incidents = recent
     .filter((i) => {
       if (!onlySet) return true;
-      const linked = compsOfIncident.all(i.id).map((r) => r.component_id);
+      const linked = linkedByIncident.get(i.id) || [];
+      // an incident linked to nothing is an announcement: it belongs everywhere
       return linked.length === 0 || linked.some((id) => onlySet.has(id));
     })
     .slice(0, 10)

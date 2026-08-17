@@ -197,8 +197,15 @@ function pagesForIncidentComponents(orgId, componentIds) {
   const all = listPages(orgId);
   if (!componentIds || !componentIds.length) return all;
   const wanted = new Set(componentIds);
+  // componentIdsFor() is a QUERY, and it used to run inside this predicate. That
+  // is the highest-blast-radius instance of risk #1 in the migration plan: async,
+  // the callback returns a truthy Promise, the filter keeps every page, and an
+  // incident scoped to one component MAILS EVERY SUBSCRIBER OF EVERY PAGE in the
+  // org. Unrecallable, and nothing would have reported it.
+  // Resolved up front instead — same number of queries, no query in a predicate.
+  const idsByPage = new Map(all.map((p) => [p.id, componentIdsFor(p)]));
   return all.filter((p) => {
-    const ids = componentIdsFor(p);
+    const ids = idsByPage.get(p.id);
     return ids === null || ids.some((id) => wanted.has(id));
   });
 }
