@@ -23,12 +23,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const { chk, until, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-subs-'));
 process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-subs-secret';
 process.env.PORT = '3123';
 process.env.OPSCAT_EDITION = 'community';
@@ -101,11 +101,6 @@ async function waitForServer() {
     await new Promise((res) => setTimeout(res, 100));
   }
   return false;
-}
-async function until(fn, ms = 3000) {
-  const t0 = Date.now();
-  while (!fn() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 50));
-  return fn();
 }
 
 async function main() {
@@ -313,10 +308,7 @@ async function main() {
     unsubForm.status === 200 && !unsubForm.text.includes('#0aa36f'));
 
   // ── wrap up ───────────────────────────────────────────────────────────────
-  const fails = R.filter((l) => l.startsWith('FAIL'));
-  console.log(R.join('\n'));
-  console.log(`\n${R.length - fails.length}/${R.length} checks passed`);
-  process.exit(fails.length ? 1 : 0);
+  report();
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(die);

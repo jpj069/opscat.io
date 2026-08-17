@@ -1,19 +1,52 @@
 'use strict';
 /* End-to-end check for the MCP server: DCR → authorize → consent → token →
  * initialize → tools/list → tools/call, plus the negative cases.
- * Run against a server already listening on :3000.  node e2e-mcp.js           */
+ *
+ * Hermetic: throwaway database, own port, no network.  cd server && node e2e-mcp.js
+ *
+ * It was the one harness that was not. It opened `config.dbFile` — the
+ * DEVELOPER'S REAL DATABASE — took whichever user and organization happened to
+ * be first, inserted a session row, minted three API keys and an OAuth client,
+ * and cleaned up exactly one of those things. Pointed at a production config it
+ * would have written to production. Nothing about running it said so.
+ */
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { chk, report, onExit, die } = require('./e2e-lib').harness();
+
+// Environment BEFORE any src/ require — config.js and db.js are singletons, so
+// the first require freezes the data directory for the whole process.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-mcp-'));
+process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
+process.env.OPSCAT_SECRET = 'e2e-mcp-secret';
+process.env.PORT = '3133';
+process.env.OPSCAT_BASE_URL = 'http://127.0.0.1:3133';
+process.env.OPSCAT_ADMIN_EMAIL = 'admin@e2e.test';
+process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
+
+require('./src/index.js'); // boots the app on :3133
+
 const config = require('./src/config');
+const { db } = require('./src/db');
 const { DEFAULT_ORG_ID } = require('./src/util');
 
-const B = 'http://127.0.0.1:3000';
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const B = 'http://127.0.0.1:3133';
 
-const db = new Database(config.dbFile);
+async function waitForServer() {
+  for (let i = 0; i < 50; i++) {
+    try { if ((await fetch(`${B}/api/health`)).ok) return true; } catch { /* not yet */ }
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return false;
+}
 
 async function main() {
+  chk('server boots and answers /api/health', await waitForServer());
+
   // ── a real browser session for the seeded admin ──────────────────────────
   // A user and an org that actually belong together. `ORDER BY id LIMIT 1` on each
   // was fine while ids were integers — user 1 and org 1 were the seeded pair. Since
@@ -356,11 +389,8 @@ async function main() {
   const afterRevoke = await mcp({ jsonrpc: '2.0', method: 'tools/list', id: 6 }, S);
   chk('a revoked token can no longer drive /mcp', afterRevoke.status === 401, `got ${afterRevoke.status}`);
 
-  db.prepare('DELETE FROM sessions WHERE id = ?').run(sid);
-  console.log(R.join('\n'));
-  const failed = R.filter((r) => r.startsWith('FAIL')).length;
-  console.log(`\n${R.length - failed}/${R.length} checks passed`);
-  process.exit(failed ? 1 : 0);
+  // (no row cleanup: the whole database goes with the temp directory)
+  report();
 }
 
-main().catch((e) => { console.error('harness error:', e); process.exit(1); });
+main().catch(die);

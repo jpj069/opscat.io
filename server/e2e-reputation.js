@@ -13,12 +13,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const { chk, report, onExit, die } = require('./e2e-lib').harness();
 
 // A DB of its own, created before anything requires src/db.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-rep-'));
 process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-reputation-secret';
 
 const reputation = require('./src/engine/reputation');
@@ -709,15 +709,7 @@ async function main() {
   // a v10-shaped database and load db.js against it in a child.
   chk('migrating a v10 database preserves the asset and its open listing', await migrationCarriesOver());
 
-  console.log(R.join('\n'));
-  const failed = R.filter((r) => r.startsWith('FAIL')).length;
-  console.log(`\n${R.length - failed}/${R.length} checks passed`);
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
-  process.exit(failed ? 1 : 0);
+  report();
 }
 
-main().catch((e) => {
-  console.error('harness error:', e);
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
-  process.exit(1);
-});
+main().catch(die);

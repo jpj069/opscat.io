@@ -20,12 +20,12 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const { chk, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-bridge-'));
 process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-bridge-secret';
 process.env.PORT = '3117';
 process.env.OPSCAT_EDITION = 'community';
@@ -408,10 +408,7 @@ async function main() {
   ac.abort();
 
   // ── summary ───────────────────────────────────────────────────────────────
-  const fails = R.filter((r) => r.startsWith('FAIL'));
-  console.log(`\n${R.join('\n')}`);
-  console.log(`\n${R.length - fails.length}/${R.length} checks passed`);
-  process.exit(fails.length ? 1 : 0);
+  report();
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(die);

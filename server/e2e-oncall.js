@@ -30,12 +30,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const { chk, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-oncall-'));
 process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-oncall-secret';
 process.env.PORT = '3131';
 process.env.OPSCAT_EDITION = 'community';
@@ -373,10 +373,7 @@ async function main() {
     && db.prepare('SELECT COUNT(*) c FROM schedule_overrides WHERE schedule_id = ?').get(holeId).c === 0);
 
   // ---- report -------------------------------------------------------------
-  const failed = R.filter((l) => l.startsWith('FAIL'));
-  console.log(R.join('\n'));
-  console.log(`\n${R.length - failed.length}/${R.length} checks passed`);
-  process.exit(failed.length ? 1 : 0);
+  report();
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(die);

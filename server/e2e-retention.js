@@ -30,26 +30,26 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+const { chk, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-retention-'));
 process.env.OPSCAT_DATA_DIR = tmp;
+onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-retention-secret';
-process.env.PORT = '3123';
+process.env.PORT = '3135';
 process.env.OPSCAT_EDITION = 'cloud';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
-require('./src/index.js'); // boots the app on :3123
+require('./src/index.js'); // boots the app on :3135
 
 const { db, setOrgSetting, addMembership } = require('./src/db');
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const plans = require('./src/plans');
 const retention = require('./src/engine/retention');
 
-const BASE = 'http://127.0.0.1:3123';
+const BASE = 'http://127.0.0.1:3135';
 const PASS = 'e2e-user-password-1';
 const DAY = 86400000;
 
@@ -171,10 +171,7 @@ async function main() {
   chk('community edition has no ceiling', plans.retentionDaysFor(FREE) === 3650, `${plans.retentionDaysFor(FREE)}d`);
   chk('community reports the ceiling as unlimited', plans.retentionCapFor(FREE) === -1);
 
-  const fails = R.filter((l) => l.startsWith('FAIL'));
-  console.log(R.join('\n'));
-  console.log(`\n${R.length - fails.length}/${R.length} checks passed`);
-  process.exit(fails.length ? 1 : 0);
+  report();
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(die);

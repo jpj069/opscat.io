@@ -143,4 +143,22 @@ app.listen(config.port, () => {
   console.log(`OpsCat server listening on :${config.port}`);
 });
 
-process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
+/* In production a rejected promise must not take the server down: one failed
+ * alert delivery is not a reason to stop ingesting logs. Under test it must do
+ * exactly that.
+ *
+ * The reason is the Postgres port. Once the storage layer is async, a forgotten
+ * `await` shows up as an unhandled rejection and NOTHING ELSE — the request
+ * still answers 200, the harness still records a PASS, and the only trace is a
+ * line on stderr that a green CI run scrolls past. Logging it is how a missed
+ * await stays invisible for a release. Exiting non-zero is how it becomes a
+ * build failure.
+ *
+ * NODE_ENV=test is set by run-e2e.js, so this is live for every harness. */
+process.on('unhandledRejection', (e) => {
+  console.error('unhandledRejection', e);
+  if (process.env.NODE_ENV === 'test') {
+    console.error('exiting non-zero: an unhandled rejection under test is a failure, not a log line');
+    process.exit(1);
+  }
+});
