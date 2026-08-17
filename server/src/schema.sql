@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS users (
   timezone      TEXT,
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
 
 -- org membership: a user may belong to MANY organizations, with a distinct role
 -- per org. users.org_id stays the user's "home" org (default active org on login);
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_apikeys_org ON api_keys(org_id);
 
 CREATE TABLE IF NOT EXISTS logs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +117,8 @@ CREATE TABLE IF NOT EXISTS logs (
   source        TEXT,                        -- api key name / 'agent' / 'snmp' / 'synthetics'
   meta          TEXT                         -- JSON
 );
+CREATE INDEX IF NOT EXISTS idx_logs_org_ts ON logs(org_id, ts);
+CREATE INDEX IF NOT EXISTS idx_logs_org_device_ts ON logs(org_id, device, ts);
 
 CREATE TABLE IF NOT EXISTS events (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +138,11 @@ CREATE TABLE IF NOT EXISTS events (
   finished_at   INTEGER,
   finished_by   TEXT REFERENCES users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_events_org_status_sev ON events(org_id, status, severity DESC);
+-- THE event-deduplication invariant: at most one active event per
+-- (org, dedupe_key). It lived only in db.js for 20 migrations, so a schema
+-- generated from this file alone silently duplicated every active event.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe_active ON events(org_id, dedupe_key) WHERE status = 'active';
 -- dedupe is per-org: same event name on different orgs must not collide
 CREATE INDEX IF NOT EXISTS idx_events_last_seen ON events(last_seen);
 
@@ -165,6 +174,7 @@ CREATE TABLE IF NOT EXISTS cases (
   acked_at      INTEGER,
   acked_by      TEXT REFERENCES users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_cases_org_status ON cases(org_id, status);
 
 -- Who did what to an event, append-only. `cases.note` is a single column that every
 -- "Add Note" overwrote, so the previous note was gone and nothing recorded who wrote
@@ -196,6 +206,7 @@ CREATE TABLE IF NOT EXISTS agents (
   last_seen_at  INTEGER,
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(org_id);
 
 CREATE TABLE IF NOT EXISTS agent_metrics (
   agent_id      INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -230,6 +241,7 @@ CREATE TABLE IF NOT EXISTS synthetic_locations (
   last_seen_at  INTEGER,
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_synthloc_org ON synthetic_locations(org_id);
 
 -- Physical inventory of auto-provisioned boxes (managed fleet + BYO-cloud).
 CREATE TABLE IF NOT EXISTS sensor_nodes (
@@ -290,14 +302,6 @@ CREATE TABLE IF NOT EXISTS org_location_access (
   PRIMARY KEY (org_id, location_id)
 );
 
--- Which check runs from which location. NO rows for a check = "all agents,
--- including future ones" (the default).
-CREATE TABLE IF NOT EXISTS check_locations (
-  check_id      INTEGER NOT NULL REFERENCES synthetic_checks(id) ON DELETE CASCADE,
-  location_id   INTEGER NOT NULL REFERENCES synthetic_locations(id) ON DELETE CASCADE,
-  PRIMARY KEY (check_id, location_id)
-);
-
 CREATE TABLE IF NOT EXISTS synthetic_checks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
@@ -309,6 +313,7 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   assertions    TEXT,                        -- JSON {status?, keyword?, jsonPath?, jsonValue?} (http only)
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_synthchk_org ON synthetic_checks(org_id);
 
 CREATE TABLE IF NOT EXISTS synthetic_results (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,6 +414,7 @@ CREATE TABLE IF NOT EXISTS snmp_targets (
   v3_priv_key_enc   TEXT,
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_snmp_org ON snmp_targets(org_id);
 
 -- planned-work windows: while a window is active, alert dispatch for the org is
 -- suppressed (events still record; the notification log shows "suppressed").
@@ -479,52 +485,6 @@ CREATE TABLE IF NOT EXISTS ingest_minutes (
   PRIMARY KEY (org_id, bucket)
 ) WITHOUT ROWID;
 
-CREATE TABLE IF NOT EXISTS alert_rules (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
-  name          TEXT NOT NULL,
-  enabled       INTEGER NOT NULL DEFAULT 1,
-  -- 'msteams' is Microsoft Teams. It is spelled out because On-Call introduces
-  -- a Team object of our own (docs/ONCALL-V1.md §2) and `channel = 'teams'`
-  -- next to `kind = 'team'` would differ by one letter in the one subsystem
-  -- where confusing them pages a webhook instead of a person.
-  channel       TEXT NOT NULL CHECK (channel IN
-                  ('email','msteams','webhook','slack','telegram','discord','ntfy','pushover')),
-  trigger_name  TEXT,                        -- null = any event name
-  severity_min  INTEGER NOT NULL DEFAULT 60,
-  cooldown_m    INTEGER NOT NULL DEFAULT 15,
-  recipients    TEXT NOT NULL DEFAULT '[]',  -- JSON: emails[] or [url]
-  -- A rule either dispatches into a CHANNEL exactly as it always has, or raises
-  -- an ALERT against an escalation policy. This one column is what makes on-call
-  -- work with zero flows (docs/ONCALL-V1.md §8) — and every existing row keeps
-  -- its meaning, because 'channel' is the default.
-  target_type   TEXT NOT NULL DEFAULT 'channel',   -- 'channel' | 'policy'
-  policy_id     INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL,
-  created_at    INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS notifications (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
-  ts            INTEGER NOT NULL,
-  rule_id       INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
-  rule_name     TEXT,
-  event_id      INTEGER,
-  case_label    TEXT,
-  channel       TEXT NOT NULL,
-  ok            INTEGER NOT NULL,
-  error         TEXT,
-  -- An alert delivery is a notification like any other. One log means the
-  -- "why did nothing arrive" screen keeps one answer, and the maintenance
-  -- suppression line gets a sibling instead of a competitor (ONCALL-V1 §3.5).
-  alert_id      INTEGER,
-  -- What this message COST, in millionths of the account currency. Only the
-  -- metered channels (sms, voice) ever set it. It exists because those are the
-  -- two channels where an escalation loop is an invoice, and "how much did last
-  -- night cost" must be answerable from the same log that says who was reached.
-  cost_micros   INTEGER
-);
-
 CREATE TABLE IF NOT EXISTS rule_fires (
   rule_id       INTEGER NOT NULL,
   dedupe_key    TEXT NOT NULL,
@@ -547,18 +507,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   created_by    TEXT REFERENCES users(id),
   assignee_id   TEXT REFERENCES users(id)
 );
-
--- which status-page components an incident affects, and how badly. `impact`
--- uses the app-wide status scale (lib/status-scale.js) — the component status
--- is DERIVED as the worst impact across open incidents, identity, no mapping.
-CREATE TABLE IF NOT EXISTS incident_components (
-  incident_id  INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
-  impact       TEXT NOT NULL DEFAULT 'degraded'
-               CHECK (impact IN ('degraded','partial','major')),
-  PRIMARY KEY (incident_id, component_id)
-);
-CREATE INDEX IF NOT EXISTS idx_inc_comp_component ON incident_components(component_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_org ON incidents(org_id);
 
 -- provenance: the events/cases this incident grew out of. Polymorphic on
 -- purpose (no FK on ref_id); rows disappear with the incident, not the target.
@@ -570,33 +519,6 @@ CREATE TABLE IF NOT EXISTS incident_links (
   PRIMARY KEY (incident_id, kind, ref_id)
 );
 CREATE INDEX IF NOT EXISTS idx_inc_links_ref ON incident_links(kind, ref_id);
-
--- who owns a component: read by auto-assign ("by_component"). Maps to a USER —
--- there is no team object; see docs/INCIDENTS-V2.md §2.
-CREATE TABLE IF NOT EXISTS component_owners (
-  component_id INTEGER PRIMARY KEY REFERENCES components(id) ON DELETE CASCADE,
-  user_id      TEXT NOT NULL REFERENCES users(id)
-);
-
--- public status-page subscribers (docs/INCIDENTS-V2.md slice 2): double-opt-in
--- by mail. The token (hashed at rest, mailed in links only) is the subscriber's
--- one credential — it confirms while pending and unsubscribes once confirmed.
--- Uniqueness is per PAGE, not per org (schema v18): an audience-specific page
--- has its own audience, and the same person may legitimately want the public
--- page AND the partner page. `org_id` is kept alongside `page_id` because every
--- quota, admin list and rate limit is still an org-level question.
-CREATE TABLE IF NOT EXISTS status_subscribers (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id       TEXT NOT NULL,
-  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
-  email        TEXT NOT NULL,
-  token_hash   TEXT NOT NULL,
-  confirmed_at INTEGER,              -- NULL = pending double-opt-in
-  created_at   INTEGER NOT NULL,
-  last_sent_at INTEGER,              -- confirm-mail resend throttle
-  UNIQUE (page_id, email)
-);
-CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
 -- idx_status_subs_page is created by migration v18, NOT here. This file runs
 -- before the migrations, and on a pre-v18 database the CREATE TABLE above is a
 -- no-op — so an index naming `page_id` would fail on the very databases the
@@ -633,14 +555,6 @@ CREATE INDEX IF NOT EXISTS idx_status_pages_org ON status_pages(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_status_pages_domain
   ON status_pages(domain) WHERE domain IS NOT NULL AND domain <> '';
 
--- which components a page shows. NO rows = every component of the org, which is
--- what the default page wants and saves backfilling it on every new component.
-CREATE TABLE IF NOT EXISTS status_page_components (
-  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
-  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
-  PRIMARY KEY (page_id, component_id)
-);
-
 -- status-page branding assets: the customer's own logo and favicon. Stored as
 -- blobs because the SQLite file is the only persisted volume in the Docker
 -- deployment, and because a same-origin `/status/logo` needs no CSP img-src
@@ -675,6 +589,7 @@ CREATE TABLE IF NOT EXISTS components (
   sort          INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_components_org ON components(org_id);
 
 -- one row per component per day; worst state seen + seconds not operational
 CREATE TABLE IF NOT EXISTS component_days (
@@ -829,6 +744,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action        TEXT NOT NULL,
   detail        TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_audit_org_ts ON audit_log(org_id, ts);
 
 -- ── MCP / OAuth 2.1 authorization server ──────────────────────────────────
 -- Clients register dynamically (RFC 7591), are public (no secret) and must use
@@ -1149,3 +1065,107 @@ CREATE TABLE IF NOT EXISTS alert_timers (
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alert_timers_due ON alert_timers(resume_at, canceled_at);
+
+-- Which check runs from which location. NO rows for a check = "all agents,
+-- including future ones" (the default).
+CREATE TABLE IF NOT EXISTS check_locations (
+  check_id      INTEGER NOT NULL REFERENCES synthetic_checks(id) ON DELETE CASCADE,
+  location_id   INTEGER NOT NULL REFERENCES synthetic_locations(id) ON DELETE CASCADE,
+  PRIMARY KEY (check_id, location_id)
+);
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
+  name          TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  -- 'msteams' is Microsoft Teams. It is spelled out because On-Call introduces
+  -- a Team object of our own (docs/ONCALL-V1.md §2) and `channel = 'teams'`
+  -- next to `kind = 'team'` would differ by one letter in the one subsystem
+  -- where confusing them pages a webhook instead of a person.
+  channel       TEXT NOT NULL CHECK (channel IN
+                  ('email','msteams','webhook','slack','telegram','discord','ntfy','pushover')),
+  trigger_name  TEXT,                        -- null = any event name
+  severity_min  INTEGER NOT NULL DEFAULT 60,
+  cooldown_m    INTEGER NOT NULL DEFAULT 15,
+  recipients    TEXT NOT NULL DEFAULT '[]',  -- JSON: emails[] or [url]
+  -- A rule either dispatches into a CHANNEL exactly as it always has, or raises
+  -- an ALERT against an escalation policy. This one column is what makes on-call
+  -- work with zero flows (docs/ONCALL-V1.md §8) — and every existing row keeps
+  -- its meaning, because 'channel' is the default.
+  target_type   TEXT NOT NULL DEFAULT 'channel',   -- 'channel' | 'policy'
+  policy_id     INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rules_org ON alert_rules(org_id);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
+  ts            INTEGER NOT NULL,
+  rule_id       INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+  rule_name     TEXT,
+  event_id      INTEGER,
+  case_label    TEXT,
+  channel       TEXT NOT NULL,
+  ok            INTEGER NOT NULL,
+  error         TEXT,
+  -- An alert delivery is a notification like any other. One log means the
+  -- "why did nothing arrive" screen keeps one answer, and the maintenance
+  -- suppression line gets a sibling instead of a competitor (ONCALL-V1 §3.5).
+  alert_id      INTEGER,
+  -- What this message COST, in millionths of the account currency. Only the
+  -- metered channels (sms, voice) ever set it. It exists because those are the
+  -- two channels where an escalation loop is an invoice, and "how much did last
+  -- night cost" must be answerable from the same log that says who was reached.
+  cost_micros   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_org_ts ON notifications(org_id, ts);
+
+-- which status-page components an incident affects, and how badly. `impact`
+-- uses the app-wide status scale (lib/status-scale.js) — the component status
+-- is DERIVED as the worst impact across open incidents, identity, no mapping.
+CREATE TABLE IF NOT EXISTS incident_components (
+  incident_id  INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  impact       TEXT NOT NULL DEFAULT 'degraded'
+               CHECK (impact IN ('degraded','partial','major')),
+  PRIMARY KEY (incident_id, component_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inc_comp_component ON incident_components(component_id);
+
+-- who owns a component: read by auto-assign ("by_component"). Maps to a USER —
+-- there is no team object; see docs/INCIDENTS-V2.md §2.
+CREATE TABLE IF NOT EXISTS component_owners (
+  component_id INTEGER PRIMARY KEY REFERENCES components(id) ON DELETE CASCADE,
+  user_id      TEXT NOT NULL REFERENCES users(id)
+);
+
+-- public status-page subscribers (docs/INCIDENTS-V2.md slice 2): double-opt-in
+-- by mail. The token (hashed at rest, mailed in links only) is the subscriber's
+-- one credential — it confirms while pending and unsubscribes once confirmed.
+-- Uniqueness is per PAGE, not per org (schema v18): an audience-specific page
+-- has its own audience, and the same person may legitimately want the public
+-- page AND the partner page. `org_id` is kept alongside `page_id` because every
+-- quota, admin list and rate limit is still an org-level question.
+CREATE TABLE IF NOT EXISTS status_subscribers (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id       TEXT NOT NULL,
+  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+  email        TEXT NOT NULL,
+  token_hash   TEXT NOT NULL,
+  confirmed_at INTEGER,              -- NULL = pending double-opt-in
+  created_at   INTEGER NOT NULL,
+  last_sent_at INTEGER,              -- confirm-mail resend throttle
+  UNIQUE (page_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_status_subs_org ON status_subscribers(org_id, confirmed_at);
+CREATE INDEX IF NOT EXISTS idx_status_subs_page ON status_subscribers(page_id, confirmed_at);
+
+-- which components a page shows. NO rows = every component of the org, which is
+-- what the default page wants and saves backfilling it on every new component.
+CREATE TABLE IF NOT EXISTS status_page_components (
+  page_id      INTEGER NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  PRIMARY KEY (page_id, component_id)
+);
