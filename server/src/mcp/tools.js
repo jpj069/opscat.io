@@ -201,7 +201,7 @@ const TOOLS = [
       const where = ['org_id = ?', 'ts >= ?'];
       const args = [p.orgId, since];
       if (a.device) { where.push('device = ?'); args.push(a.device); }
-      if (a.query) { where.push('line LIKE ?'); args.push(`%${a.query}%`); }
+      if (a.query) { where.push('lower(line) LIKE lower(?)'); args.push(`%${a.query}%`); }
       const logs = db.prepare(`SELECT ts, device, line, sev, source FROM logs
         WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
       return ok({ logs, count: logs.length });

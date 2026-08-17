@@ -286,7 +286,7 @@ router.get('/logs', (req, res) => {
   const rows = q
     // plain substring match (safe); regex filtering happens client-side
     ? db.prepare(`SELECT ts, device, line, sev FROM logs
-        WHERE ${where} AND (line LIKE ? OR device LIKE ?) ORDER BY ts DESC LIMIT ?`)
+        WHERE ${where} AND (lower(line) LIKE lower(?) OR lower(device) LIKE lower(?)) ORDER BY ts DESC LIMIT ?`)
       .all(...args, `%${q}%`, `%${q}%`, limit)
     : db.prepare(`SELECT ts, device, line, sev FROM logs
         WHERE ${where} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
@@ -318,12 +318,26 @@ router.get('/analytics', (req, res) => {
   const range = { '24h': 1, '7d': 7, '30d': 30 }[req.query.range] || 7;
   const t = now();
   const since = t - range * 86400000;
+  // `strftime(…, 'unixepoch')` renders in UTC — SQLite only leaves UTC if you add
+  // 'localtime'. Postgres has no strftime, and its replacement `to_timestamp()`
+  // renders in the SESSION TimeZone, so a literal translation shifts every bucket
+  // by the server's offset. Charts still look plausible, which is why the port
+  // must spell UTC out (`AT TIME ZONE 'UTC'`) rather than inherit it. Pinned by
+  // e2e-pipeline: a timestamp 30 minutes either side of midnight UTC must land on
+  // the UTC day, so a session-timezone translation fails there instead of here.
   const volume = db.prepare(`SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') d,
       SUM(CASE WHEN sev <= 2 THEN 1 ELSE 0 END) c,
       SUM(CASE WHEN sev = 3 THEN 1 ELSE 0 END) h,
       SUM(CASE WHEN sev = 4 THEN 1 ELSE 0 END) m,
       SUM(CASE WHEN sev >= 5 THEN 1 ELSE 0 END) l
     FROM logs WHERE ts >= ? AND org_id = ? GROUP BY d ORDER BY d`).all(since, req.orgId);
+  // `strftime(…, 'unixepoch')` renders in UTC — SQLite only leaves UTC if you add
+  // 'localtime'. Postgres has no strftime, and its replacement `to_timestamp()`
+  // renders in the SESSION TimeZone, so a literal translation shifts every bucket
+  // by the server's offset. Charts still look plausible, which is why the port
+  // must spell UTC out (`AT TIME ZONE 'UTC'`) rather than inherit it. Pinned by
+  // e2e-pipeline: a timestamp 30 minutes either side of midnight UTC must land on
+  // the UTC day, so a session-timezone translation fails there instead of here.
   const mttrDaily = db.prepare(`SELECT strftime('%Y-%m-%d', closed_at / 1000, 'unixepoch') d,
       AVG(closed_at - opened_at) v FROM cases
     WHERE status = 'closed' AND closed_at >= ? AND org_id = ? GROUP BY d ORDER BY d`).all(since, req.orgId);

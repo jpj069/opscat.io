@@ -701,6 +701,13 @@ router.get('/analytics', (req, res) => {
   // un-acknowledged ones as zero would make a team that answers nothing look fast.
   const mtta = db.prepare(`SELECT AVG(acked_at - opened_at) v, COUNT(*) c FROM cases
     WHERE org_id = ? AND acked_at IS NOT NULL AND acked_at >= ?`).get(req.orgId, since);
+  // `strftime(…, 'unixepoch')` renders in UTC — SQLite only leaves UTC if you add
+  // 'localtime'. Postgres has no strftime, and its replacement `to_timestamp()`
+  // renders in the SESSION TimeZone, so a literal translation shifts every bucket
+  // by the server's offset. Charts still look plausible, which is why the port
+  // must spell UTC out (`AT TIME ZONE 'UTC'`) rather than inherit it. Pinned by
+  // e2e-pipeline: a timestamp 30 minutes either side of midnight UTC must land on
+  // the UTC day, so a session-timezone translation fails there instead of here.
   const mttaDaily = db.prepare(`SELECT strftime('%Y-%m-%d', acked_at / 1000, 'unixepoch') d,
       AVG(acked_at - opened_at) v FROM cases
     WHERE org_id = ? AND acked_at IS NOT NULL AND acked_at >= ? GROUP BY d ORDER BY d`)

@@ -337,14 +337,38 @@ router.get('/history', (req, res) => {
   const minutes = clampInt(req.query.minutes, 5, 44640, 1440);
   const buckets = clampInt(req.query.buckets, 10, 64, 32);
   const since = now() - minutes * 60000;
-  const bucketMs = (minutes * 60000) / buckets;
+  const spanMs = minutes * 60000;
+  // still reported to the client (the HeatBar labels its buckets with it);
+  // only the SQL stopped dividing by it.
+  const bucketMs = spanMs / buckets;
+  // Bucket index by INTEGER division, with every operand cast to BIGINT.
+  //
+  // The trap being avoided: this was `CAST((ts - since) / bucketMs AS INTEGER)`,
+  // and `bucketMs` is frequently FRACTIONAL — 60000 does not divide by 64, so a
+  // 5-minute window over 64 buckets is 4687.5ms wide. That makes it a float
+  // division, and the engines disagree about what CAST does to a float: SQLite
+  // TRUNCATES, Postgres ROUNDS. Half the buckets would shift by one on the port,
+  // silently, on a chart nobody would re-verify.
+  //
+  // The CASTs are NOT decoration, and this cost an hour to find: **better-sqlite3
+  // binds every JS number as REAL**, including one that satisfies
+  // `Number.isInteger()`. So `(ts - ?) * ? / ?` with bound integers is still a
+  // FLOAT division — measured, `b` came back as 63.9998. "Integer division
+  // truncates in both dialects" is true of the SQL and false of the driver.
+  // `CAST(? AS BIGINT)` forces it back: SQLite gives any type name containing
+  // INT integer affinity, Postgres reads int8. Plain INTEGER would be int4 in
+  // Postgres and epoch-milliseconds overflow it (that is the §2 bigint rule).
+  //
+  // An event exactly at the window end yields `buckets` itself, which the range
+  // guard below drops — same as before, and the reason the harness pins a result
+  // just INSIDE the edge rather than on it.
   const rows = db.prepare(`SELECT r.check_id cid,
-      CAST((r.ts - ?) / ? AS INTEGER) b,
+      (r.ts - CAST(? AS BIGINT)) * CAST(? AS BIGINT) / CAST(? AS BIGINT) b,
       SUM(r.ok) oks, COUNT(*) total,
       AVG(CASE WHEN r.ok = 1 THEN r.latency_ms END) ms
     FROM synthetic_results r
     JOIN synthetic_checks c ON c.id = r.check_id AND c.org_id = ?
-    WHERE r.ts >= ? GROUP BY r.check_id, b`).all(since, bucketMs, req.orgId, since);
+    WHERE r.ts >= ? GROUP BY r.check_id, b`).all(since, buckets, spanMs, req.orgId, since);
   const byCheck = new Map();
   for (const r of rows) {
     let o = byCheck.get(r.cid);

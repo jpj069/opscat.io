@@ -214,6 +214,84 @@ async function main() {
   chk('…counting BOTH orgs that registered it', !!entry && entry.orgs === 2, entry && entry.orgs);
   chk('…and still reports a feed type', !!entry && !!entry.feedType, entry && entry.feedType);
 
+  // ── 5. case-insensitive search — SQLite's LIKE is case-INSENSITIVE for ASCII
+  //       by default; Postgres LIKE is case-SENSITIVE. A literal translation
+  //       silently narrows every user-facing search: org lookup stops finding
+  //       "Acme" for "acme", log search returns fewer lines, and the MCP tool
+  //       under-reports to an agent that has no way to notice. `lower() LIKE
+  //       lower()` is identical on SQLite today and correct on Postgres later.
+  const insLog = db.prepare(`INSERT INTO logs (org_id, ts, device, line, sev, source)
+    VALUES (?, ?, ?, ?, 4, 'e2e')`);
+  const tLog = now();
+  insLog.run(DEFAULT_ORG_ID, tLog, 'Router-Alpha', 'Interface GigabitEthernet0/1 FLAPPING');
+  insLog.run(DEFAULT_ORG_ID, tLog, 'router-beta', 'interface reset, no flapping seen');
+
+  const logs = async (q) => (await (await fetch(
+    `${BASE}/api/logs?q=${encodeURIComponent(q)}&limit=50`,
+    { headers: { cookie: sess.cookie } })).json());
+
+  chk('log search matches regardless of the QUERY\'s case',
+    (await logs('FLAPPING')).length === 2 && (await logs('flapping')).length === 2,
+    `${(await logs('FLAPPING')).length} vs ${(await logs('flapping')).length}`);
+  chk('…and regardless of the STORED line\'s case',
+    (await logs('gigabitethernet')).length === 1, `${(await logs('gigabitethernet')).length}`);
+  chk('…and the device filter is case-insensitive too',
+    (await logs('router-alpha')).length === 1, `${(await logs('router-alpha')).length}`);
+
+  const orgs = async (q) => (await (await fetch(
+    `${BASE}/api/superadmin/orgs?q=${encodeURIComponent(q)}`,
+    { headers: { cookie: sess.cookie } })).json());
+  const found = await orgs('second org');
+  chk('org search finds "Second Org" for a lower-case query',
+    Array.isArray(found) && found.some((o) => o.id === org2), JSON.stringify(found).slice(0, 160));
+
+  // ── 6. the uptime bucket index — was `CAST(<float> AS INTEGER)`, and SQLite
+  //       TRUNCATES where Postgres ROUNDS. `bucketMs` is fractional whenever the
+  //       span does not divide by the bucket count (5 minutes over 64 buckets is
+  //       4687.5), so half the buckets would shift by one on the port. 64 buckets
+  //       is deliberately the case that divides badly.
+  // A result at the very END of the window is what separates the two behaviours.
+  // Its offset is just under spanMs, so truncation gives bucket 63 — in range and
+  // drawn. Rounding gives 64, which is out of range and silently DROPPED by the
+  // handler's own `r.b < buckets` guard, leaving the last bucket empty on a chart
+  // that has data for it.
+  insResult.run(chkId, locId, now(), 1, JSON.stringify({ note: 'at the window edge' }));
+  const hist = await (await fetch(`${BASE}/api/synthetics/history?minutes=5&buckets=64`,
+    { headers: { cookie: sess.cookie } })).json();
+  chk('the uptime history answers for a fractional bucket width (5min / 64)',
+    hist && !hist.error, JSON.stringify(hist).slice(0, 160));
+  const mine = (hist.checks || []).find((c) => c.checkId === chkId);
+  chk('…and the check appears in it', !!mine, JSON.stringify(hist.checks || []).slice(0, 160));
+  chk('…and the LAST bucket holds the result at the window edge, not "na" '
+    + '(rounding would push it to index 64 and drop it)',
+    !!mine && mine.buckets[63] && mine.buckets[63].s !== 'na',
+    mine && JSON.stringify(mine.buckets[63]));
+
+  // ── 7. day buckets are UTC days — `strftime(…, 'unixepoch')` is UTC, and the
+  //       Postgres replacement renders in the SESSION TimeZone. A timestamp just
+  //       after midnight UTC must land on the NEW day, and one just before on the
+  //       old one; a session-timezone translation moves at least one of them.
+  // Deliberately three days back: TODAY already has log rows from the checks
+  // above, so asserting "today appears" would pass whatever the timezone does.
+  // A quiet day makes the two probe rows the only thing that can produce it.
+  const dayMs = 86400000;
+  const midnight = Math.floor((now() - 3 * dayMs) / dayMs) * dayMs;  // 00:00 UTC, 3 days ago
+  const before = midnight - 30 * 60000;                 // 23:30 UTC, 4 days ago
+  const after = midnight + 30 * 60000;                  // 00:30 UTC, 3 days ago
+  insLog.run(DEFAULT_ORG_ID, before, 'clock-probe', 'thirty minutes before midnight UTC');
+  insLog.run(DEFAULT_ORG_ID, after, 'clock-probe', 'thirty minutes after midnight UTC');
+
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const an = await (await fetch(`${BASE}/api/analytics?range=7d`,
+    { headers: { cookie: sess.cookie } })).json();
+  const days = new Set((an.volume || []).map((r) => r.d));
+  chk('a log 30 min BEFORE midnight UTC buckets on the previous UTC day',
+    days.has(iso(before)), `${iso(before)} not in ${[...days].join(',')}`);
+  chk('…and one 30 min AFTER midnight UTC buckets on the new UTC day',
+    days.has(iso(after)), `${iso(after)} not in ${[...days].join(',')}`);
+  chk('…so the two land on DIFFERENT days (the boundary is real, not rounded away)',
+    iso(before) !== iso(after), `${iso(before)} vs ${iso(after)}`);
+
   report();
 }
 
