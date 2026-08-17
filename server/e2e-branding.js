@@ -396,8 +396,12 @@ async function main() {
   chk('…including /status/<slug>', (await onHost(H, '/status/partners')).status !== 500);
   chk('a bare root on the status host goes to the default page',
     (await onHost(H, '/')).status === 302);
-  chk('an unknown slug on the status host does NOT swallow the app',
-    (await onHost(H, '/api/health')).status === 200);
+  // The status host serves status pages and nothing else. It fell through to the
+  // application at first, which put the admin console on a public status hostname —
+  // measured on the deployed host, /app answered 200 before this check existed.
+  chk('the status host does not serve the app', (await onHost(H, '/app/')).status === 404);
+  chk('…nor the API', (await onHost(H, '/api/health')).status === 404);
+  chk('…and the app host still does', (await raw('/api/health')).status === 200);
   chk('a private page still needs its secret on the status host',
     !(await onHost(H, '/partners')).text.includes('Systems Operational'));
   chk('the main page cannot be made private',

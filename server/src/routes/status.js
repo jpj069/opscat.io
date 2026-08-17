@@ -493,6 +493,17 @@ if (config.statusHost) {
     if (!page) return next();
     return res.redirect(302, `/${encodeURIComponent(page.slug)}`);
   });
+  // Everything else on this host is NOT a status page, and the status host serves
+  // status pages. Falling through was the first shape and it put the whole
+  // application on status.opscat.io/app — same code, same auth, and the session
+  // cookie is host-only so it was a login screen rather than a leak, but a public
+  // status hostname that also answers for the admin console is a surface nobody
+  // asked for and a support question waiting to happen. Verified on the deployed
+  // host before this existed: /app answered 200.
+  router.use((req, res, next) => {
+    if (!pages.onStatusHost(req)) return next();
+    res.status(404).type('text/plain').send('not found');
+  });
 }
 
 // ---- Caddy on-demand TLS ------------------------------------------------------
