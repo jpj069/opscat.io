@@ -207,6 +207,37 @@ const TOOLS = [
   },
 
   {
+    name: 'opscat_who_is_oncall',
+    title: 'Who is on call',
+    description: 'Who has the duty right now, per schedule — the first question of every handover, '
+      + 'and the one nobody could ask before. `user` is null when a schedule resolves to NOBODY, '
+      + 'which is a gap worth reporting, not an empty answer.',
+    scope: READ, role: 'analyst',
+    inputSchema: {},
+    outputSchema: {
+      at: z.number(),
+      schedules: z.array(z.object({
+        scheduleId: z.number(), name: z.string(), timezone: z.string(),
+        user: z.object({ id: z.string(), name: z.string(), email: z.string() }).nullable(),
+        via: z.string().nullable(),
+        configured: z.boolean(),
+      })),
+      gaps: z.array(z.string()),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: (a, p) => {
+      const at = now();
+      const rows = require('../engine/oncall').onCallNow(p.orgId, at).map((r) => ({
+        scheduleId: r.scheduleId, name: r.name, timezone: r.timezone,
+        user: r.user ? { id: r.user.id, name: r.user.name, email: r.user.email } : null,
+        via: r.via, configured: r.configured,
+      }));
+      // Named separately so an agent does not have to notice a null in a list.
+      const gaps = rows.filter((r) => r.configured && !r.user).map((r) => r.name);
+      return ok({ at, schedules: rows, gaps });
+    },
+  },
+  {
     name: 'opscat_list_checks',
     title: 'List synthetic checks',
     description: 'Synthetic monitoring checks with their latest result — the fastest read on "what is down".',

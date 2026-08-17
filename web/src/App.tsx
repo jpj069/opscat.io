@@ -1,7 +1,7 @@
 // App shell: login gate, sidebar, topbar, command palette, event slide-over.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
-import { useApp } from './state';
+import { useApp, type PageId } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, fmtHistory, initials, logSevColor } from './format';
 import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
@@ -13,6 +13,7 @@ import {
   BellRingIcon,
   BoxesIcon,
   Building2Icon,
+  CalendarClockIcon,
   ChartColumnIcon,
   CheckIcon,
   ChevronUpIcon,
@@ -56,6 +57,7 @@ import StatusPageAdmin from './pages/StatusPageAdmin';
 import Synthetics from './pages/Synthetics';
 import Reputation from './pages/Reputation';
 import Vendors from './pages/Vendors';
+import OnCall from './pages/OnCall';
 import LogsPage from './pages/LogsPage';
 import Rules from './pages/Rules';
 import Analytics from './pages/Analytics';
@@ -83,6 +85,7 @@ const NAV: { id: string; label: string; icon: LucideIcon; sub?: boolean }[] = [
   { id: 'vendors', label: 'Vendors', icon: Building2Icon },
   { id: 'logs', label: 'Logs', icon: ScrollTextIcon },
   { id: 'rules', label: 'Alert Rules', icon: BellRingIcon },
+  { id: 'oncall', label: 'On-Call', icon: CalendarClockIcon },
   { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon },
 ];
 const ADMIN_NAV: { id: string; label: string; icon: LucideIcon }[] = [
@@ -99,11 +102,13 @@ const PLATFORM_NAV: { id: string; label: string; icon: LucideIcon }[] = [
 // chunk, so the common bundle stays untouched for everyone who never opens it.
 const Bridge = React.lazy(() => import('./pages/Bridge'));
 
-const PAGES: Record<string, React.ElementType> = {
+// Typed against PAGE_IDS on purpose: a page that is not routable is a build
+// error here, not a nav item that quietly renders Monitor (see state.tsx).
+const PAGES: Record<PageId, React.ElementType> = {
   monitor: Monitor, classic: Classic, dashboard: Dashboard, assets: Assets, cases: Cases,
   incidents: Incidents, bridge: Bridge, statuspage: StatusPageAdmin, synthetics: Synthetics,
   reputation: Reputation, vendors: Vendors,
-  logs: LogsPage, rules: Rules, analytics: Analytics, users: Users, pipeline: Pipeline,
+  logs: LogsPage, rules: Rules, oncall: OnCall, analytics: Analytics, users: Users, pipeline: Pipeline,
   automation: Automation, settings: Settings, platform: SuperAdmin, components: ComponentLab,
 };
 
@@ -384,7 +389,7 @@ function Shell() {
   });
   const [edition, setEdition] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
-  const Page = PAGES[app.nav] || Monitor;
+  const Page = PAGES[app.nav as PageId] || Monitor;
 
   useEffect(() => {
     api.get<PlansResponse>('/api/plans').then((r) => setEdition(r.edition)).catch(() => {});

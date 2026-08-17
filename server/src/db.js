@@ -745,6 +745,65 @@ const MIGRATIONS = [
     db.prepare("DELETE FROM org_settings WHERE key = 'teams_webhook_url'").run();
     db.prepare("DELETE FROM settings WHERE key = 'teams_webhook_url'").run();
   },
+  // idx 22 -> version 23: On-Call slice 1 (docs/ONCALL-V1.md) — teams, schedules,
+  // layers, participants and overrides. Who has the duty, computable for any
+  // instant. The CREATE TABLE blocks mirror schema.sql exactly (fresh installs
+  // get them from there; this brings deployed databases forward).
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                      REFERENCES organizations(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        created_at    INTEGER NOT NULL,
+        UNIQUE (org_id, name)
+      );
+      CREATE TABLE IF NOT EXISTS team_members (
+        team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (team_id, user_id)
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS schedules (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                      REFERENCES organizations(id) ON DELETE CASCADE,
+        team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+        name          TEXT NOT NULL,
+        timezone      TEXT NOT NULL DEFAULT 'UTC',
+        gap_alerted_at INTEGER,
+        created_at    INTEGER NOT NULL,
+        UNIQUE (org_id, name)
+      );
+      CREATE TABLE IF NOT EXISTS schedule_layers (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id   INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL,
+        rotation      TEXT NOT NULL DEFAULT 'weekly'
+                      CHECK (rotation IN ('daily','weekly','custom')),
+        interval_d    INTEGER NOT NULL DEFAULT 1,
+        handoff_at    INTEGER NOT NULL,
+        restrict_json TEXT,
+        UNIQUE (schedule_id, position)
+      );
+      CREATE TABLE IF NOT EXISTS schedule_participants (
+        layer_id      INTEGER NOT NULL REFERENCES schedule_layers(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (layer_id, position)
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS schedule_overrides (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id   INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        starts_at     INTEGER NOT NULL,
+        ends_at       INTEGER NOT NULL,
+        created_by    TEXT REFERENCES users(id),
+        created_at    INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sched_ovr ON schedule_overrides(schedule_id, starts_at, ends_at);
+    `);
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

@@ -43,10 +43,16 @@ export const useApp = () => useContext(Ctx);
 // Every id in App.tsx's NAV must be listed here, or a reload / deep link on that
 // page silently drops the user back to Monitor (nav clicks still work, because
 // setNav pushes the URL itself — which is why this is easy to miss).
-const PAGES = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'bridge', 'statuspage',
-  'synthetics', 'reputation', 'vendors', 'logs', 'rules', 'analytics', 'users', 'pipeline',
-  'automation',
-  'settings', 'platform', 'components'];
+// The routable page ids. App.tsx types its id -> component map as
+// `Record<PageId, …>`, so adding a page there without adding it here is a BUILD
+// error rather than what it used to be: a nav item that renders, is clickable,
+// and silently falls back to Monitor on reload or a deep link.
+export const PAGE_IDS = ['monitor', 'classic', 'dashboard', 'assets', 'cases', 'incidents', 'bridge',
+  'statuspage', 'synthetics', 'reputation', 'vendors', 'logs', 'rules', 'oncall', 'analytics',
+  'users', 'pipeline', 'automation',
+  'settings', 'platform', 'components'] as const;
+export type PageId = typeof PAGE_IDS[number];
+const PAGES: readonly string[] = PAGE_IDS;
 
 function navFromPath(): string {
   const m = /^\/app\/?([a-z]*)/.exec(location.pathname);

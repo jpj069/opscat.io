@@ -909,3 +909,76 @@ CREATE TABLE IF NOT EXISTS bridge_feed (
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_feed ON bridge_feed(room_id, id);
+
+-- ---------------------------------------------------------------------------
+-- On-Call (docs/ONCALL-V1.md slice 1): who has the duty, computable for any
+-- instant. Escalation policies and alerts arrive in slice 2 — this half answers
+-- "who is on call right now" and nothing else.
+-- ---------------------------------------------------------------------------
+
+-- A team is a NAME and a MEMBER LIST. Deliberately flat: no roles, no nesting,
+-- no permissions — RBAC stays on the membership. Teams exist to be ADDRESSED
+-- (a schedule's owner, later an alert target), not to carry authorisation.
+-- Not to be confused with the `msteams` alert channel; see ONCALL-V1 §2.
+CREATE TABLE IF NOT EXISTS teams (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                REFERENCES organizations(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  UNIQUE (org_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (team_id, user_id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS schedules (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                REFERENCES organizations(id) ON DELETE CASCADE,
+  team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  name          TEXT NOT NULL,
+  timezone      TEXT NOT NULL DEFAULT 'UTC',   -- IANA name; the handoff is a LOCAL time
+  gap_alerted_at INTEGER,                      -- set when oncall_gap was raised, cleared on cover
+  created_at    INTEGER NOT NULL,
+  UNIQUE (org_id, name)
+);
+
+-- One or more layers; the HIGHEST position that yields somebody wins. A layer
+-- restricted to business hours over a 24/7 base layer is the ordinary shape,
+-- and it only works if a restricted layer yields NOBODY outside its window
+-- rather than its participant anyway.
+CREATE TABLE IF NOT EXISTS schedule_layers (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  schedule_id   INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  position      INTEGER NOT NULL,              -- 0 = base layer
+  rotation      TEXT NOT NULL DEFAULT 'weekly'
+                CHECK (rotation IN ('daily','weekly','custom')),
+  interval_d    INTEGER NOT NULL DEFAULT 1,    -- 'custom': shift length in days
+  handoff_at    INTEGER NOT NULL,              -- anchor instant; its LOCAL time-of-day is the handoff
+  restrict_json TEXT,                          -- {"days":[1..7],"from":"08:00","to":"18:00"}
+  UNIQUE (schedule_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS schedule_participants (
+  layer_id      INTEGER NOT NULL REFERENCES schedule_layers(id) ON DELETE CASCADE,
+  position      INTEGER NOT NULL,              -- rotation order
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (layer_id, position)
+) WITHOUT ROWID;
+
+-- "I'll take Friday" — beats every layer for its window. Overrides are how a
+-- human corrects the machine, so nothing may outrank them.
+CREATE TABLE IF NOT EXISTS schedule_overrides (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  schedule_id   INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  starts_at     INTEGER NOT NULL,
+  ends_at       INTEGER NOT NULL,
+  created_by    TEXT REFERENCES users(id),
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sched_ovr ON schedule_overrides(schedule_id, starts_at, ends_at);

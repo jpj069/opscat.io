@@ -2,9 +2,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state';
 import { api } from '../api';
-import { SEV, alpha, fmtDuration } from '../format';
-import { Card, Avatar, KpiCard, StackedArea, LineChart, HBars, Skeleton, BarsSkeleton, PageHeader } from '../ui';
-import type { DashboardData, AnalyticsData } from '../types';
+import { SEV, alpha, fmtDuration, initials } from '../format';
+import { Card, Avatar, KpiCard, StackedArea, LineChart, HBars, Skeleton, BarsSkeleton, PageHeader, StatusPill, ListSkeleton } from '../ui';
+import type { DashboardData, AnalyticsData, OnCallNowRow } from '../types';
 
 const BANDS: Record<'critical' | 'high' | 'medium' | 'low', [number, number]> = {
   critical: [80, 101], high: [60, 80], medium: [40, 60], low: [20, 40],
@@ -17,10 +17,13 @@ export default function Dashboard() {
   const app = useApp();
   const [dash, setDash] = useState<DashboardData | null>(null);
   const [ana, setAna] = useState<AnalyticsData | null>(null);
+  const [onCall, setOnCall] = useState<OnCallNowRow[] | null>(null);
 
   useEffect(() => {
     api.get<DashboardData>('/api/dashboard').then(setDash).catch(() => {});
     api.get<AnalyticsData>('/api/analytics?range=7d').then(setAna).catch(() => {});
+    api.get<{ schedules: OnCallNowRow[] }>('/api/oncall/now')
+      .then((r) => setOnCall(r.schedules)).catch(() => setOnCall([]));
   }, []);
 
   // Live severity bands derived from the streaming events.
@@ -48,6 +51,30 @@ export default function Dashboard() {
         <KpiCard label="AVG MTTR 7D" value={dash && fmtDuration(dash.mttrMs)} color={SEV.green} spark={mttrPoints} />
         <KpiCard label="LOGS 24H" value={dash && String(dash.logs24)} color={SEV.low} />
       </div>
+
+      {/* Who has the duty — the first question of every handover. Hidden until a
+          schedule exists, so an org that has not set up On-Call sees no empty box. */}
+      {onCall === null ? <ListSkeleton rows={1} /> : onCall.length > 0 && (
+        <Card>
+          <div className="card-title">On call now</div>
+          <div className="row row-wrap" style={{ gap: 18 }}>
+            {onCall.map((r) => (
+              <span key={r.scheduleId} className="row" style={{ gap: 8, minWidth: 0 }}>
+                <span className="micro text-2xs text-text3">{r.name}</span>
+                {r.user ? (
+                  <span className="row" style={{ gap: 6 }}>
+                    <Avatar i={initials(r.user.name)} c={r.user.color} size={22} />
+                    <span className="text-sm text-text1">{r.user.name}</span>
+                  </span>
+                ) : (
+                  <StatusPill text={r.configured ? 'Nobody' : 'Not set up'}
+                    color={r.configured ? SEV.critical : SEV.info} />
+                )}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Severity Impact Map */}
       <Card>

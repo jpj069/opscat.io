@@ -425,3 +425,36 @@ export interface BridgeState {
   livekit?: { url: string; room: string };
   stt?: boolean; // a voice provider is configured (org or platform)
 }
+
+// --- On-Call (docs/ONCALL-V1.md slice 1) ------------------------------------
+export interface TeamMember { id: string; name: string; email: string; color: string }
+export interface OnCallTeam { id: number; name: string; createdAt: number; members: TeamMember[] }
+export interface OnCallLayer {
+  id: number; position: number; rotation: 'daily' | 'weekly' | 'custom';
+  intervalD: number; handoffAt: number;
+  restrict: { days: number[]; from: string | null; to: string | null } | null;
+  participants: TeamMember[];
+}
+export interface OnCallOverride {
+  id: number; startsAt: number; endsAt: number; user: TeamMember;
+}
+export interface OnCallSchedule {
+  id: number; name: string; timezone: string; teamId: number | null; createdAt: number;
+  onCall: TeamMember | null;
+  /** 'override' | 'layer:<position>' | null */
+  via: string | null;
+  gapSince: number | null;
+  layers: OnCallLayer[];
+  overrides: OnCallOverride[];
+}
+export interface ShiftSlice {
+  startsAt: number; endsAt: number; userId: string | null;
+  user: TeamMember | null; via: string | null;
+}
+/** GET /api/oncall/now — one row per schedule, resolved for the same instant. */
+export interface OnCallNowRow {
+  scheduleId: number; name: string; timezone: string; teamId: number | null;
+  user: TeamMember | null; via: string | null;
+  /** false = nobody has configured it yet, which is not the same as a gap */
+  configured: boolean;
+}

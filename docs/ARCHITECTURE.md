@@ -62,12 +62,35 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    `audit_log` (`automation_run`, system actor) so automated decisions stay auditable.
    The v2 rework — trigger/condition graph, incident contract, durable timers — is
    specified in `docs/AUTOMATION-V1.md`, the counterpart to `docs/INCIDENTS-V2.md`.
-7. **On-call & paging** (`docs/ONCALL-V1.md`, not built yet) sits on the other side
-   of that boundary: schedules and rotations, escalation policies, pages with an
-   acknowledgement deadline. It is native rather than flow-driven because paging is
-   load-bearing — an escalation chain that only exists if somebody drew it is a
-   configuration, not a guarantee. Flows raise a page and react to its outcome; they
-   never contain the ladder.
+7. **On-Call** (`engine/oncall.js`, `routes/oncall.js`, page `OnCall.tsx`) sits on the
+   other side of that boundary — see `docs/ONCALL-V1.md`. Slice 1 is built: teams,
+   schedules with rotation layers and overrides, and the resolution function that
+   answers "who has the duty" for any instant. Escalation policies and alerts (the
+   chain with an acknowledgement deadline) are slice 2. It is native rather than
+   flow-driven because alerting a human is load-bearing — a chain that exists only
+   because somebody drew it is a configuration, not a guarantee. Flows will raise an
+   alert and react to its outcome; they never contain the ladder.
+
+   Three properties are worth knowing before touching it:
+
+   - **Rotations are computed, never materialised.** Generating shift rows forward
+     would run forever, need regenerating on every roster edit, and would disagree
+     with the formula the moment one generation was missed. Only overrides are stored.
+   - **The period is counted in the schedule's timezone.** A weekly handoff at 09:00
+     Europe/Berlin stays 09:00 local across a DST change; fixed millisecond periods
+     from a UTC anchor move it by an hour twice a year, into the middle of a shift.
+     `engine/oncall.js` counts whole LOCAL calendar days and compares local wall time.
+     `e2e-oncall.js` pins that with a CET anchor and a CEST handoff, because an
+     autumn date would let the naive implementation pass.
+   - **A gap is an event.** A schedule that resolves to nobody raises `oncall_gap`
+     (severity 70), once per episode, re-armed when covered — a swallowed alert looks
+     exactly like a quiet night otherwise. A schedule with no participants at all
+     raises nothing: half-built is not broken.
+
+   The timeline endpoint SAMPLES the resolver every 30 minutes and coalesces, rather
+   than solving for boundaries: rotation period, layer restrictions and overrides
+   interact, and a closed-form walk would be a second implementation that can
+   disagree with the first.
 
 **Scout** (`engine/scout.js`, Pipeline → Scout tab) mines rule suggestions from
 lines no classifier matched: variable parts are masked (`<IP>`, `<NUM>`, …),

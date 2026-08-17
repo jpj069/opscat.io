@@ -80,6 +80,7 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/synthetics', require('./routes/synthetics'));
 app.use('/api/reputation', require('./routes/reputation'));
 app.use('/api/vendors', require('./routes/vendors'));
+app.use('/api/oncall', require('./routes/oncall'));
 app.use('/api', require('./routes/ops'));
 
 // --- static: marketing site at /, app SPA at /app ---
@@ -135,6 +136,7 @@ require('./engine/vendors').start();
 require('./engine/reports').start();
 require('./engine/retention').start();
 require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
+require('./engine/oncall').start();        // on-call gap watch (docs/ONCALL-V1.md)
 require('./engine/bridge-insights').start(); // Bridge AI analyzer (docs/BRIDGE.md phase 3)
 
 app.listen(config.port, () => {
