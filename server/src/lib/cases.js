@@ -32,8 +32,13 @@ const q = {
   openForEvent: db.prepare("SELECT * FROM cases WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
   latestForEvent: db.prepare('SELECT * FROM cases WHERE event_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1'),
   close: db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE id = ? AND status != 'closed'"),
+  // The newline is BOUND, not spelled: SQLite has `char(10)`, Postgres has
+  // `chr(10)`, and neither is needed — a parameter is portable by construction.
+  // The append must stay in SQL: this is the repo's only concurrency-safe note
+  // append, and read-modify-write in JS would lose whatever another writer added
+  // in between. Bound args: (closed_at, '\n', note, id).
   closeWithNote: db.prepare(`UPDATE cases SET status = 'closed', closed_at = ?,
-    note = COALESCE(note || char(10), '') || ? WHERE id = ? AND status != 'closed'`),
+    note = COALESCE(note || ?, '') || ? WHERE id = ? AND status != 'closed'`),
   note: db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
   assign: db.prepare(`UPDATE cases SET assigned_user_id = ?,
     status = CASE WHEN status = 'open' THEN 'assigned' ELSE status END
@@ -66,7 +71,7 @@ function byId(orgId, id) { return q.byId.get(id, orgId) || null; }
  */
 function close(orgId, caseId, { note = null, at = now() } = {}) {
   const changed = note
-    ? q.closeWithNote.run(at, note, caseId).changes
+    ? q.closeWithNote.run(at, '\n', note, caseId).changes
     : q.close.run(at, caseId).changes;
   if (!changed) return false;
   afterClose(orgId, caseId);

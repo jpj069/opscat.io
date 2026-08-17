@@ -578,7 +578,15 @@ router.get('/assets', (req, res) => {
       status: !s.enabled ? 'disabled' : s.last_status === 'ok' ? 'ok' : (s.last_status || 'pending'),
       lastSeen: s.last_seen_at || null });
   }
-  const lastResult = db.prepare('SELECT ok, meta, MAX(ts) AS ts FROM synthetic_results WHERE check_id = ?');
+  // `SELECT ok, meta, MAX(ts)` with no GROUP BY: SQLite has a documented extension
+  // that picks ok/meta FROM the max-ts row, Postgres rejects the statement outright.
+  // ORDER BY + LIMIT 1 says the same thing in both, and adds the tie-break SQLite
+  // never had — `ts` is millisecond-resolution, so two results in the same
+  // millisecond were previously resolved arbitrarily.
+  // No-rows behaves identically: this returns undefined where the aggregate
+  // returned an all-NULL row, and both callers already test `!last || last.ts == null`.
+  const lastResult = db.prepare(`SELECT ok, meta, ts FROM synthetic_results
+    WHERE check_id = ? ORDER BY ts DESC, id DESC LIMIT 1`);
   const everyLabel = (s) => (s >= 3600 && s % 3600 === 0 ? `every ${s / 3600}h`
     : s >= 3600 ? `every ${(s / 3600).toFixed(1)}h`
       : s >= 60 ? `every ${Math.round(s / 60)}m` : `every ${s}s`);

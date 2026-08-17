@@ -107,8 +107,13 @@ const findActiveEvent = db.prepare(
 const insEvent = db.prepare(`INSERT INTO events
   (org_id, dedupe_key, name, device, ip, target, description, severity, hits, first_seen, last_seen)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`);
+// `MAX(severity, ?)` was SQLite's TWO-ARGUMENT scalar max. Postgres has no such
+// function — `MAX` there is an aggregate, so this is a hard parse error, on the
+// hottest write path in the product. CASE is the portable spelling and compiles
+// to the same thing; it costs a second bind of the same value.
 const bumpEvent = db.prepare(`UPDATE events SET hits = hits + 1, last_seen = ?,
-  severity = MAX(severity, ?), description = ? WHERE id = ?`);
+  severity = CASE WHEN ? > severity THEN ? ELSE severity END,
+  description = ? WHERE id = ?`);
 const bumpBucket = db.prepare(`INSERT INTO event_buckets (event_id, bucket, count) VALUES (?, ?, 1)
   ON CONFLICT(event_id, bucket) DO UPDATE SET count = count + 1`);
 const insCase = db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
@@ -174,7 +179,7 @@ function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
       const desc = (cls.target ? `${cls.name} ${cls.target}` : line).slice(0, 300);
       let ev = findActiveEvent.get(orgId, dedupe);
       if (ev) {
-        bumpEvent.run(ts, cls.severity, desc, ev.id);
+        bumpEvent.run(ts, cls.severity, cls.severity, desc, ev.id);
         ev = { ...ev, hits: ev.hits + 1, last_seen: ts, severity: Math.max(ev.severity, cls.severity) };
       } else {
         const info = insEvent.run(orgId, dedupe, cls.name, device, ip, cls.target, desc, cls.severity, ts, ts);
@@ -220,7 +225,7 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
   db.transaction(() => {
     ev = findActiveEvent.get(orgId, dedupe);
     if (ev) {
-      bumpEvent.run(t, sev, (description || '').slice(0, 300) || ev.description, ev.id);
+      bumpEvent.run(t, sev, sev, (description || '').slice(0, 300) || ev.description, ev.id);
       ev = { ...ev, hits: ev.hits + 1, last_seen: t, severity: Math.max(ev.severity, sev) };
     } else {
       const info = insEvent.run(orgId, dedupe, name, device, ip || null, target || null,
