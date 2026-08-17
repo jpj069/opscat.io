@@ -1,0 +1,65 @@
+# Build-context exclusions. There was no such file, which had two consequences.
+#
+# 1. **The harnesses shipped in the production image.** `COPY server/ ./server/`
+#    takes `e2e-*.js` and `run-e2e.js` with it. They are dev tooling: they boot a
+#    second app instance on a fixed port, mint API keys and OAuth clients, and
+#    write to a database. Nothing in production needs them and nothing in
+#    production should be able to run them.
+#
+# 2. **The host's `node_modules` was uploaded and then discarded.** Both images
+#    `COPY server/ ./server/` and immediately overwrite it with
+#    `COPY --from=serverdeps …/node_modules`. Hundreds of MB of build context for
+#    nothing — and the host's `better-sqlite3` is compiled for the DEVELOPER'S
+#    platform, so if that overwrite order is ever changed, a macOS or glibc binary
+#    lands in an Alpine image and fails at runtime rather than at build time.
+#
+# ── What must NOT be excluded, and why it is easy to get wrong ────────────────
+#
+# `web/scripts/` stays. Stage 1 runs `npm run build`, which runs `check:ui` from
+# there (loading states, table grids, charts). Excluding it breaks the image
+# build — I did exactly that on the first attempt at this file, which is why the
+# `image` job in ci.yml exists and why this version is gated by it rather than
+# discovered on the production host mid-deploy.
+#
+# Everything the two Dockerfiles actually consume: web/ (whole tree, built in
+# stage 1), server/ (minus the harnesses), marketing/ (cloud only), agent/, and
+# both package-lock.json files for `npm ci`.
+#
+# Note `unbound` builds from its own context (`build: ./unbound`), so none of
+# this applies to it.
+
+.git
+.github
+.gitignore
+
+# uploaded, then overwritten by the serverdeps stage — pure waste, and a
+# cross-platform native binary waiting to be copied into the wrong image
+node_modules
+**/node_modules
+
+# dev-only tooling: never part of a running instance
+server/e2e-*.js
+server/run-e2e.js
+scripts/
+
+# built inside stage 1; a stale local copy must never shadow it
+web/dist
+
+# not consumed by any Dockerfile. Named explicitly rather than as `*.md`: that
+# glob is root-only under Docker's matcher (patterns do not cross `/`) but NOT
+# under several tools that read this file, and `agent/README.md` ships with the
+# host-agent files served at /agent. Three names cost nothing; relying on a
+# subtle matcher rule to protect a fourth file costs a debugging session.
+docs/
+CLAUDE.md
+README.md
+CONTRIBUTING.md
+
+# never in an image. .gitignore already keeps them out of the repo, but the
+# build context is the working tree, not the index — an uncommitted .env would
+# otherwise be uploaded.
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
