@@ -443,7 +443,14 @@ router.patch('/status-pages/:id', canEditPages, (req, res) => {
     if (!isStr(String(b.name).trim(), 80)) return httpError(res, 400, 'name required');
     put('name', String(b.name).trim());
   }
-  if (b.slug !== undefined && !page.is_default) {
+  // The default page's slug used to be frozen: it was seeded from the ORG's slug so
+  // that `/status/<org-slug>` kept resolving across migration v18, and nothing else
+  // showed it. A dedicated status host made it public — `status.example.com/default`
+  // is the org's main page wearing the seed value — so it is editable like any
+  // other. `/status` still resolves the default page whatever its slug, which is
+  // the URL that matters; the old `/status/<old-slug>` stops resolving, and the UI
+  // says so before the rename.
+  if (b.slug !== undefined) {
     const slug = String(b.slug).trim().toLowerCase();
     if (!SLUG_RE.test(slug)) return httpError(res, 400, 'slug must be 2-41 chars of a-z, 0-9 and -');
     if (RESERVED_SLUGS.includes(slug)) return httpError(res, 400, `"${slug}" is reserved`);

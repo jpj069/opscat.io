@@ -373,11 +373,26 @@ async function main() {
   chk('the answer names the slug it is about, so a late reply can be discarded',
     (await slugCheck('brand-new')).slug === 'brand-new');
 
+  const H = 'status.e2e.test';
+
+  // ── the default page's slug is editable ───────────────────────────────────
+  // It was frozen when it was invisible (seeded from the org slug, only ever
+  // reached via /status). The status host puts it in the public URL, so an org
+  // stuck at its seed value would be stuck at a name it never chose.
+  const beforeSlug = reload(MAIN).slug;
+  chk('the default page can be renamed', (await patchPage(admin, MAIN, { slug: 'main-page' })).status === 200);
+  chk('…and answers on the new slug', (await onHost(H, '/main-page')).status === 200);
+  chk('…while /status keeps resolving it, whatever the slug', (await raw('/status')).status === 200);
+  chk('…and the OLD slug no longer does', (await onHost(H, `/${beforeSlug}`)).status === 404);
+  chk('a rename still refuses a reserved slug',
+    (await patchPage(admin, MAIN, { slug: 'api' })).status === 400);
+  chk('…and a slug another page holds', (await patchPage(admin, MAIN, { slug: 'partners' })).status === 409);
+  chk('renaming back works', (await patchPage(admin, MAIN, { slug: beforeSlug })).status === 200);
+
   // ── the dedicated status host (OPSCAT_STATUS_HOST) ────────────────────────
   // Configured at the top of this file, so every URL the admin API prints is the
   // status-host shape. The /status paths must keep working regardless: a status
   // page URL ends up in runbooks, and a nicer name is not worth breaking one.
-  const H = 'status.e2e.test';
   const pageUrl = (id, l) => l.pages.find((x) => x.id === id).url;
   const listH = (await call(admin, 'GET', '/api/admin/status-pages')).j;
   chk('the admin API prints the status-host URL',
