@@ -151,8 +151,8 @@ router.post('/locations/:id/book', sec.requireRole('lead'), (req, res) => {
     return httpError(res, 402, 'premium location — available on the Enterprise plan');
   }
   if (!withinPlan(req, res, 'managedLocations')) return undefined;
-  db.prepare(`INSERT OR IGNORE INTO org_location_access (org_id, location_id, source, created_at)
-    VALUES (?, ?, 'plan', ?)`).run(req.orgId, l.id, now());
+  db.prepare(`INSERT INTO org_location_access (org_id, location_id, source, created_at)
+    VALUES (?, ?, 'plan', ?) ON CONFLICT DO NOTHING`).run(req.orgId, l.id, now());
   sec.audit(req.user.id, 'managed_location_book', l.city, req.orgId);
   res.json({ ok: true });
 });
@@ -242,7 +242,7 @@ function cleanAssertions(a) {
 function setCheckLocations(req, checkId, locationIds) {
   if (!Array.isArray(locationIds)) return;
   db.prepare('DELETE FROM check_locations WHERE check_id = ?').run(checkId);
-  const ins = db.prepare('INSERT OR IGNORE INTO check_locations (check_id, location_id) VALUES (?, ?)');
+  const ins = db.prepare('INSERT INTO check_locations (check_id, location_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
   for (const raw of locationIds.slice(0, 200)) {
     const id = clampInt(raw, 1, 1e9, 0);
     if (id && accessibleLocation(req, id)) ins.run(checkId, id);

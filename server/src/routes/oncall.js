@@ -50,7 +50,7 @@ router.get('/teams', (req, res) => res.json(qTeams.all(req.orgId).map(teamView))
 // and a member list, so there is nothing to patch member-by-member.
 function writeMembers(teamId, orgId, members) {
   db.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
-  const ins = db.prepare('INSERT OR IGNORE INTO team_members (team_id, user_id) VALUES (?, ?)');
+  const ins = db.prepare('INSERT INTO team_members (team_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
   for (const uid of members) if (isMember(uid, orgId)) ins.run(teamId, uid);
 }
 
@@ -319,7 +319,7 @@ function cleanSteps(orgId, raw) {
 function writeSteps(policyId, steps) {
   db.prepare('DELETE FROM escalation_steps WHERE policy_id = ?').run(policyId);
   const insS = db.prepare('INSERT INTO escalation_steps (policy_id, position, timeout_m) VALUES (?, ?, ?)');
-  const insT = db.prepare('INSERT OR IGNORE INTO escalation_targets (step_id, kind, ref_id) VALUES (?, ?, ?)');
+  const insT = db.prepare('INSERT INTO escalation_targets (step_id, kind, ref_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING');
   for (const s of steps) {
     const sid = insS.run(policyId, s.position, s.timeoutM).lastInsertRowid;
     for (const t of s.targets) insT.run(sid, t.kind, t.refId);

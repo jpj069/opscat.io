@@ -100,10 +100,18 @@ function translateTable(st, uuids) {
       return c.replace(/INTEGER\s+PRIMARY KEY/i, 'bigint PRIMARY KEY');
     }
 
-    // uuid columns: the table's own TEXT primary key, or a reference to one
+    // uuid columns. Three ways to be one, and the last two are not decoration:
+    // the plan counts THIRTEEN tenant tables whose org_id carries no foreign key
+    // at all, and the sweep caught them as `operator does not exist: text = uuid`
+    // the moment a query joined one against organizations.id.
     const refs = /REFERENCES\s+([A-Za-z0-9_]+)/i.exec(c);
     const isUuid = (/^\s*id\s+TEXT\s+PRIMARY KEY/i.test(c) && uuids.has(name))
-      || (refs && uuids.has(refs[1]) && /\bTEXT\b/i.test(c));
+      // an explicit reference to a uuid-keyed table
+      || (refs && uuids.has(refs[1]) && /\bTEXT\b/i.test(c))
+      // DEFAULT '00000000-…' — the literal DEFAULT_ORG_ID, so it holds an org id
+      || (/\bTEXT\b/i.test(c) && /DEFAULT\s+'[0-9a-f]{8}-[0-9a-f]{4}-/i.test(c))
+      // …_org_id / …_user_id by name: FK-less but unambiguously an identity key
+      || (/\bTEXT\b/i.test(c) && /^(org_id|user_id|active_org_id|[a-z0-9_]*_(?:org|user)_id)\b/i.test(c));
     if (isUuid) c = c.replace(/\bTEXT\b/i, 'uuid');
 
     return c

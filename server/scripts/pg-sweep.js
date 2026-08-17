@@ -39,7 +39,11 @@ const path = require('path');
 const Database = require('better-sqlite3');
 
 const URL = process.argv[2] || process.env.DATABASE_URL;
-if (!URL) { console.error('usage: node scripts/pg-sweep.js <postgres-url>'); process.exit(2); }
+if (!URL) { console.error('usage: node scripts/pg-sweep.js <postgres-url> [--corpus file]'); process.exit(2); }
+const CORPUS = (() => {
+  const i = process.argv.indexOf('--corpus');
+  return i > 0 ? process.argv[i + 1] : null;
+})();
 
 // ── 1. collect every statement the app prepares at load time ────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-sweep-'));
@@ -80,6 +84,21 @@ require(path.join(SRC, 'db.js'));   // schema + migrations first
 walk(SRC);
 Database.prototype.prepare = origPrepare;
 
+// Statements the harnesses caused the app to prepare inside request handlers,
+// recorded by scripts/sql-record.js. Module-load collection cannot see these —
+// they do not exist until a request runs, and several are interpolated, so a
+// grep would collect a template rather than the SQL that reaches the database.
+let fromCorpus = 0;
+if (CORPUS && fs.existsSync(CORPUS)) {
+  for (const line of fs.readFileSync(CORPUS, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line);
+      if (typeof r.sql === 'string' && !seen.has(r.sql)) { seen.set(r.sql, r.where || '(recorded)'); fromCorpus++; }
+    } catch { /* a truncated last line from a killed process is not a failure */ }
+  }
+}
+
 // ── 2. PREPARE each one against Postgres ────────────────────────────────────
 // `?` → `$n` is the adapter's job (plan claim 2); done here the same way so the
 // sweep tests the statements the adapter will actually send.
@@ -110,7 +129,16 @@ function toDollar(sql) {
 (async () => {
   const { Client } = require('pg');
   const client = new Client({ connectionString: URL });
-  await client.connect();
+  // Fail loudly. Requiring the whole app starts its engines, so their timers keep
+  // the process alive — a rejected connection would otherwise surface as an
+  // unhandledRejection and then a HANG, which in CI reads as a slow job rather
+  // than a missing database. Cost me a debugging round.
+  try {
+    await client.connect();
+  } catch (e) {
+    console.error(`cannot reach PostgreSQL at the given URL: ${e.message}`);
+    process.exit(2);
+  }
 
   // Two categories are SQLite-only BY DESIGN and are not findings:
   //   • PRAGMA / sqlite_master — introspection with no Postgres equivalent, used
@@ -123,12 +151,29 @@ function toDollar(sql) {
     || /\bsqlite_master\b/i.test(sql)
     || /\b_org_map\b|\b_user_map\b/.test(sql);   // migration scratch tables
 
+  // DEFERRED, not ignored. `strftime` has no Postgres equivalent and its
+  // replacement `to_timestamp()` renders in the SESSION TimeZone — translating it
+  // is Phase 5 work with a real decision attached (the UTC pin), not a rename.
+  // Listing them keeps the sweep GREEN and therefore READ; a permanently red
+  // check is a check nobody looks at. Every deferral prints on every run, so the
+  // list cannot quietly grow.
+  const DEFERRED = [
+    { match: /\bstrftime\s*\(/i,
+      why: 'strftime → to_timestamp(...) AT TIME ZONE \'UTC\' (Phase 5; the timezone pin is the decision, and e2e-pipeline already fails if a day bucket shifts)' },
+  ];
+
   const fails = [];
   const skipped = [];
+  const deferred = [];
   let i = 0;
   for (const [sql, where] of seen) {
     if (sqliteOnly(sql) || /^src\/db\.js:/.test(where)) { skipped.push(sql); continue; }
+    // statements prepared by the harnesses themselves are not app code
+    if (!/^src\//.test(where)) { skipped.push(sql); continue; }
+    const d = DEFERRED.find((x) => x.match.test(sql));
+    if (d) { deferred.push({ where, why: d.why }); continue; }
     const name = `s${i++}`;
+    if (process.env.SWEEP_TRACE) console.error('  [' + i + '] ' + where + ' :: ' + sql.replace(/\s+/g,' ').slice(0,90));
     try {
       await client.query(`PREPARE ${name} AS ${toDollar(sql)}`);
       await client.query(`DEALLOCATE ${name}`);
@@ -138,9 +183,14 @@ function toDollar(sql) {
   }
   await client.end();
 
-  console.log(`collected ${seen.size} statements at module load`);
+  console.log(`collected ${seen.size} statements`
+    + (CORPUS ? ` (${seen.size - fromCorpus} at module load, ${fromCorpus} more from the harness corpus)` : ' at module load'));
   console.log(`  ${skipped.length} SQLite-only by design (PRAGMA / sqlite_master / migrations) — not swept`);
   console.log(`  ${seen.size - skipped.length} swept against PostgreSQL`);
+  if (deferred.length) {
+    console.log(`\n${deferred.length} deferred to a later phase, on purpose:`);
+    for (const d of deferred) console.log(`  ${d.where}\n    ${d.why}`);
+  }
   if (fails.length) {
     console.log(`\n${fails.length} would not PREPARE against PostgreSQL:\n`);
     const byFile = new Map();

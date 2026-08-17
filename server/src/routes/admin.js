@@ -426,7 +426,7 @@ router.post('/status-pages', canEditPages, (req, res) => {
 function setPageComponents(page, ids) {
   if (!Array.isArray(ids)) return;
   db.prepare('DELETE FROM status_page_components WHERE page_id = ?').run(page.id);
-  const ins = db.prepare('INSERT OR IGNORE INTO status_page_components (page_id, component_id) VALUES (?, ?)');
+  const ins = db.prepare('INSERT INTO status_page_components (page_id, component_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
   const owned = db.prepare('SELECT id FROM components WHERE org_id = ?').all(page.org_id).map((c) => c.id);
   for (const id of ids) if (owned.includes(Number(id))) ins.run(page.id, Number(id));
 }
