@@ -103,6 +103,70 @@ async function sendPushover(appToken, userKey, title, text, severity) {
   if (!resp.ok) throw new Error(`pushover ${resp.status}: ${(await resp.text()).slice(0, 100)}`);
 }
 
+/**
+ * Send ONE message to ONE address on ONE channel.
+ *
+ * The alert chain (engine/alert-chain.js) delivers to a person's contact
+ * methods, which are the same eight channels a rule can name — so it calls
+ * this rather than growing a second copy of the transports. One implementation
+ * means the SSRF guard, the ntfy header sanitising and the Discord length cap
+ * cannot be right in one place and missing in the other.
+ *
+ * The three LOUD channels are here too, and they are the only ones that need
+ * more than an address:
+ *
+ *  - `sms` and `voice` go through the provider adapter (`lib/telephony.js`),
+ *    which is what keeps a vendor out of this file. A call is handed the
+ *    acknowledgement TOKEN rather than a message, because a call that cannot be
+ *    answered with a keypress is a robocall.
+ *  - `push` carries a JSON subscription rather than an address, and reports its
+ *    own cost as zero — it is the one loud channel that is free.
+ *
+ * The return value is `{ costMicros }` when the channel is metered, so the
+ * caller can log what the night cost.
+ */
+async function sendVia(kind, address, { title, text, severity = 0, orgId = DEFAULT_ORG_ID,
+  token = null, methodId = null } = {}) {
+  if (kind === 'sms') {
+    const r = await require('../lib/telephony').sendSms(orgId, address, text);
+    return { costMicros: r.costMicros ?? null };
+  }
+  if (kind === 'voice') {
+    if (!token) throw new Error('a voice call needs an acknowledgement token');
+    const r = await require('../lib/telephony').placeCall(orgId, address, { token, text });
+    return { costMicros: r.costMicros ?? null };
+  }
+  if (kind === 'push') {
+    let sub = null;
+    try { sub = JSON.parse(address); } catch { /* handled below */ }
+    const wp = require('../lib/webpush');
+    if (!wp.isSubscription(sub)) throw new Error('push subscription is unreadable');
+    await wp.send(sub, { title, body: text.split('\n')[0], url: `${config.baseUrl}/app/oncall/alerts` }, methodId);
+    return { costMicros: 0 };
+  }
+  if (kind === 'email') {
+    const html = `<h2 style="font-family:sans-serif">${title}</h2>
+<pre style="font-family:monospace;background:#f4f4f4;padding:12px;border-radius:6px">${text
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`;
+    await sendEmail([address], title, html, orgId);
+    return { costMicros: null };
+  }
+  if (kind === 'ntfy') { await sendNtfy(address, title, text, severity); return { costMicros: null }; }
+  if (kind === 'telegram') {
+    const botToken = getOrgSetting(orgId, 'telegram_bot_token');
+    if (!botToken) throw new Error('telegram_bot_token not configured (Settings → Notifications)');
+    await sendTelegram(botToken, address, title, text);
+    return { costMicros: null };
+  }
+  if (kind === 'pushover') {
+    const appToken = getOrgSetting(orgId, 'pushover_token');
+    if (!appToken) throw new Error('pushover_token not configured (Settings → Notifications)');
+    await sendPushover(appToken, address, title, text, severity);
+    return { costMicros: null };
+  }
+  throw new Error(`channel "${kind}" is not available yet`);
+}
+
 async function dispatch(rule, ev) {
   const orgId = rule.org_id || 1;
   const sevLabel = severityLabel(ev.severity);
@@ -159,6 +223,30 @@ async function dispatch(rule, ev) {
 const getActiveWindow = db.prepare(`SELECT name FROM maintenance_windows
   WHERE org_id = ? AND starts_at <= ? AND ends_at >= ? ORDER BY id LIMIT 1`);
 
+// The chain's own signals. A rule that raised an alert ON one of these would
+// build a perpetual motion machine: exhausted → event → alert → exhausted. The
+// refusal is recorded rather than silent, because a rule that quietly never
+// fires is indistinguishable from a quiet night.
+const SELF_EVENTS = ['alert_exhausted', 'alert_undeliverable', 'oncall_gap'];
+
+function raiseFromRule(rule, ev, orgId) {
+  const log = (err) => insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, 'alert', 0, err);
+  if (SELF_EVENTS.includes(ev.name)) {
+    return log(`refused: "${ev.name}" is raised BY the alert chain — a policy rule on it would escalate itself`);
+  }
+  // The OPEN case, not the latest one: an alert about a case somebody already
+  // closed is the failure this whole slice is built to avoid.
+  const c = require('../lib/cases').openForEvent(orgId, ev.id);
+  if (!c) {
+    return log('no open case for this event — cases open at severity 60+, and an alert needs a subject');
+  }
+  const r = require('./alert-chain').raise(orgId, {
+    subjectKind: 'case', subjectId: c.id, policyId: rule.policy_id,
+    source: `rule:${rule.id}`, severity: ev.severity,
+  });
+  if (r && r.error) log(`alert not raised: ${r.error}`);
+}
+
 function onEvent(ev) {
   const t = now();
   const orgId = ev.org_id || 1;
@@ -178,6 +266,11 @@ function onEvent(ev) {
         `suppressed: maintenance window "${win.name}"`);
       continue;
     }
+    // A rule with a policy target raises an ALERT instead of notifying a
+    // channel: the ladder, the ack and the escalation, with no flow involved.
+    // That is what makes on-call work in the community edition out of the box
+    // (docs/ONCALL-V1.md §8) — one column on the rule, not a second engine.
+    if (rule.target_type === 'policy') { raiseFromRule(rule, ev, orgId); continue; }
     dispatch(rule, ev)
       .then((caseLabel) => insNotif.run(orgId, now(), rule.id, rule.name, ev.id, caseLabel, rule.channel, 1, null))
       .catch((err) => {
@@ -189,4 +282,4 @@ function onEvent(ev) {
 
 function start() { pipeline.on('event', onEvent); }
 
-module.exports = { start, dispatch, sendEmail, severityLabel };
+module.exports = { start, dispatch, sendVia, sendEmail, severityLabel, SELF_EVENTS };

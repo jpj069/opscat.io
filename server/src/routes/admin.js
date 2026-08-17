@@ -952,6 +952,48 @@ router.post('/ai/test', sec.requireRole('admin'), async (req, res) => {
   }
 });
 
+// ---- Telephony (admin) — the SMS/voice provider for On-Call --------------
+// docs/ONCALL-V1.md §13.2: an adapter with several implementations and
+// bring-your-own credentials, never one vendor wired in. The secret is stored
+// encrypted and never returned; GET reports `hasSecret`, the same contract the
+// AI and STT endpoints use.
+const telephony = require('../lib/telephony');
+
+router.get('/telephony', sec.requireRole('admin'), (req, res) => {
+  res.json({ ...telephony.statusFor(req.orgId), providers: telephony.PROVIDERS });
+});
+
+router.put('/telephony', sec.requireRole('admin'), (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  if (b.provider !== undefined) {
+    if (b.provider !== '' && !telephony.PROVIDERS.includes(b.provider)) return httpError(res, 400, 'unknown provider');
+    patch.provider = b.provider;
+  }
+  if (b.account !== undefined) { if (!optStr(b.account, 200)) return httpError(res, 400, 'bad account'); patch.account = b.account; }
+  if (b.from !== undefined) {
+    // The sending number is what the person sees at 03:00; a malformed one fails
+    // at the provider with a message nobody reads. Alphanumeric sender ids are
+    // allowed because several countries require them.
+    if (!optStr(b.from, 32)) return httpError(res, 400, 'bad from');
+    patch.from = b.from;
+  }
+  if (b.webhookUrl !== undefined) {
+    if (b.webhookUrl && !/^https?:\/\/[^\s]{1,400}$/.test(b.webhookUrl)) return httpError(res, 400, 'webhookUrl must be an http(s) URL');
+    patch.webhookUrl = b.webhookUrl;
+  }
+  if (b.priceSmsMicros !== undefined) patch.priceSmsMicros = b.priceSmsMicros;
+  if (b.priceVoiceMicros !== undefined) patch.priceVoiceMicros = b.priceVoiceMicros;
+  if (b.secret !== undefined) {
+    if (typeof b.secret !== 'string' || b.secret.length > 500) return httpError(res, 400, 'bad secret');
+    patch.secret = b.secret;   // '' clears it
+  }
+  telephony.save(req.orgId, patch);
+  sec.audit(req.user.id, 'telephony_config_update',
+    Object.keys(patch).map((k) => (k === 'secret' ? 'secret(hidden)' : k)).join(','), req.orgId);
+  res.json({ ok: true, ...telephony.statusFor(req.orgId) });
+});
+
 // ---- Voice / STT endpoint (admin) — Bridge transcription (docs/BRIDGE.md) --
 // Org-level override of the platform default. OpenAI-compatible transcription
 // API: base URL is the API root (e.g. https://api.openai.com/v1); the Bridge

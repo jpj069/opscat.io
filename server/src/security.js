@@ -300,6 +300,15 @@ const CSP = [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:",
   `connect-src 'self'${cloudOnly(TESTIFY_ORIGIN)}${livekitOrigins}`,
+  // Web Push (docs/ONCALL-V1.md §7) needs the service worker and the manifest.
+  // Both are same-origin and would already be allowed by the `default-src`
+  // fallback — they are named anyway, because "it works by falling back" is
+  // exactly how the next directive that does NOT fall back the way somebody
+  // assumed gets left out (CLAUDE.md § Content-Security-Policy). No new origin:
+  // a push subscription is a browser-to-push-service conversation the page
+  // never makes itself.
+  "worker-src 'self'",
+  "manifest-src 'self'",
   "base-uri 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",

@@ -5,12 +5,14 @@ import { api, ApiError } from '../api';
 import { SEV, fmtTime, CHANNEL_META, channelLabel, channelColor } from '../format';
 import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
-import type { Rule, NotificationRow } from '../types';
+import type { Rule, NotificationRow, EscalationPolicy } from '../types';
 import { PlusIcon } from 'lucide-react';
 
 // label + color per channel live in format.ts (CHANNEL_META), so the pill, the
 // picker and the notification log cannot drift apart.
-// Rule | Channel | Trigger | Min Sev | Cooldown | On | actions
+// Rule | Delivery | Trigger | Min Sev | Cooldown | On | actions
+// "Delivery" rather than "Channel" since a rule may now hand the event to an
+// escalation policy instead of a channel (docs/ONCALL-V1.md §8).
 // actionsWide: the bar is Test / Edit / Del — labelled buttons, 130px measured
 const RULE_COLS = [COL.text, COL.label, COL.text, COL.num, COL.num, COL.toggle, COL.actionsWide].join(' ');
 // Time | Rule | Event | Channel | Status — the time is fmtTime, but time-of-day
@@ -70,7 +72,7 @@ export default function Rules() {
       <Card style={{ padding: 0 }}>
         <TableScroll cols={RULE_COLS} stickyFirst minWidth={700}>
         <div className="tbl-head">
-          <span>Rule</span><span>Channel</span><span>Trigger</span><span>Min Sev</span>
+          <span>Rule</span><span>Delivery</span><span>Trigger</span><span>Min Sev</span>
           <span>Cooldown</span><span>On</span><span />
         </div>
         {!rules ? (
@@ -82,7 +84,9 @@ export default function Rules() {
           <div key={r.id} className="tbl-row" style={{ opacity: r.enabled ? 1 : 0.5 }}>
             <span className="text-base font-semibold text-text0" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-            <StatusPill text={channelLabel(r.channel)} color={channelColor(r.channel)} />
+            {r.targetType === 'policy'
+              ? <StatusPill text="On-call" color={SEV.purple} />
+              : <StatusPill text={channelLabel(r.channel)} color={channelColor(r.channel)} />}
             <span className="mono text-sm" style={{ color: r.triggerName ? 'var(--text1)' : 'var(--text3)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.triggerName || 'any'}</span>
             <span className="mono text-sm text-text2">≥ {r.severityMin}</span>
@@ -151,7 +155,13 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
   const [sevMin, setSevMin] = useState(rule?.severityMin ?? 60);
   const [cooldown, setCooldown] = useState(rule?.cooldownM ?? 10);
   const [recipients, setRecipients] = useState((rule?.recipients ?? []).join('\n'));
+  const [targetType, setTargetType] = useState<'channel' | 'policy'>(rule?.targetType ?? 'channel');
+  const [policyId, setPolicyId] = useState<string>(rule?.policyId ? String(rule.policyId) : '');
+  const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.get<EscalationPolicy[]>('/api/oncall/policies').then(setPolicies).catch(() => setPolicies([]));
+  }, []);
 
   const RECIPIENTS_UI: Record<Rule['channel'], { label: string; placeholder: string }> = {
     email: { label: 'Recipients — one email per line', placeholder: 'noc@opscat.io' },
@@ -174,6 +184,8 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
       severityMin: Number(sevMin),
       cooldownM: Number(cooldown),
       recipients: recipients.split('\n').map((r) => r.trim()).filter(Boolean),
+      targetType,
+      policyId: targetType === 'policy' ? Number(policyId) : null,
     };
     try {
       if (rule) await api.patch(`/api/rules/${rule.id}`, body);
@@ -187,10 +199,36 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
       <Field label="Name">
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
       </Field>
-      <Field label="Channel">
-        <Select title="Channel" value={channel} onChange={(v) => setChannel(v as Rule['channel'])}
-          options={Object.entries(CHANNEL_META).map(([value, m]) => ({ value, label: m.label }))} />
+      <Field label="What should happen">
+        <Select title="Delivery" value={targetType}
+          onChange={(v) => setTargetType(v as 'channel' | 'policy')}
+          options={[
+            { value: 'channel', label: 'Notify a channel' },
+            { value: 'policy', label: 'Alert the on-call (escalation policy)' },
+          ]} />
       </Field>
+      {targetType === 'policy' ? (
+        <>
+          <Field label="Escalation policy">
+            <Select title="Policy" value={policyId} onChange={setPolicyId}
+              options={policies.map((p) => ({
+                value: String(p.id), label: `${p.name} — rings for up to ${p.worstCaseMinutes} min`,
+              }))} />
+          </Field>
+          {/* Two facts that decide whether this rule can work at all, said here
+              rather than discovered as a silent no-op in the notification log. */}
+          <div className="text-xs text-text3" style={{ marginTop: -6, marginBottom: 10 }}>
+            The alert hangs on the event&rsquo;s case, so this needs a severity that opens
+            one (60 or above). Whoever the policy reaches can acknowledge from the message
+            itself — no OpsCat login needed.
+          </div>
+        </>
+      ) : (
+        <Field label="Channel">
+          <Select title="Channel" value={channel} onChange={(v) => setChannel(v as Rule['channel'])}
+            options={Object.entries(CHANNEL_META).map(([value, m]) => ({ value, label: m.label }))} />
+        </Field>
+      )}
       <Field label="Trigger Event (empty = any)">
         <Input value={trigger} onChange={(e) => setTrigger(e.target.value)} list="rule-triggers"
           placeholder="any" />
@@ -212,13 +250,16 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
           </Field>
         </div>
       </div>
-      <Field label={RECIPIENTS_UI[channel].label}>
-        <Textarea className="rca" value={recipients} onChange={(e) => setRecipients(e.target.value)}
-          placeholder={RECIPIENTS_UI[channel].placeholder} />
-      </Field>
+      {targetType === 'channel' && (
+        <Field label={RECIPIENTS_UI[channel].label}>
+          <Textarea className="rca" value={recipients} onChange={(e) => setRecipients(e.target.value)}
+            placeholder={RECIPIENTS_UI[channel].placeholder} />
+        </Field>
+      )}
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" disabled={saving || !name.trim()} onClick={save}>
+        <Button variant="primary"
+          disabled={saving || !name.trim() || (targetType === 'policy' && !policyId)} onClick={save}>
           {saving ? 'Saving…' : 'Save'}</Button>
       </div>
     </Modal>

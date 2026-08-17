@@ -40,6 +40,9 @@ export interface CaseRow {
   severity: number; status: 'open' | 'assigned' | 'closed'; assigned: AssignedRef | null;
   rootCause: string | null; note: string | null; openedAt: number; closedAt: number | null;
   incident: { id: number; label: string } | null;
+  ackedAt: number | null; ackedBy: AssignedRef | null;
+  /** the live alert about this case, if anything is ringing */
+  alert: AlertRow | null;
   durationMs: number;
 }
 
@@ -60,6 +63,9 @@ export interface Rule {
   id: number; name: string; enabled: boolean;
   channel: 'email' | 'msteams' | 'webhook' | 'slack' | 'telegram' | 'discord' | 'ntfy' | 'pushover';
   triggerName: string | null; severityMin: number; cooldownM: number; recipients: string[];
+  /** 'channel' notifies as it always has; 'policy' raises an alert on a ladder */
+  targetType: 'channel' | 'policy';
+  policyId: number | null;
 }
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
@@ -457,4 +463,96 @@ export interface OnCallNowRow {
   user: TeamMember | null; via: string | null;
   /** false = nobody has configured it yet, which is not the same as a gap */
   configured: boolean;
+}
+
+// ---- On-Call slice 2: the alert chain (docs/ONCALL-V1.md §3.3-3.6) ----------
+export type EscalationTargetKind = 'user' | 'schedule' | 'team';
+export interface EscalationTarget {
+  kind: EscalationTargetKind;
+  /** a user uuid, or a schedule/team id as a string — one column, two key types */
+  refId: string;
+  label: string;
+}
+export interface EscalationStep { position: number; timeoutM: number; targets: EscalationTarget[] }
+export interface SupportHours { days: number[]; from: string | null; to: string | null; tz: string }
+export interface EscalationPolicy {
+  id: number; name: string; repeatN: number; highMin: number;
+  hours: SupportHours | null; createdAt: number;
+  steps: EscalationStep[];
+  /** steps x timeout x (repeatN + 1) — computed by the server so there is one answer */
+  worstCaseMinutes: number;
+}
+
+export type AlertStatus = 'active' | 'acked' | 'resolved' | 'exhausted' | 'canceled';
+export interface AlertAttempt {
+  user: { id: string; name: string; color: string };
+  step: number; round: number; via: string; notifiedAt: number;
+}
+export interface AlertRow {
+  id: number; status: AlertStatus; urgency: 'high' | 'low';
+  subjectKind: 'case' | 'incident'; subjectId: number;
+  subjectLabel: string | null; subjectTitle: string | null; severity: number | null;
+  policyId: number | null; policyName: string | null;
+  step: number; round: number; source: string; message: string | null;
+  createdAt: number; ackedAt: number | null;
+  ackedBy: { id: string; name: string; color: string } | null;
+  ackMinutes: number | null;
+  endedAt: number | null; endReason: string | null;
+  /** when the current step escalates, null when nothing is ticking */
+  nextAt: number | null;
+  attempts?: AlertAttempt[];
+}
+
+export type ContactMethodKind = 'email' | 'ntfy' | 'telegram' | 'pushover' | 'sms' | 'voice' | 'push';
+export interface ContactMethod {
+  id: number; kind: ContactMethodKind; address: string; label: string;
+  verifiedAt: number | null; createdAt: number;
+  /** an sms/voice number that has not proven it belongs to its owner yet */
+  needsVerification: boolean;
+  /** why this method will not be used — the same words the delivery log uses */
+  blockedReason: string | null;
+}
+export interface NotificationRule {
+  id: number; urgency: 'high' | 'low'; delayM: number; methodId: number;
+}
+export interface MyOnCall {
+  methods: ContactMethod[];
+  rules: NotificationRule[];
+  /** false = the org has no SMS/voice provider, so a number cannot be verified */
+  telephonyConfigured: boolean;
+  /** where an alert lands when nothing else is configured — stated, not hidden */
+  fallbackEmail: string;
+  shifts: { scheduleId: number; schedule: string; startsAt: number; endsAt: number; via: string | null }[];
+}
+
+/** GET/PUT /api/admin/telephony — the SMS/voice provider (ONCALL-V1 §13.2). */
+export interface TelephonyConfig {
+  provider: '' | 'twilio' | 'vonage' | 'webhook';
+  account: string; from: string; webhookUrl: string;
+  priceSmsMicros: number; priceVoiceMicros: number;
+  configured: boolean;
+  /** the credential itself is never returned */
+  hasSecret: boolean;
+  providers?: string[];
+}
+
+/** GET /api/oncall/analytics — the numbers on-call is judged by (ONCALL-V1 §8). */
+export interface OnCallAnalytics {
+  range: string; since: number; at: number;
+  mtta: { avgMs: number; acked: number; unacked: number; daily: { d: string; v: number }[] };
+  escalation: {
+    raised: number; escalated: number; acked: number; exhausted: number;
+    canceled: number; resolved: number; rate: number; exhaustedRate: number;
+  };
+  perPerson: {
+    user: { id: string; name: string; color: string };
+    total: number; outOfHours: number; nights: number;
+    timezone: string;
+    /** where that timezone came from — 'user' | 'schedule' | 'utc-fallback' */
+    tzSource: string;
+  }[];
+  perSchedule: { scheduleId: number; name: string; alerts: number; perWeek: number }[];
+  cost: { micros: number; messages: number };
+  /** true = the per-person fold is a sample, not a total */
+  truncated: boolean;
 }

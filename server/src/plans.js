@@ -26,6 +26,17 @@ const config = require('./config');
 // `statusSubscribers` is a limit rather than a flag: it grows with the customer's
 // own success, which is the fairest axis to charge on (and the one Statuspage
 // monetises hardest).
+//
+// ON-CALL: there is deliberately no `oncall` flag either. Schedules, escalation
+// policies, alerts and acknowledgement are core on every tier including Free,
+// because a chain that stops at a licence boundary is not a guarantee
+// (docs/ONCALL-V1.md §13.1, docs/OPEN-CORE.md). The only two flags are `sms` and
+// `voice`, from `pro` up — and the line is drawn where the MARGINAL COST is, not
+// where the value is: everything else is our own compute, while a message or a
+// call is money per unit and would otherwise be an open tap on a free tier. A
+// Free org runs the full ladder over e-mail, chat, ntfy, Pushover and Web Push;
+// a self-hoster brings their own provider credentials and is unaffected either
+// way, which is the entire point of the adapter in lib/telephony.js.
 const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
@@ -38,7 +49,7 @@ const PLANS = {
     limits: { users: 10, retentionDays: 30, checks: 25, managedLocations: 10, minIntervalS: 30, snmpTargets: 20,
       agents: 25, apiKeys: 10, ingestLinesPerDay: 1000000, statusSubscribers: 500 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
-      'sentry', 'multi_org', 'status_domain'],
+      'sentry', 'multi_org', 'status_domain', 'sms', 'voice'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
@@ -46,7 +57,7 @@ const PLANS = {
       agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000, statusSubscribers: 5000 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'priority_support', 'sensor_autoprovision', 'bridge', 'multi_org',
-      'status_domain', 'status_whitelabel', 'status_css'],
+      'status_domain', 'status_whitelabel', 'status_css', 'sms', 'voice'],
   },
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
@@ -54,7 +65,8 @@ const PLANS = {
       agents: -1, apiKeys: -1, ingestLinesPerDay: -1, statusSubscribers: -1 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
       'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla',
-      'bridge', 'multi_org', 'status_domain', 'status_whitelabel', 'status_css', 'status_pages_multi'],
+      'bridge', 'multi_org', 'status_domain', 'status_whitelabel', 'status_css', 'status_pages_multi',
+      'sms', 'voice'],
   },
 };
 

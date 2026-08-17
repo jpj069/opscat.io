@@ -22,6 +22,21 @@ export type Channel = keyof typeof CHANNEL_META;
 export const channelLabel = (c: string) => CHANNEL_META[c as Channel]?.label ?? c;
 export const channelColor = (c: string) => CHANNEL_META[c as Channel]?.color ?? SEV.info;
 
+// Alert lifecycle (docs/ONCALL-V1.md §5) — mirror of the CHECK on alerts.status.
+// `active` is the only one that is still ringing, which is why it is the only
+// red one: `exhausted` is worse news but it is over, and colouring both alike
+// would hide the one a human can still act on.
+export const ALERT_STATUS_META = {
+  active: { label: 'Escalating', color: SEV.critical },
+  acked: { label: 'Acknowledged', color: SEV.green },
+  resolved: { label: 'Resolved', color: SEV.info },
+  exhausted: { label: 'Nobody answered', color: SEV.high },
+  canceled: { label: 'Canceled', color: SEV.info },
+} as const;
+export type AlertStatusKey = keyof typeof ALERT_STATUS_META;
+export const alertStatusLabel = (s: string) => ALERT_STATUS_META[s as AlertStatusKey]?.label ?? s;
+export const alertStatusColor = (s: string) => ALERT_STATUS_META[s as AlertStatusKey]?.color ?? SEV.info;
+
 // The app-wide status scale — mirror of server/src/lib/status-scale.js
 // (docs/INCIDENTS-V2.md §2 "One status scale"). Insertion order = rank order;
 // `label` is the display spelling, stored values never carry a second one.

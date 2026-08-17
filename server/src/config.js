@@ -30,6 +30,10 @@ module.exports = {
     pass: process.env.SMTP_PASS || null,
   },
   baseUrl: process.env.OPSCAT_BASE_URL || 'https://opscat.io',
+  // The contact a push service uses if our sends start misbehaving (VAPID
+  // `sub`). It must be a real mailbox; lib/webpush.js falls back to
+  // ops@<baseUrl host> so a fresh install is not broken by an unset variable.
+  pushContact: process.env.OPSCAT_PUSH_CONTACT || null,
   // --- Enterprise edition config (cloud) ---
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || null,

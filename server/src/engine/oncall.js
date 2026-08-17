@@ -95,6 +95,7 @@ function shiftIndex(layer, at, tz) {
 const qSchedule = db.prepare('SELECT * FROM schedules WHERE id = ? AND org_id = ?');
 const qSchedulesOfOrg = db.prepare('SELECT * FROM schedules WHERE org_id = ? ORDER BY name');
 const qAllSchedules = db.prepare('SELECT * FROM schedules');
+const qScheduleAny = db.prepare('SELECT * FROM schedules WHERE id = ?');
 const qLayers = db.prepare('SELECT * FROM schedule_layers WHERE schedule_id = ? ORDER BY position DESC');
 const qParticipants = db.prepare(`SELECT sp.user_id, u.name, u.email, u.color
   FROM schedule_participants sp JOIN users u ON u.id = sp.user_id
@@ -191,6 +192,25 @@ function timeline(schedule, fromMs, toMs, stepMs = 30 * 60 * 1000) {
 // somebody is still creating it would train the team to ignore the event.
 // Guarded by gap_alerted_at so one gap is one event, re-armed when covered
 // again (the heartbeats engine does the same).
+/**
+ * Report that `schedule` has nobody on call, once per episode.
+ *
+ * Called from two places — the minute tick below, and the escalation chain when
+ * a policy step resolves a schedule to nobody (docs/ONCALL-V1.md §4). They must
+ * share the `gap_alerted_at` guard: two callers with two guards is two events
+ * for one hole, and the second one trains the team to ignore both.
+ */
+function raiseGap(schedule, at = now()) {
+  const s = qScheduleAny.get(schedule.id) || schedule;
+  if (s.gap_alerted_at) return false;
+  setGapAlerted.run(at, s.id);
+  pipeline.ingestEvent({
+    name: 'oncall_gap', device: s.name, target: null, severity: 70,
+    description: `oncall_gap ${s.name} — nobody is on call (${s.timezone})`,
+  }, 'oncall', false, s.org_id);
+  return true;
+}
+
 function tick() {
   const t = now();
   for (const s of qAllSchedules.all()) {
@@ -201,12 +221,7 @@ function tick() {
       if (s.gap_alerted_at) setGapAlerted.run(null, s.id);
       continue;
     }
-    if (s.gap_alerted_at) continue; // already reported, still open
-    setGapAlerted.run(t, s.id);
-    pipeline.ingestEvent({
-      name: 'oncall_gap', device: s.name, target: null, severity: 70,
-      description: `oncall_gap ${s.name} — nobody is on call (${s.timezone})`,
-    }, 'oncall', false, s.org_id);
+    raiseGap(s, t);
   }
 }
 
@@ -216,6 +231,6 @@ function start() {
 }
 
 module.exports = {
-  start, tick, resolve, whoIsOnCall, onCallNow, timeline,
+  start, tick, raiseGap, resolve, whoIsOnCall, onCallNow, timeline,
   validTimezone, localParts, restrictionCovers, shiftIndex, PERIOD_DAYS,
 };

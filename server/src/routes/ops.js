@@ -9,6 +9,8 @@ const config = require('../config');
 const sec = require('../security');
 const pipeline = require('../engine/pipeline');
 const inc = require('../lib/incidents');
+const cases = require('../lib/cases');
+const chain = require('../engine/alert-chain');
 
 const router = express.Router();
 router.use(sec.requireSessionOrToken);
@@ -155,8 +157,10 @@ router.post('/events/:id/action', (req, res) => {
     if (e.status === 'finished') return httpError(res, 409, 'event already finished');
     db.prepare("UPDATE events SET status = 'finished', finished_at = ?, finished_by = ? WHERE id = ? AND org_id = ?")
       .run(t, req.user.id, e.id, req.orgId);
-    db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
-      .run(t, e.id, req.orgId);
+    // through lib/cases so the alert chain stops in the same breath — the
+    // problem is over, and second line must not be woken about it five minutes
+    // from now (docs/ONCALL-V1.md §5)
+    cases.closeForEvent(req.orgId, e.id, { at: t });
     recordEvent(req.orgId, e.id, req.user.id, 'finish', null);
   } else if (action === 'downgrade') {
     if (e.severity <= 10) return httpError(res, 409, 'severity is already at the floor');
@@ -168,8 +172,7 @@ router.post('/events/:id/action', (req, res) => {
     if (!userInOrg.get(uid, req.orgId)) return httpError(res, 400, 'unknown user');
     if (e.assigned_user_id === uid) return httpError(res, 409, 'already assigned to that user');
     db.prepare('UPDATE events SET assigned_user_id = ? WHERE id = ? AND org_id = ?').run(uid, e.id, req.orgId);
-    db.prepare("UPDATE cases SET assigned_user_id = ?, status = 'assigned' WHERE event_id = ? AND status = 'open' AND org_id = ?")
-      .run(uid, e.id, req.orgId);
+    cases.assignForEvent(req.orgId, e.id, uid);
     // who it went TO, since that is not always who clicked
     const to = assignedView(uid);
     recordEvent(req.orgId, e.id, req.user.id, 'assign', to ? to.n : null);
@@ -178,8 +181,7 @@ router.post('/events/:id/action', (req, res) => {
     // cases.note is a single column — it keeps the LATEST note for the Cases page,
     // while the timeline keeps every one of them with its author. Before the
     // timeline existed, writing a second note silently destroyed the first.
-    db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
-      .run(req.body.note, e.id, req.orgId);
+    cases.setNoteForEvent(req.orgId, e.id, req.body.note);
     recordEvent(req.orgId, e.id, req.user.id, 'note', req.body.note);
   } else {
     return httpError(res, 400, 'unknown action');
@@ -199,13 +201,40 @@ router.get('/cases', (req, res) => {
     ? db.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY opened_at DESC LIMIT ?').all(req.orgId, limit)
     : db.prepare('SELECT * FROM cases WHERE status = ? AND org_id = ? ORDER BY opened_at DESC LIMIT ?').all(filter, req.orgId, limit);
   const t = now();
+  // Live alerts in ONE query, not one per row: "is anybody being woken about
+  // this case, and how far up the ladder are we" belongs next to the case, and
+  // it is the column a NOC reads first during a handover.
+  const live = new Map();
+  for (const a of db.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = 'case'
+    AND status IN ('active','acked') ORDER BY created_at`).all(req.orgId)) live.set(a.subject_id, a);
   res.json(rows.map((c) => ({
-    id: c.id, label: `C-${1000 + c.id}`, eventId: c.event_id, name: c.name, device: c.device,
+    id: c.id, label: cases.label(c.id), eventId: c.event_id, name: c.name, device: c.device,
     severity: c.severity, status: c.status, assigned: assignedView(c.assigned_user_id),
     rootCause: c.root_cause, note: c.note, openedAt: c.opened_at, closedAt: c.closed_at,
+    ackedAt: c.acked_at, ackedBy: assignedView(c.acked_by),
     incident: inc.incidentOfCase(c.id),
+    alert: live.has(c.id) ? chain.view(live.get(c.id)) : null,
     durationMs: (c.closed_at || t) - c.opened_at,
   })));
+});
+
+// "I have seen it, stop ringing." Acknowledging the CASE acknowledges whatever
+// is escalating about it — the two are the same statement made from different
+// screens, and a button that stopped one but not the other would be a trap.
+// Deliberately does not assign (docs/ONCALL-V1.md §13.4).
+router.post('/cases/:id/ack', (req, res) => {
+  const c = cases.byId(req.orgId, req.params.id);
+  if (!c) return httpError(res, 404, 'case not found');
+  const first = cases.acknowledge(req.orgId, c.id, req.user.id);
+  const live = db.prepare(`SELECT id FROM alerts WHERE org_id = ? AND subject_kind = 'case'
+    AND subject_id = ? AND status = 'active'`).all(req.orgId, c.id);
+  for (const a of live) chain.ack(req.orgId, a.id, req.user.id, 'case');
+  // Already acknowledged AND nothing left ringing: the click changed nothing,
+  // and saying so is the whole point of the 409.
+  if (!first && !live.length) return httpError(res, 409, 'case is already acknowledged');
+  if (c.event_id) recordEvent(req.orgId, c.event_id, req.user.id, 'acknowledge', null);
+  sec.audit(req.user.id, 'case_ack', `case ${c.id}`, req.orgId);
+  res.json({ ok: true, ackedAlerts: live.length });
 });
 
 router.patch('/cases/:id', (req, res) => {
@@ -215,15 +244,7 @@ router.patch('/cases/:id', (req, res) => {
   if (status && !['open', 'assigned', 'closed'].includes(status)) return httpError(res, 400, 'bad status');
   if (!optStr(rootCause, 200) || !optStr(note, 2000)) return httpError(res, 400, 'bad fields');
   if (assignedUserId && !userInOrg.get(assignedUserId, req.orgId)) return httpError(res, 400, 'unknown user');
-  db.prepare(`UPDATE cases SET
-      status = COALESCE(?, status),
-      assigned_user_id = COALESCE(?, assigned_user_id),
-      root_cause = COALESCE(?, root_cause),
-      note = COALESCE(?, note),
-      closed_at = CASE WHEN ? = 'closed' AND closed_at IS NULL THEN ? ELSE closed_at END
-    WHERE id = ? AND org_id = ?`)
-    .run(status || null, assignedUserId || null, rootCause ?? null, note ?? null,
-      status || null, now(), c.id, req.orgId);
+  cases.update(req.orgId, c.id, { status, assignedUserId, rootCause, note });
   // The Cases editor writes the SAME `cases.note` column the slide-over does, so a
   // note typed here has to reach the same history — otherwise "who wrote this?" has
   // a different answer depending on which screen it was written from. Only what
@@ -329,24 +350,36 @@ router.get('/analytics', (req, res) => {
 
 // ---- alert rules + notifications ----
 const RULE_CHANNELS = ['email', 'msteams', 'webhook', 'slack', 'telegram', 'discord', 'ntfy', 'pushover'];
+// A rule either notifies a CHANNEL or raises an ALERT against an escalation
+// policy (docs/ONCALL-V1.md §8). The column defaults to 'channel', so every
+// rule written before On-Call existed keeps its behaviour untouched.
+const RULE_TARGETS = ['channel', 'policy'];
+const policyOfOrg = db.prepare('SELECT id FROM escalation_policies WHERE id = ? AND org_id = ?');
 
 router.get('/rules', (req, res) => {
   const rules = db.prepare('SELECT * FROM alert_rules WHERE org_id = ? ORDER BY id').all(req.orgId)
     .map((r) => ({ id: r.id, name: r.name, enabled: !!r.enabled, channel: r.channel,
       triggerName: r.trigger_name, severityMin: r.severity_min, cooldownM: r.cooldown_m,
+      targetType: r.target_type || 'channel', policyId: r.policy_id,
       recipients: JSON.parse(r.recipients || '[]') }));
   res.json(rules);
 });
 
 router.post('/rules', sec.requireRole('lead'), (req, res) => {
-  const { name, channel, triggerName, severityMin, cooldownM, recipients } = req.body || {};
+  const { name, channel, triggerName, severityMin, cooldownM, recipients, targetType, policyId } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   if (!RULE_CHANNELS.includes(channel)) return httpError(res, 400, 'bad channel');
+  const target = RULE_TARGETS.includes(targetType) ? targetType : 'channel';
+  // A policy rule with no policy would look configured and reach nobody.
+  if (target === 'policy' && !policyOfOrg.get(policyId, req.orgId)) {
+    return httpError(res, 400, 'unknown escalation policy');
+  }
   const rec = Array.isArray(recipients) ? recipients.filter((r) => typeof r === 'string').slice(0, 20) : [];
   const info = db.prepare(`INSERT INTO alert_rules (org_id, name, enabled, channel, trigger_name, severity_min,
-    cooldown_m, recipients, created_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`)
+    cooldown_m, recipients, target_type, policy_id, created_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(req.orgId, name, channel, optStr(triggerName, 100) && triggerName ? triggerName : null,
-      clampInt(severityMin, 0, 100, 60), clampInt(cooldownM, 1, 1440, 15), JSON.stringify(rec), now());
+      clampInt(severityMin, 0, 100, 60), clampInt(cooldownM, 1, 1440, 15), JSON.stringify(rec),
+      target, target === 'policy' ? Number(policyId) : null, now());
   sec.audit(req.user.id, 'rule_create', name, req.orgId);
   res.json({ id: info.lastInsertRowid });
 });
@@ -357,11 +390,19 @@ router.patch('/rules/:id', sec.requireRole('lead'), (req, res) => {
   const b = req.body || {};
   const rec = Array.isArray(b.recipients)
     ? JSON.stringify(b.recipients.filter((x) => typeof x === 'string').slice(0, 20)) : null;
+  const target = RULE_TARGETS.includes(b.targetType) ? b.targetType : null;
+  // The target and its policy move together: switching a rule to 'policy'
+  // without naming one would leave it enabled, matching, and silent.
+  const nextTarget = target || r.target_type || 'channel';
+  const nextPolicy = b.policyId === undefined ? r.policy_id : Number(b.policyId);
+  if (nextTarget === 'policy' && !policyOfOrg.get(nextPolicy, req.orgId)) {
+    return httpError(res, 400, 'unknown escalation policy');
+  }
   db.prepare(`UPDATE alert_rules SET
       name = COALESCE(?, name), enabled = COALESCE(?, enabled), channel = COALESCE(?, channel),
       trigger_name = CASE WHEN ? THEN ? ELSE trigger_name END,
       severity_min = COALESCE(?, severity_min), cooldown_m = COALESCE(?, cooldown_m),
-      recipients = COALESCE(?, recipients)
+      recipients = COALESCE(?, recipients), target_type = ?, policy_id = ?
     WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null,
       typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
@@ -369,7 +410,7 @@ router.patch('/rules/:id', sec.requireRole('lead'), (req, res) => {
       b.triggerName !== undefined ? 1 : 0, b.triggerName || null,
       Number.isFinite(b.severityMin) ? clampInt(b.severityMin, 0, 100, 60) : null,
       Number.isFinite(b.cooldownM) ? clampInt(b.cooldownM, 1, 1440, 15) : null,
-      rec, r.id, req.orgId);
+      rec, nextTarget, nextTarget === 'policy' ? nextPolicy : null, r.id, req.orgId);
   sec.audit(req.user.id, 'rule_update', `rule ${r.id}`, req.orgId);
   res.json({ ok: true });
 });

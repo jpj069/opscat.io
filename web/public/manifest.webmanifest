@@ -1,0 +1,14 @@
+{
+  "name": "OpsCat",
+  "short_name": "OpsCat",
+  "description": "Infrastructure operations — events, cases, incidents and on-call.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    { "src": "/app/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/app/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

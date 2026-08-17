@@ -62,14 +62,16 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    `audit_log` (`automation_run`, system actor) so automated decisions stay auditable.
    The v2 rework — trigger/condition graph, incident contract, durable timers — is
    specified in `docs/AUTOMATION-V1.md`, the counterpart to `docs/INCIDENTS-V2.md`.
-7. **On-Call** (`engine/oncall.js`, `routes/oncall.js`, page `OnCall.tsx`) sits on the
-   other side of that boundary — see `docs/ONCALL-V1.md`. Slice 1 is built: teams,
-   schedules with rotation layers and overrides, and the resolution function that
-   answers "who has the duty" for any instant. Escalation policies and alerts (the
-   chain with an acknowledgement deadline) are slice 2. It is native rather than
-   flow-driven because alerting a human is load-bearing — a chain that exists only
-   because somebody drew it is a configuration, not a guarantee. Flows will raise an
-   alert and react to its outcome; they never contain the ladder.
+7. **On-Call** (`engine/oncall.js`, `engine/alert-chain.js`, `routes/oncall.js`,
+   `routes/ack.js`, page `OnCall.tsx`) sits on the other side of that boundary — see
+   `docs/ONCALL-V1.md`. Slices 1 and 2 are built: teams, schedules with rotation
+   layers and overrides, the resolution function that answers "who has the duty" for
+   any instant, and the alert chain — escalation policies, per-person contact methods
+   and notification rules, acknowledgement, and cancellation when the subject closes.
+   It is native rather than flow-driven because alerting a human is load-bearing — a
+   chain that exists only because somebody drew it is a configuration, not a
+   guarantee. Flows raise an alert and react to its outcome; they never contain the
+   ladder.
 
    Three properties are worth knowing before touching it:
 
@@ -91,6 +93,88 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    than solving for boundaries: rotation period, layer restrictions and overrides
    interact, and a closed-form walk would be a second implementation that can
    disagree with the first.
+
+   The **alert chain** (`engine/alert-chain.js`) adds four more, and every one of them
+   is a failure mode whose symptom is silence:
+
+   - **Targets resolve late, deliveries fan out early.** A step's targets are expanded
+     to users at the moment the step BEGINS, never at alert creation, so a handover
+     mid-escalation reaches whoever is on call now. Each user is then notified through
+     their own rules in parallel, and the step timeout is ONE timer for the step.
+   - **Nothing lives in `setTimeout`.** The escalation clock is a row in `alert_timers`
+     driven by `lib/timers.js` — the shared mechanism `flow_waits` will adopt
+     (ONCALL-V1 §9.3) — with a claim lease and a sweeper that picks up on boot whatever
+     fell due while the process was down. `e2e-alerts.js` proves that with a SECOND
+     process against the same database.
+   - **Every terminal transition on a subject cancels its alerts.** That is what forced
+     `lib/cases.js` into existence: eight write sites closed a case, and the ninth would
+     have forgotten. An alert still ringing about a problem that resolved five minutes
+     ago is the exact failure the module exists to prevent, and it arrives through the
+     back door of a missed call site.
+   - **"Nobody" and "unreachable" are events, not nulls.** A step whose schedule
+     resolves to nobody raises `oncall_gap` and escalates IMMEDIATELY rather than
+     waiting out its timeout for a person who does not exist; a step where every
+     contact method of every target failed raises `alert_undeliverable` (severity 85);
+     a policy that ran out of rungs raises `alert_exhausted` (85). A rule may not target
+     a policy ON those three names — that loop would escalate itself forever, and the
+     refusal is written to the notification log rather than being silent.
+
+   Acknowledgement rides a single-use token (`/a/:token`, 32 random bytes, SHA-256 at
+   rest, 24 h). **`GET` renders a button, `POST` performs it** — corporate mail scanners
+   fetch every URL in a message, so an acknowledging GET would silence alerts before the
+   human looked at their phone, silently, and only for the customers whose gateway does
+   it. An ack writes `cases.acked_at`/`acked_by` and deliberately NOT
+   `assigned_user_id`: acknowledging at 03:02 is a reflex, owning the case is a separate
+   statement, and conflating them makes the person who only silenced their phone the
+   owner in the statistics.
+
+   A person's delivery plan has three tiers, each a fallback for the one above: their
+   notification RULES for the alert's urgency, else every contact METHOD they have
+   registered, else their ACCOUNT E-MAIL. The last tier is what keeps a fresh org from
+   building a perfect ladder that reaches nobody.
+
+   **The loud channels** (`lib/telephony.js`, `lib/webpush.js`, `routes/voice.js`) are
+   an ADAPTER, never a vendor: three implementations — Twilio, Vonage, and a plain
+   `webhook` for a self-hoster's own gateway — behind `sendSms` and `placeCall`. Which
+   provider OpsCat runs itself is deliberately undecided, and the adapter is what keeps
+   that reversible; the `webhook` implementation is what makes the loudest channel
+   something the community edition can actually do. Four properties:
+
+   - **A voice call speaks AND listens.** The provider is handed a callback URL, not a
+     recording: `routes/voice.js` answers with TwiML or NCCO that reads the alert and
+     then gathers a digit, and `1` acknowledges. Without the second half it is a
+     robocall — the person is awake, knows something broke, and still has to find a
+     laptop. **Fetching that call flow must not acknowledge**: the provider fetches it
+     before the phone has rung, which makes it a mail scanner with a phone line.
+   - **A number is ciphertext at rest and useless until verified.** AES-256-GCM with the
+     app secret (the SNMP pattern), and an sms/voice method is never rung before a
+     six-digit code — hashed, 15-minute TTL, five tries — has come back. A wrong number
+     costs money on every escalation and wakes a stranger.
+   - **The plan gate is at SEND time.** `sms`/`voice` are plan features from `pro` up,
+     the only two in the whole module, and the line is drawn at MARGINAL COST rather
+     than value. A contact method belongs to the person, not the org, so the number is
+     stored once and each org checks its own plan when it tries to use it — with the
+     refusal written to the notification log in the same words the screen shows.
+   - **Every metered send reports a cost.** `notifications.cost_micros`, from the
+     provider when it knows one (Vonage prices an SMS immediately; Twilio only after the
+     call completes) and from the org's configured per-message figure when it does not.
+
+   **The numbers** (`GET /api/oncall/analytics`, Analytics › On-Call) are four, and the
+   third is the one that changes behaviour: MTTA (over acknowledged cases ONLY — the
+   unacknowledged ones are reported beside it rather than averaged in as zero), the
+   escalation and "reached nobody" rates, **out-of-hours load per person**, and alerts
+   per schedule. Out-of-hours cannot be asked in SQL — it is a question about local time
+   and SQLite has no timezone database — so `alert_attempts` are folded in JS through the
+   same `localParts` the rotation engine uses, and the response says which zone each
+   person was counted in and where it came from. A rotation can look perfectly fair on a
+   calendar and still land every single night on one name.
+
+   Web Push is the free loud channel: `web-push` for RFC 8291 payload encryption, VAPID
+   keys minted once into `settings` (regenerating them silently invalidates every
+   browser), and a service worker that **caches nothing** — a NOC tool serving a stale
+   dashboard is worse than one that fails to load. On iOS Safari delivers push only from
+   a home-screen-installed app, which is a constraint the UI states rather than letting
+   somebody discover through a permission prompt that never appears.
 
 **Scout** (`engine/scout.js`, Pipeline → Scout tab) mines rule suggestions from
 lines no classifier matched: variable parts are masked (`<IP>`, `<NUM>`, …),

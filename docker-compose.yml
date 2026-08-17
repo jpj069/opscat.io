@@ -41,6 +41,8 @@ services:
       - OPSCAT_REPUTATION_DNS=${OPSCAT_REPUTATION_DNS:-unbound}
       # CE only: permit webhook targets on private/LAN addresses (ignored in cloud)
       - OPSCAT_ALLOW_PRIVATE_TARGETS=${OPSCAT_ALLOW_PRIVATE_TARGETS:-0}
+      # VAPID `sub` for Web Push — a real mailbox the push services can reach
+      - OPSCAT_PUSH_CONTACT=${OPSCAT_PUSH_CONTACT:-}
       - OPSCAT_GRID_HOST=${OPSCAT_GRID_HOST:-radar.opscat.io}
       - OPSCAT_GRID_PUBLISHED=${OPSCAT_GRID_PUBLISHED:-0}
       # Build identity fallbacks for a deployment that is neither this image nor a

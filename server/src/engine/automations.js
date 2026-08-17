@@ -9,10 +9,11 @@
 // Every executed action lands in audit_log as 'automation_run' with
 // user_id NULL (system actor) so the whole feature stays auditable.
 const { db } = require('../db');
-const { now } = require('../util');
+const { now, isId } = require('../util');
 const sec = require('../security');
 const pipeline = require('./pipeline');
 const { safeFetch } = require('../lib/ssrf');
+const cases = require('../lib/cases');
 
 const getAutomations = db.prepare('SELECT * FROM automations WHERE org_id = ? AND enabled = 1');
 const getFire = db.prepare('SELECT fired_at FROM automation_fires WHERE automation_id = ? AND dedupe_key = ?');
@@ -22,8 +23,6 @@ const findRaiseEvents = db.prepare(`SELECT id, name, device, target, severity FR
   WHERE org_id = ? AND name = ? AND device = ? AND status = 'active'`);
 const finishEvent = db.prepare(`UPDATE events SET status = 'finished', finished_at = ? WHERE id = ?`);
 const findOpenCase = db.prepare("SELECT id, note FROM cases WHERE event_id = ? AND status != 'closed'");
-const closeCase = db.prepare(`UPDATE cases SET status = 'closed', closed_at = ?,
-  note = COALESCE(note || char(10), '') || ? WHERE id = ?`);
 const assignCase = db.prepare(`UPDATE cases SET assigned_user_id = ?,
   status = CASE WHEN status = 'open' THEN 'assigned' ELSE status END WHERE id = ?`);
 const userExists = db.prepare('SELECT id FROM users WHERE id = ? AND active = 1');
@@ -62,19 +61,25 @@ function runCloseEvent(auto, params, ev) {
   for (const raise of findRaiseEvents.all(auto.orgId, raiseName, ev.device)) {
     if (params.matchTarget && String(raise.target || '') !== String(ev.target || '')) continue;
     finishEvent.run(t, raise.id);
-    const c = findOpenCase.get(raise.id);
-    if (c) {
-      closeCase.run(t, `auto-closed by automation "${auto.name}" — clear event ${ev.name}` +
-        (ev.target ? ` (${ev.target})` : ''), c.id);
-    }
+    // through lib/cases: the clear event is the good-news path, and it is the
+    // one that MUST also stop an escalation that is still ringing (ONCALL-V1 §5)
+    cases.closeForEvent(auto.orgId, raise.id, {
+      at: t,
+      note: `auto-closed by automation "${auto.name}" — clear event ${ev.name}`
+        + (ev.target ? ` (${ev.target})` : ''),
+    });
     closed++;
   }
   return { ok: true, detail: `close_event ${raiseName} on ${ev.device}: ${closed} event(s) finished` };
 }
 
 function runAssignCase(auto, params, ev) {
-  const userId = Number(params.userId);
-  if (!userId || !userExists.get(userId)) return { ok: false, detail: 'assign_case: unknown user' };
+  // `users.id` is a uuid: `Number(params.userId)` was NaN for every real user,
+  // NaN is falsy, and the guard below then reported "unknown user" — an
+  // automation that had worked before the uuid migration failing with a message
+  // that blamed the configuration (CLAUDE.md § Identity keys).
+  const userId = params.userId;
+  if (!isId(userId) || !userExists.get(userId)) return { ok: false, detail: 'assign_case: unknown user' };
   const c = findOpenCase.get(ev.id);
   if (!c) return { ok: true, detail: 'assign_case: no open case for event — skipped' };
   assignCase.run(userId, c.id);

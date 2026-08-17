@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS users (
   active        INTEGER NOT NULL DEFAULT 1,
   must_change_password INTEGER NOT NULL DEFAULT 0,
   last_seen_at  INTEGER,
+  -- IANA zone, for RENDERING an on-call calendar in the reader's own time.
+  -- Scheduling logic uses the SCHEDULE's timezone, never this one.
+  timezone      TEXT,
   created_at    INTEGER NOT NULL
 );
 
@@ -154,7 +157,13 @@ CREATE TABLE IF NOT EXISTS cases (
   root_cause    TEXT,
   note          TEXT,
   opened_at     INTEGER NOT NULL,
-  closed_at     INTEGER
+  closed_at     INTEGER,
+  -- Set ONLY by an acknowledgement — an alert ack, or the explicit Acknowledge
+  -- button. Assign does not set it and close does not need it: acknowledging is
+  -- "I have seen it, stop ringing", owning the case is a separate statement
+  -- (docs/ONCALL-V1.md §3.6, §13.4). MTTA is AVG(acked_at - opened_at).
+  acked_at      INTEGER,
+  acked_by      TEXT REFERENCES users(id)
 );
 
 -- Who did what to an event, append-only. `cases.note` is a single column that every
@@ -485,6 +494,12 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   severity_min  INTEGER NOT NULL DEFAULT 60,
   cooldown_m    INTEGER NOT NULL DEFAULT 15,
   recipients    TEXT NOT NULL DEFAULT '[]',  -- JSON: emails[] or [url]
+  -- A rule either dispatches into a CHANNEL exactly as it always has, or raises
+  -- an ALERT against an escalation policy. This one column is what makes on-call
+  -- work with zero flows (docs/ONCALL-V1.md §8) — and every existing row keeps
+  -- its meaning, because 'channel' is the default.
+  target_type   TEXT NOT NULL DEFAULT 'channel',   -- 'channel' | 'policy'
+  policy_id     INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL,
   created_at    INTEGER NOT NULL
 );
 
@@ -498,7 +513,16 @@ CREATE TABLE IF NOT EXISTS notifications (
   case_label    TEXT,
   channel       TEXT NOT NULL,
   ok            INTEGER NOT NULL,
-  error         TEXT
+  error         TEXT,
+  -- An alert delivery is a notification like any other. One log means the
+  -- "why did nothing arrive" screen keeps one answer, and the maintenance
+  -- suppression line gets a sibling instead of a competitor (ONCALL-V1 §3.5).
+  alert_id      INTEGER,
+  -- What this message COST, in millionths of the account currency. Only the
+  -- metered channels (sms, voice) ever set it. It exists because those are the
+  -- two channels where an escalation loop is an invoice, and "how much did last
+  -- night cost" must be answerable from the same log that says who was reached.
+  cost_micros   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS rule_fires (
@@ -982,3 +1006,146 @@ CREATE TABLE IF NOT EXISTS schedule_overrides (
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sched_ovr ON schedule_overrides(schedule_id, starts_at, ends_at);
+
+-- ============================================================================
+-- On-Call slice 2 — the alert chain (docs/ONCALL-V1.md §3.3–3.6)
+-- ============================================================================
+
+-- A policy is a LADDER, not a graph: an ordered list of steps with a timeout
+-- each and an optional repeat. No branches, no conditions, no join — the flow
+-- engine owns that shape, and modelling an escalation as a DAG would offer
+-- authors freedom the problem does not have (§3.3).
+CREATE TABLE IF NOT EXISTS escalation_policies (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                REFERENCES organizations(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  repeat_n      INTEGER NOT NULL DEFAULT 0,    -- extra full passes after the last step (0..5)
+  high_min      INTEGER NOT NULL DEFAULT 80,   -- severity at/above which an alert is HIGH urgency
+  hours_json    TEXT,                          -- support hours; NULL = around the clock
+  created_at    INTEGER NOT NULL,
+  UNIQUE (org_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS escalation_steps (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  policy_id     INTEGER NOT NULL REFERENCES escalation_policies(id) ON DELETE CASCADE,
+  position      INTEGER NOT NULL,              -- 0 fires immediately
+  timeout_m     INTEGER NOT NULL DEFAULT 5,    -- wait this long for an ack, then the next step
+  UNIQUE (policy_id, position)
+);
+
+-- ref_id is TEXT and not INTEGER: a 'user' target is a uuid while 'schedule'
+-- and 'team' are integer keys. One column holding both has to be the wider
+-- type — storing a uuid in an INTEGER column is exactly the silent-NaN failure
+-- CLAUDE.md § Identity keys exists to prevent.
+CREATE TABLE IF NOT EXISTS escalation_targets (
+  step_id       INTEGER NOT NULL REFERENCES escalation_steps(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL CHECK (kind IN ('user','schedule','team')),
+  ref_id        TEXT NOT NULL,
+  PRIMARY KEY (step_id, kind, ref_id)
+) WITHOUT ROWID;
+
+-- Belongs to the PERSON, not the org: the same human in two orgs has one phone.
+-- Visible only to their owner — an admin sees that a method exists, its kind and
+-- its verification state, never the address (§7 Personal data).
+CREATE TABLE IF NOT EXISTS contact_methods (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL CHECK (kind IN
+                  ('email','sms','voice','push','pushover','ntfy','telegram')),
+  -- CIPHERTEXT when `encrypted` is 1 — a phone number is personal data and a
+  -- push subscription is a bearer capability, so both are AES-256-GCM at rest
+  -- with OPSCAT_SECRET, the same pattern SNMP community strings use. The flag
+  -- is a column rather than "guess from the kind" because the answer has to
+  -- survive a kind that changes its mind (docs/ONCALL-V1.md §7).
+  address       TEXT NOT NULL,
+  encrypted     INTEGER NOT NULL DEFAULT 0,
+  label         TEXT NOT NULL DEFAULT '',
+  -- An UNVERIFIED sms/voice method is never used: a wrong number costs money on
+  -- every escalation and rings a stranger at 03:00. The code is hashed, expires,
+  -- and the try counter is what stops six digits being brute-forced.
+  verified_at   INTEGER,
+  verify_hash   TEXT,
+  verify_expires_at INTEGER,
+  verify_tries  INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contact_methods_user ON contact_methods(user_id);
+
+-- "push now, SMS after 5 minutes" — the recipient moves off the rule and onto
+-- the person, so a colleague leaving means editing one place instead of every
+-- alert rule that named their number.
+CREATE TABLE IF NOT EXISTS notification_rules (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  urgency       TEXT NOT NULL CHECK (urgency IN ('high','low')),
+  delay_m       INTEGER NOT NULL DEFAULT 0,    -- minutes after the alert reaches this person
+  method_id     INTEGER NOT NULL REFERENCES contact_methods(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_notif_rules_user ON notification_rules(user_id, urgency, delay_m);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                REFERENCES organizations(id) ON DELETE CASCADE,
+  subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('case','incident')),
+  subject_id    INTEGER NOT NULL,
+  policy_id     INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL,
+  urgency       TEXT NOT NULL CHECK (urgency IN ('high','low')),
+  status        TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','acked','resolved','exhausted','canceled')),
+  step_position INTEGER NOT NULL DEFAULT 0,
+  round         INTEGER NOT NULL DEFAULT 0,    -- repeat pass
+  source        TEXT NOT NULL,                 -- 'rule:<id>' | 'flow:<id>' | 'user:<id>'
+  message       TEXT,                          -- optional extra line from the raiser
+  created_at    INTEGER NOT NULL,
+  acked_at      INTEGER,
+  acked_by      TEXT REFERENCES users(id),
+  ended_at      INTEGER,
+  end_reason    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_subject ON alerts(subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(org_id, status);
+
+-- One row per person the alert actually reached on a step. Individual DELIVERY
+-- attempts do not get a table — they go into `notifications` (which gains
+-- alert_id), so "why did nothing arrive" keeps ONE screen with one answer.
+CREATE TABLE IF NOT EXISTS alert_attempts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  step_position INTEGER NOT NULL,
+  round         INTEGER NOT NULL,
+  via           TEXT NOT NULL,                 -- 'schedule:<id>' | 'team:<id>' | 'user'
+  notified_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_attempts ON alert_attempts(alert_id);
+
+-- Single-use acknowledgement tokens, hashed at rest exactly like login_tokens.
+CREATE TABLE IF NOT EXISTS alert_tokens (
+  token_hash    TEXT PRIMARY KEY,              -- sha256(token)
+  alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose       TEXT NOT NULL CHECK (purpose IN ('ack','resolve')),
+  expires_at    INTEGER NOT NULL,
+  used_at       INTEGER
+) WITHOUT ROWID;
+
+-- Durable timers for the escalation clock (lib/timers.js). A separate table per
+-- owner rather than one polymorphic one: SQLite cannot enforce a foreign key
+-- pointing at two parents, and ON DELETE CASCADE from the owning alert is what
+-- keeps an orphaned timer from firing into nothing (§9.3).
+CREATE TABLE IF NOT EXISTS alert_timers (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,                 -- 'step' | 'notify'
+  ref           TEXT,                          -- notify: '<userId>|<methodId>'
+  step_position INTEGER NOT NULL DEFAULT 0,    -- the step this timer belongs to
+  round         INTEGER NOT NULL DEFAULT 0,
+  resume_at     INTEGER NOT NULL,
+  claimed_at    INTEGER,                       -- lease; a stale lease is re-claimable
+  canceled_at   INTEGER,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_timers_due ON alert_timers(resume_at, canceled_at);

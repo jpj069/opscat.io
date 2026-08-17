@@ -21,6 +21,8 @@ const { db } = require('../db');
 const { now, isStr, clampInt } = require('../util');
 const sec = require('../security');
 const incidents = require('../lib/incidents');
+const cases = require('../lib/cases');
+const chain = require('../engine/alert-chain');
 
 const SEVERITY_HINT = 'OpsCat severity is 0-100; >=80 is critical, >=60 major, >=40 minor.';
 
@@ -166,11 +168,11 @@ const TOOLS = [
         ? db.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY opened_at DESC LIMIT ?').all(p.orgId, limit)
         : db.prepare('SELECT * FROM cases WHERE org_id = ? AND status = ? ORDER BY opened_at DESC LIMIT ?')
             .all(p.orgId, a.status, limit);
-      const cases = rows.map((c) => ({
-        id: c.id, label: `C-${1000 + c.id}`, name: c.name, device: c.device,
+      const out = rows.map((c) => ({
+        id: c.id, label: cases.label(c.id), name: c.name, device: c.device,
         severity: c.severity, status: c.status, openedAt: c.opened_at, closedAt: c.closed_at,
       }));
-      return ok({ cases, count: cases.length });
+      return ok({ cases: out, count: out.length });
     },
   },
 
@@ -235,6 +237,61 @@ const TOOLS = [
       // Named separately so an agent does not have to notice a null in a list.
       const gaps = rows.filter((r) => r.configured && !r.user).map((r) => r.name);
       return ok({ at, schedules: rows, gaps });
+    },
+  },
+
+  {
+    name: 'opscat_list_alerts',
+    title: 'List alerts',
+    description: 'On-call alerts — who is being woken, at which escalation step, and whether anyone '
+      + 'has acknowledged. Default: everything still live (active or acknowledged).',
+    scope: READ, role: 'analyst',
+    inputSchema: {
+      status: z.enum(['live', 'active', 'acked', 'exhausted', 'canceled', 'resolved', 'all']).optional(),
+      limit: z.number().optional(),
+    },
+    outputSchema: {
+      alerts: z.array(z.object({
+        id: z.number(), status: z.string(), urgency: z.string(),
+        subject: z.string().nullable(), policy: z.string().nullable(),
+        step: z.number(), round: z.number(), createdAt: z.number(),
+        ackedBy: z.string().nullable(), ackMinutes: z.number().nullable(),
+      })),
+      count: z.number(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: (a, p) => {
+      const filter = a.status || 'live';
+      const limit = Math.min(a.limit || 50, 200);
+      const rows = db.prepare(`SELECT * FROM alerts WHERE org_id = ?
+        AND (? = 'all' OR (? = 'live' AND status IN ('active','acked')) OR status = ?)
+        ORDER BY created_at DESC LIMIT ?`).all(p.orgId, filter, filter, filter, limit);
+      const out = rows.map((r) => chain.view(r)).map((v) => ({
+        id: v.id, status: v.status, urgency: v.urgency,
+        subject: v.subjectLabel, policy: v.policyName,
+        step: v.step, round: v.round, createdAt: v.createdAt,
+        ackedBy: v.ackedBy ? v.ackedBy.name : null, ackMinutes: v.ackMinutes,
+      }));
+      return ok({ alerts: out, count: out.length });
+    },
+  },
+
+  {
+    name: 'opscat_ack_alert',
+    title: 'Acknowledge an alert',
+    description: 'Stop an alert escalating — "I have seen it". Does NOT assign the case to anyone; '
+      + 'owning the work is a separate statement. Refuses an alert that is not active.',
+    scope: WRITE, role: 'analyst',
+    inputSchema: { id: z.number().describe('Alert id.') },
+    outputSchema: { id: z.number(), status: z.string(), acked: z.boolean() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: (a, p) => {
+      const r = chain.ack(p.orgId, a.id, p.user.id, `mcp:${p.clientId}`);
+      // An alert that is already acknowledged is not an error to hide: the agent
+      // is told the state so it can say "somebody got there first".
+      if (r.error) return fail(`${r.error}.`);
+      auditTool(p, 'alert_ack', `alert ${a.id}`);
+      return ok({ id: r.alert.id, status: r.alert.status, acked: true });
     },
   },
   {
@@ -402,18 +459,15 @@ const TOOLS = [
     outputSchema: { id: z.number(), status: z.string(), updated: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     handler: (a, p) => {
-      const c = db.prepare('SELECT * FROM cases WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
-      if (!c) return fail(`No case ${a.id} in this organization.`);
-      db.prepare(`UPDATE cases SET
-          status = COALESCE(?, status),
-          root_cause = COALESCE(?, root_cause),
-          note = COALESCE(?, note),
-          closed_at = CASE WHEN ? = 'closed' AND closed_at IS NULL THEN ? ELSE closed_at END
-        WHERE id = ? AND org_id = ?`)
-        .run(a.status || null, a.rootCause ?? null, a.note ?? null, a.status || null, now(), c.id, p.orgId);
-      auditTool(p, 'case_update', `case ${c.id}`);
-      const after = db.prepare('SELECT status FROM cases WHERE id = ? AND org_id = ?').get(c.id, p.orgId);
-      return ok({ id: c.id, status: after.status, updated: true });
+      // lib/cases is the one mutation path (docs/ONCALL-V1.md §5): closing here
+      // has to stop the alert chain exactly as closing in the UI does, or an
+      // agent tidying up leaves somebody's phone ringing.
+      const after = cases.update(p.orgId, a.id, {
+        status: a.status, rootCause: a.rootCause, note: a.note,
+      });
+      if (!after) return fail(`No case ${a.id} in this organization.`);
+      auditTool(p, 'case_update', `case ${after.id}`);
+      return ok({ id: after.id, status: after.status, updated: true });
     },
   },
 
@@ -441,8 +495,7 @@ const TOOLS = [
       if (a.action === 'finish') {
         db.prepare("UPDATE events SET status = 'finished', finished_at = ?, finished_by = ? WHERE id = ? AND org_id = ?")
           .run(t, p.user.id, e.id, p.orgId);
-        db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
-          .run(t, e.id, p.orgId);
+        cases.closeForEvent(p.orgId, e.id, { at: t });
         opsBus().recordEvent(p.orgId, e.id, p.user.id, 'finish', via.trim());
       } else if (a.action === 'downgrade') {
         const newSev = Math.max(10, e.severity - 25);
@@ -451,8 +504,7 @@ const TOOLS = [
         opsBus().recordEvent(p.orgId, e.id, p.user.id, 'downgrade', `${e.severity} → ${newSev}${via}`);
       } else {
         if (!isStr(a.note, 2000)) return fail('action "note" requires a note.');
-        db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND status != 'closed' AND org_id = ?")
-          .run(a.note, e.id, p.orgId);
+        cases.setNoteForEvent(p.orgId, e.id, a.note);
         opsBus().recordEvent(p.orgId, e.id, p.user.id, 'note', `${a.note}${via}`);
       }
       auditTool(p, `event_${a.action}`, `event ${e.id} ${e.name}@${e.device}`);

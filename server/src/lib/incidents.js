@@ -170,7 +170,14 @@ function setStatus(orgId, userId, id, status, message) {
   })();
   const row = q.byId.get(i.id, orgId);
   emit('incident_status_changed', row, `(${i.status} → ${status})`);
-  if (status === 'resolved' && i.status !== 'resolved') emit('incident_resolved', row);
+  if (status === 'resolved' && i.status !== 'resolved') {
+    emit('incident_resolved', row);
+    // A resolved incident stops alerting about itself. This is the fourth thing
+    // that must happen exactly once here — beside the synthetic events and the
+    // component derivation — and it is why this module became the single
+    // mutation path in the first place (docs/ONCALL-V1.md §5, §8).
+    require('../engine/alert-chain').onSubjectClosed(orgId, 'incident', row.id, 'incident resolved');
+  }
   // published incidents additionally reach the status-page subscribers
   if (row.published) subscribers.notifyIncident(row, 'update', message);
   return row;

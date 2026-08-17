@@ -804,6 +804,132 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_sched_ovr ON schedule_overrides(schedule_id, starts_at, ends_at);
     `);
   },
+  // idx 23 -> version 24: On-Call slice 2, the alert chain (docs/ONCALL-V1.md
+  // §3.3-3.6). Escalation policies, contact methods, the alerts themselves and
+  // the durable timers that drive them — plus four columns on existing tables.
+  // The CREATE TABLE blocks mirror schema.sql exactly; the ALTERs are what a
+  // fresh install gets from the table definitions there.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS escalation_policies (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                      REFERENCES organizations(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        repeat_n      INTEGER NOT NULL DEFAULT 0,
+        high_min      INTEGER NOT NULL DEFAULT 80,
+        hours_json    TEXT,
+        created_at    INTEGER NOT NULL,
+        UNIQUE (org_id, name)
+      );
+      CREATE TABLE IF NOT EXISTS escalation_steps (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        policy_id     INTEGER NOT NULL REFERENCES escalation_policies(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL,
+        timeout_m     INTEGER NOT NULL DEFAULT 5,
+        UNIQUE (policy_id, position)
+      );
+      CREATE TABLE IF NOT EXISTS escalation_targets (
+        step_id       INTEGER NOT NULL REFERENCES escalation_steps(id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL CHECK (kind IN ('user','schedule','team')),
+        ref_id        TEXT NOT NULL,
+        PRIMARY KEY (step_id, kind, ref_id)
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS contact_methods (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL CHECK (kind IN
+                        ('email','sms','voice','push','pushover','ntfy','telegram')),
+        address       TEXT NOT NULL,
+        label         TEXT NOT NULL DEFAULT '',
+        verified_at   INTEGER,
+        created_at    INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_methods_user ON contact_methods(user_id);
+      CREATE TABLE IF NOT EXISTS notification_rules (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        urgency       TEXT NOT NULL CHECK (urgency IN ('high','low')),
+        delay_m       INTEGER NOT NULL DEFAULT 0,
+        method_id     INTEGER NOT NULL REFERENCES contact_methods(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_notif_rules_user ON notification_rules(user_id, urgency, delay_m);
+      CREATE TABLE IF NOT EXISTS alerts (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id        TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001'
+                      REFERENCES organizations(id) ON DELETE CASCADE,
+        subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('case','incident')),
+        subject_id    INTEGER NOT NULL,
+        policy_id     INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL,
+        urgency       TEXT NOT NULL CHECK (urgency IN ('high','low')),
+        status        TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('active','acked','resolved','exhausted','canceled')),
+        step_position INTEGER NOT NULL DEFAULT 0,
+        round         INTEGER NOT NULL DEFAULT 0,
+        source        TEXT NOT NULL,
+        message       TEXT,
+        created_at    INTEGER NOT NULL,
+        acked_at      INTEGER,
+        acked_by      TEXT REFERENCES users(id),
+        ended_at      INTEGER,
+        end_reason    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_alerts_subject ON alerts(subject_kind, subject_id);
+      CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(org_id, status);
+      CREATE TABLE IF NOT EXISTS alert_attempts (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        step_position INTEGER NOT NULL,
+        round         INTEGER NOT NULL,
+        via           TEXT NOT NULL,
+        notified_at   INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_alert_attempts ON alert_attempts(alert_id);
+      CREATE TABLE IF NOT EXISTS alert_tokens (
+        token_hash    TEXT PRIMARY KEY,
+        alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purpose       TEXT NOT NULL CHECK (purpose IN ('ack','resolve')),
+        expires_at    INTEGER NOT NULL,
+        used_at       INTEGER
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS alert_timers (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id      INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL,
+        ref           TEXT,
+        step_position INTEGER NOT NULL DEFAULT 0,
+        round         INTEGER NOT NULL DEFAULT 0,
+        resume_at     INTEGER NOT NULL,
+        claimed_at    INTEGER,
+        canceled_at   INTEGER,
+        created_at    INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_alert_timers_due ON alert_timers(resume_at, canceled_at);
+    `);
+    // The four columns on existing tables. `target_type` carries no CHECK: SQLite
+    // cannot add one by ALTER, and rebuilding alert_rules a second time to gain a
+    // two-value constraint would cost more than validating it where it is written.
+    addColumn('cases', 'acked_at', 'INTEGER');
+    addColumn('cases', 'acked_by', 'TEXT REFERENCES users(id)');
+    addColumn('alert_rules', 'target_type', "TEXT NOT NULL DEFAULT 'channel'");
+    addColumn('alert_rules', 'policy_id', 'INTEGER REFERENCES escalation_policies(id) ON DELETE SET NULL');
+    addColumn('notifications', 'alert_id', 'INTEGER');
+    addColumn('users', 'timezone', 'TEXT');
+  },
+  // idx 24 -> version 25: On-Call slice 3, the loud channels. Everything here is
+  // a column on a table migration 24 created — the loud channels needed no new
+  // object, only the two things that make a phone number safe to hold (encrypted
+  // at rest, proven to belong to its owner) and the one thing that makes a
+  // metered channel accountable (what it cost).
+  () => {
+    addColumn('contact_methods', 'encrypted', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('contact_methods', 'verify_hash', 'TEXT');
+    addColumn('contact_methods', 'verify_expires_at', 'INTEGER');
+    addColumn('contact_methods', 'verify_tries', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('notifications', 'cost_micros', 'INTEGER');
+  },
 ];
 // Foreign keys are off while migrating so table rebuilds (drop + rename) do not
 // cascade into referencing tables (e.g. notifications.rule_id ON DELETE SET NULL);

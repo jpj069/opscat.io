@@ -28,6 +28,8 @@ app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 // BEFORE public.js: a status page on its own verified domain answers at that
 // host's root, and public.js owns `/` for the marketing site.
 app.use(require('./routes/status'));
+app.use(require('./routes/ack'));      // /a/:token — acknowledge from a phone, no session
+app.use(require('./routes/voice'));    // /v/:token/* — the provider's call flow + DTMF ack
 app.use(require('./routes/public'));
 
 // open ingest surface (API-key / agent-token / probe-key auth)
@@ -137,6 +139,7 @@ require('./engine/reports').start();
 require('./engine/retention').start();
 require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
 require('./engine/oncall').start();        // on-call gap watch (docs/ONCALL-V1.md)
+require('./engine/alert-chain').start();   // escalation clock — sweeps timers due while we were down
 require('./engine/bridge-insights').start(); // Bridge AI analyzer (docs/BRIDGE.md phase 3)
 
 app.listen(config.port, () => {

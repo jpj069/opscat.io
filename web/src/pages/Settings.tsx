@@ -16,6 +16,7 @@ import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
+  TelephonyConfig,
 } from '../types';
 import {
   CheckIcon,
@@ -304,6 +305,7 @@ function NotificationsTab({ d, isAdmin, canEdit }:
         )}
       </Card>
 
+      {isAdmin && <TelephonyCard />}
       {isAdmin && <SaveBar d={d} />}
       <MaintenanceCard canEdit={canEdit} />
     </>
@@ -508,6 +510,131 @@ interface AiStatus {
 
 // Org-level LLM override (OpenAI-compatible endpoint). The platform default —
 // set by the super-admin — applies when these fields stay empty.
+// ------------------------------------------------------------- SMS / voice
+/**
+ * The telephony provider for On-Call (docs/ONCALL-V1.md §13.2).
+ *
+ * Deliberately an ADAPTER rather than one vendor: which provider OpsCat runs
+ * itself is undecided, and a self-hoster with a GSM modem uses `webhook` and
+ * waits for nobody. The credential is stored encrypted and never returned — the
+ * same contract the AI and Voice cards use.
+ */
+function TelephonyCard() {
+  const [cfg, setCfg] = useState<TelephonyConfig | null>(null);
+  const [provider, setProvider] = useState<TelephonyConfig['provider']>('');
+  const [account, setAccount] = useState('');
+  const [from, setFrom] = useState('');
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [secret, setSecret] = useState('');      // write-only; never echoed back
+  const [priceSms, setPriceSms] = useState('0');
+  const [priceVoice, setPriceVoice] = useState('0');
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () => api.get<TelephonyConfig>('/api/admin/telephony').then((c) => {
+    setCfg(c); setProvider(c.provider); setAccount(c.account); setFrom(c.from);
+    setWebhookUrl(c.webhookUrl);
+    setPriceSms(String(c.priceSmsMicros || 0)); setPriceVoice(String(c.priceVoiceMicros || 0));
+  }).catch(() => setCfg(null));
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Record<string, unknown> = {
+        provider, account, from, webhookUrl,
+        priceSmsMicros: Number(priceSms) || 0, priceVoiceMicros: Number(priceVoice) || 0,
+      };
+      if (secret) body.secret = secret;
+      await api.put('/api/admin/telephony', body);
+      setSecret(''); setDirty(false); setMsg({ ok: true, text: 'saved' });
+      load();
+    } catch (ex) { setMsg({ ok: false, text: ex instanceof ApiError ? ex.message : 'network error' }); }
+    finally { setBusy(false); }
+  };
+
+  const touch = <T,>(set: (v: T) => void) => (v: T) => { set(v); setDirty(true); };
+
+  return (
+    <Card title="SMS &amp; voice (On-Call)">
+      <CardNote>The loudest channels, and the only metered ones. Whoever is on call adds
+        their own number under On-Call &rsaquo; My on-call and verifies it by SMS; a number
+        that is not verified is never rung. A voice call speaks the alert and then waits
+        for the key 1, which acknowledges it — without that it would be a robocall.</CardNote>
+      {cfg === null ? <FormSkeleton rows={3} /> : (
+        <>
+          <Row label="Provider">
+            <Select title="Provider" value={provider}
+              onChange={(v) => touch(setProvider)(v as TelephonyConfig['provider'])}
+              options={[
+                { value: '', label: 'None — SMS and voice stay off' },
+                { value: 'twilio', label: 'Twilio' },
+                { value: 'vonage', label: 'Vonage' },
+                { value: 'webhook', label: 'Your own gateway (webhook)' },
+              ]} />
+          </Row>
+          {provider === 'webhook' ? (
+            <Row label="Gateway URL" hint="POSTed {kind, to, text, ackUrl}; answer 2xx when accepted">
+              <HostInput className="mono" value={webhookUrl} placeholder="https://sms-gw.internal/send"
+                onChange={(e) => touch(setWebhookUrl)(e.target.value)} style={{ width: '100%' }} />
+            </Row>
+          ) : provider ? (
+            <>
+              <Row label={provider === 'twilio' ? 'Account SID' : 'API key'}>
+                <Input className="mono" value={account}
+                  placeholder={provider === 'twilio' ? 'AC…' : 'a1b2c3d4'}
+                  onChange={(e) => touch(setAccount)(e.target.value)} style={{ width: '100%' }} />
+              </Row>
+              <Row label={cfg.hasSecret
+                ? (provider === 'twilio' ? 'Auth token (stored)' : 'API secret (stored)')
+                : (provider === 'twilio' ? 'Auth token' : 'API secret')}>
+                <Input type="password" className="mono" value={secret}
+                  placeholder={cfg.hasSecret ? '•••••••• (set — enter to replace)' : ''}
+                  onChange={(e) => touch(setSecret)(e.target.value)} style={{ width: '100%' }} />
+              </Row>
+              <Row label="Send from" hint="The number people see at 03:00. International format.">
+                <HostInput className="mono" value={from} placeholder="+4915112345678"
+                  onChange={(e) => touch(setFrom)(e.target.value)} style={{ width: '100%' }} />
+              </Row>
+            </>
+          ) : null}
+          {provider && (
+            <>
+              {/* Providers differ on when they know a price — Vonage returns one
+                  with the SMS, Twilio only after the call completes. These are
+                  what the delivery log falls back to, so "what did last night
+                  cost" has an answer either way. */}
+              <Row label="Price per SMS" hint="In millionths of your currency — 7500 = 0.0075">
+                <Input type="number" width={140} value={priceSms}
+                  onChange={(e) => touch(setPriceSms)(e.target.value)} />
+              </Row>
+              <Row label="Price per call" hint="Used when the provider reports none at dial time">
+                <Input type="number" width={140} value={priceVoice}
+                  onChange={(e) => touch(setPriceVoice)(e.target.value)} />
+              </Row>
+            </>
+          )}
+          <div className="row row-wrap" style={{ justifyContent: 'space-between', marginTop: 8, gap: 10 }}>
+            <span className="text-xs text-text3">
+              {cfg.configured
+                ? 'Configured — numbers can be verified and rung.'
+                : 'Not configured — SMS and voice contact methods cannot be verified or used.'}
+            </span>
+            <span className="row" style={{ gap: 10 }}>
+              {msg && <span className="text-sm font-semibold" style={{
+                color: msg.ok ? SEV.green : SEV.critical }}>{msg.text}</span>}
+              <Button variant="primary" size="sm" onClick={save} disabled={!dirty || busy}>
+                {busy ? 'Saving…' : 'Save SMS & Voice'}
+              </Button>
+            </span>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function AiCard() {
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [baseUrl, setBaseUrl] = useState('');

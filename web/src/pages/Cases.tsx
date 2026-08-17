@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useTab } from '../state';
 import { api } from '../api';
-import { sevColor, fmtDuration } from '../format';
+import { sevColor, fmtDuration, alertStatusLabel, alertStatusColor, SEV } from '../format';
 import { Card, Button, SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
@@ -12,10 +12,11 @@ type Tab = typeof TABS[number];
 const STATUS_COLORS: Record<CaseRow['status'], string> = {
   open: '#e3b341', assigned: '#388bfd', closed: '#8b949e',
 };
-// Case | Sev | Event | Server | Status | Assignee | Root Cause | Duration.
+// Case | Sev | Event | Server | Status | Alert | Assignee | Root Cause | Duration.
 // Seven of the eight tracks were fixed, so "Event" absorbed the whole window while
 // Root Cause — free text an analyst wrote — stayed at 140px and truncated.
-const COLS = [COL.id, COL.status, COL.text, COL.textWide, COL.status, COL.label, COL.text, COL.age].join(' ');
+const COLS = [COL.id, COL.status, COL.text, COL.textWide, COL.status, COL.status, COL.label,
+  COL.text, COL.age].join(' ');
 
 export default function Cases() {
   const app = useApp();
@@ -45,10 +46,10 @@ export default function Cases() {
         tabs={TABS.map((t) => [t, t === 'all' ? 'All' : `${t[0].toUpperCase()}${t.slice(1)} ${counts[t]}`] as const)} />
 
       <Card style={{ padding: 0 }}>
-        <TableScroll cols={COLS} stickyFirst minWidth={900}>
+        <TableScroll cols={COLS} stickyFirst minWidth={1010}>
         <div className="tbl-head">
           <span>Case</span><span>Sev</span><span>Event</span><span>Server</span>
-          <span>Status</span><span>Assignee</span><span>Root Cause</span>
+          <span>Status</span><span>Alert</span><span>Assignee</span><span>Root Cause</span>
           <span style={{ textAlign: 'right' }}>Duration</span>
         </div>
         {!cases ? (
@@ -67,6 +68,11 @@ export default function Cases() {
             <span className="mono text-sm text-text1" style={{ overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.device}</span>
             <StatusPill text={c.status} color={STATUS_COLORS[c.status]} />
+            {/* "is anybody being woken about this, and did they answer" — the
+                question a handover starts with, next to the case it is about */}
+            {c.alert
+              ? <StatusPill text={alertStatusLabel(c.alert.status)} color={alertStatusColor(c.alert.status)} />
+              : <span className="text-text3">—</span>}
             {c.assigned ? (
               <span className="row" style={{ gap: 6, minWidth: 0 }}>
                 <Avatar i={c.assigned.i} c={c.assigned.c} size={20} />
@@ -100,7 +106,18 @@ function CaseEditor({ c, users, onClose, onSaved }:
   const [note, setNote] = useState(c.note ?? '');
   const [saving, setSaving] = useState(false);
   const [promoting, setPromoting] = useState(false);
+  const [acking, setAcking] = useState(false);
   const canPromote = app.user ? app.user.role !== 'analyst' : false; // lead+
+
+  // "I have seen it, stop ringing." It acknowledges the case AND whatever is
+  // escalating about it, and it deliberately does NOT assign — owning the work
+  // is a separate statement (docs/ONCALL-V1.md §13.4). Spent the moment the case
+  // carries an ack, and the endpoint answers 409 for the same call.
+  const acknowledge = async () => {
+    setAcking(true);
+    try { await api.post(`/api/cases/${c.id}/ack`, {}); onSaved(); }
+    catch { setAcking(false); }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -143,6 +160,23 @@ function CaseEditor({ c, users, onClose, onSaved }:
             title="Open an incident from this case — links the case and its event, prefills title and severity">
             {promoting ? 'Promoting…' : 'Promote to Incident'}
           </Button>
+        )}
+      </div>
+      <div className="row row-wrap" style={{ gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <Button size="sm" disabled={!!c.ackedAt || acking} onClick={acknowledge}
+          title="Stop the escalation. Does not assign the case to you.">
+          {c.ackedAt ? 'Acknowledged' : acking ? 'Acknowledging…' : 'Acknowledge'}
+        </Button>
+        {c.ackedAt && c.ackedBy && (
+          <span className="text-sm text-text3">by {c.ackedBy.n}</span>
+        )}
+        {c.alert && (
+          <StatusPill text={alertStatusLabel(c.alert.status)} color={alertStatusColor(c.alert.status)} />
+        )}
+        {c.alert && c.alert.status === 'active' && (
+          <span className="text-xs" style={{ color: SEV.critical }}>
+            step {c.alert.step + 1} of {c.alert.policyName ?? 'the policy'}
+          </span>
         )}
       </div>
       <Field label="Status">

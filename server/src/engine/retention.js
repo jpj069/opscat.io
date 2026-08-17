@@ -112,6 +112,14 @@ function prune() {
   db.prepare('DELETE FROM vendor_reports WHERE ts < ?').run(t - 30 * 86400000);
   db.prepare("DELETE FROM vendor_days WHERE day < date('now', '-100 days')").run();
   db.prepare('DELETE FROM audit_log WHERE ts < ?').run(t - 180 * 86400000);
+  // On-Call. `alert_attempts` is a record of who was woken at 03:00 — personal
+  // data, not telemetry (docs/ONCALL-V1.md §7) — and it cascades from `alerts`,
+  // so pruning the parent is what actually removes it. Only ENDED alerts age
+  // out: an `active` one is still ringing whatever its age, and a chain that
+  // deleted itself out from under its own timers would leave the timers firing
+  // into nothing. Expired ack tokens go the moment they are useless.
+  db.prepare('DELETE FROM alerts WHERE ended_at IS NOT NULL AND ended_at < ?').run(t - 180 * 86400000);
+  db.prepare('DELETE FROM alert_tokens WHERE expires_at < ?').run(t - 86400000);
   db.prepare('DELETE FROM ingest_stats WHERE bucket < ?').run(t - 400 * 86400000);
 }
 
