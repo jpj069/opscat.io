@@ -61,7 +61,7 @@ const q = {
     VALUES (@room_id, @user_id, @group_id, @connected, @ts, @ts)
     ON CONFLICT(room_id, user_id) DO UPDATE SET group_id = @group_id, connected = @connected, last_seen = @ts`),
   setConnected: db.prepare(`UPDATE bridge_participants SET connected = ?, last_seen = ?,
-    left_at = CASE WHEN ? = 0 THEN ? ELSE NULL END WHERE room_id = ? AND user_id = ?`),
+    left_at = CASE WHEN ? = 0 THEN CAST(? AS BIGINT) ELSE NULL END WHERE room_id = ? AND user_id = ?`),
   getParticipant: db.prepare('SELECT * FROM bridge_participants WHERE room_id = ? AND user_id = ?'),
   insFeed: db.prepare(`INSERT INTO bridge_feed (room_id, group_id, user_id, kind, severity, body, meta, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),

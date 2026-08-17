@@ -110,7 +110,11 @@ function prune() {
     .run(t - 90 * 86400000);
   db.prepare('DELETE FROM status_reports WHERE ts < ?').run(t - 30 * 86400000);
   db.prepare('DELETE FROM vendor_reports WHERE ts < ?').run(t - 30 * 86400000);
-  db.prepare("DELETE FROM vendor_days WHERE day < date('now', '-100 days')").run();
+  // `date('now', '-100 days')` was a SQLite function with no Postgres twin, and
+  // it also made the cutoff untestable — `now` is whatever the database thinks.
+  // Computed here and bound, it is portable and pinnable.
+  const cutoff = new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10);
+  db.prepare('DELETE FROM vendor_days WHERE day < ?').run(cutoff);
   db.prepare('DELETE FROM audit_log WHERE ts < ?').run(t - 180 * 86400000);
   // On-Call. `alert_attempts` is a record of who was woken at 03:00 — personal
   // data, not telemetry (docs/ONCALL-V1.md §7) — and it cascades from `alerts`,

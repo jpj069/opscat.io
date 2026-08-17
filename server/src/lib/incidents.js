@@ -30,8 +30,8 @@ const q = {
   comps: db.prepare(`SELECT ic.component_id AS id, ic.impact, c.name FROM incident_components ic
     JOIN components c ON c.id = ic.component_id WHERE ic.incident_id = ? ORDER BY c.sort, c.id`),
   links: db.prepare('SELECT kind, ref_id, created_at FROM incident_links WHERE incident_id = ? ORDER BY created_at, ref_id'),
-  insLink: db.prepare(`INSERT OR IGNORE INTO incident_links (incident_id, kind, ref_id, created_at)
-    VALUES (?, ?, ?, ?)`),
+  insLink: db.prepare(`INSERT INTO incident_links (incident_id, kind, ref_id, created_at)
+    VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`),
   delComps: db.prepare('DELETE FROM incident_components WHERE incident_id = ?'),
   insComp: db.prepare(`INSERT INTO incident_components (incident_id, component_id, impact) VALUES (?, ?, ?)
     ON CONFLICT(incident_id, component_id) DO UPDATE SET impact = excluded.impact`),

@@ -19,6 +19,10 @@ services:
     expose:
       - "3000"
     environment:
+      # Unused until Phase 5 wires the adapter. Listed now because compose passes
+      # ONLY whitelisted variables — the precedent is OPSCAT_GRID_PUBLISHED,
+      # which worked under `npm start` and was silently unset in Docker.
+      - DATABASE_URL=${DATABASE_URL:-}
       - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
       - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
       - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
@@ -65,6 +69,46 @@ services:
       - OPSCAT_LIVEKIT_API_SECRET=${OPSCAT_LIVEKIT_API_SECRET:-}
     volumes:
       - opscat_data:/data
+    restart: always
+
+  # PostgreSQL — the target of docs/POSTGRES-MIGRATION-PLAN.md.
+  #
+  # It runs NOW, before anything queries it, and that is deliberate. The adapter
+  # (Phase 5) cannot be written against a database that does not exist, and the
+  # plan's highest-value test — PREPARE every one of the ~700 statements against
+  # an empty schema — needs nothing except a reachable Postgres. Standing this up
+  # early is free: an unused container changes no behaviour and reverts in one PR.
+  #
+  # `mem_limit` is not optional on this host. It has 3.7 GB and NO SWAP (see the
+  # plan § 0a), so an unbounded Postgres and an OOM-killed app are the same event.
+  db:
+    image: postgres:16-alpine
+    # OPT-IN, and that is the safety property. A profiled service is not started
+    # by a plain `docker compose up`, so the production deploy — which runs
+    # exactly that over SSH — is untouched by this file existing. Start it with
+    #   docker compose --profile postgres up -d db
+    profiles: [postgres]
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-opscat}
+      - POSTGRES_USER=${POSTGRES_USER:-opscat}
+      # Empty default ON PURPOSE, and it is subtle: compose interpolates the
+      # entire file even for a service it will not start, so `${VAR:?...}` here
+      # would abort `docker compose up` in production over a container nobody
+      # asked for. Left empty, postgres itself refuses to start — the honest
+      # failure, and only for whoever opted into the profile.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+    volumes:
+      - opscat_pgdata:/var/lib/postgresql/data
+    # `pg_isready` is what `depends_on: service_healthy` waits for. Without it
+    # the app starts against a socket that is not listening yet, `restart: always`
+    # restarts it, and a crash-loop reads as a slow start.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opscat} -d ${POSTGRES_DB:-opscat}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    mem_limit: 1g
     restart: always
 
   # Recursive resolver for blocklist lookups only. Not published to any host
@@ -131,6 +175,7 @@ services:
     restart: always
 
 volumes:
+  opscat_pgdata:
   opscat_data:
   caddy_data:
   caddy_config:

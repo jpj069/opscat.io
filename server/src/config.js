@@ -11,6 +11,11 @@ module.exports = {
   port: int(process.env.PORT, 3000),
   dataDir,
   dbFile: path.join(dataDir, 'opscat.db'),
+  // PostgreSQL connection string. Read but not yet USED — the adapter arrives in
+  // Phase 5 of docs/POSTGRES-MIGRATION-PLAN.md. It is declared now so the value
+  // has one home from the start, and so the compose whitelists that must carry
+  // it are written and reviewed before anything depends on them.
+  databaseUrl: process.env.DATABASE_URL || null,
   publicDir: process.env.OPSCAT_PUBLIC_DIR || path.join(__dirname, '..', 'public'),
   wwwDir: process.env.OPSCAT_WWW_DIR || path.join(__dirname, '..', 'public-www'),
   // host that serves the public vendor-status grid at / (see routes/public.js);

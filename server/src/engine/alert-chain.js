@@ -58,7 +58,7 @@ const q = {
   liveForSubject: db.prepare(`SELECT * FROM alerts
     WHERE org_id = ? AND subject_kind = ? AND subject_id = ? AND status IN ('active','acked')`),
   samePolicy: db.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = ? AND subject_id = ?
-    AND status IN ('active','acked') AND IFNULL(policy_id, -1) = IFNULL(?, -1) LIMIT 1`),
+    AND status IN ('active','acked') AND COALESCE(policy_id, -1) = COALESCE(?, -1) LIMIT 1`),
   insAlert: db.prepare(`INSERT INTO alerts
     (org_id, subject_kind, subject_id, policy_id, urgency, status, step_position, round,
      source, message, created_at)

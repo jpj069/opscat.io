@@ -115,23 +115,23 @@ const bumpEvent = db.prepare(`UPDATE events SET hits = hits + 1, last_seen = ?,
   severity = CASE WHEN ? > severity THEN ? ELSE severity END,
   description = ? WHERE id = ?`);
 const bumpBucket = db.prepare(`INSERT INTO event_buckets (event_id, bucket, count) VALUES (?, ?, 1)
-  ON CONFLICT(event_id, bucket) DO UPDATE SET count = count + 1`);
+  ON CONFLICT(event_id, bucket) DO UPDATE SET count = event_buckets.count + 1`);
 const insCase = db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
   VALUES (?, ?, ?, ?, ?, 'open', ?)`);
 const findOpenCaseForEvent = db.prepare(
   "SELECT id FROM cases WHERE event_id = ? AND status != 'closed'");
 const bumpStats = db.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, bytes, events)
   VALUES (?, ?, ?, ?, ?)
-  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = lines + excluded.lines,
-    bytes = bytes + excluded.bytes, events = events + excluded.events`);
+  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = ingest_stats.lines + excluded.lines,
+    bytes = ingest_stats.bytes + excluded.bytes, events = ingest_stats.events + excluded.events`);
 // Second counter, one minute wide. It exists because an hourly average is not a
 // peak: a 30s burst of 5k lines/s shows up as ~42 lines/s once divided over its
 // hour, and that is the number someone would size the ingest on. Pruned to 48h
 // (retention.js) — 1440 rows per org per day.
 const bumpMinutes = db.prepare(`INSERT INTO ingest_minutes (org_id, bucket, lines, bytes)
   VALUES (?, ?, ?, ?)
-  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = lines + excluded.lines,
-    bytes = bytes + excluded.bytes`);
+  ON CONFLICT(org_id, bucket) DO UPDATE SET lines = ingest_minutes.lines + excluded.lines,
+    bytes = ingest_minutes.bytes + excluded.bytes`);
 const hourBucket = (t) => Math.floor(t / 3600000) * 3600000;
 const minuteBucket = (t) => Math.floor(t / 60000) * 60000;
 

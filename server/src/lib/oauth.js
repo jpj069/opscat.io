@@ -46,7 +46,7 @@ const delTokensForClientUser = db.prepare(
 const listTokensForUser = db.prepare(`SELECT client_id, org_id, scopes, MAX(created_at) created_at,
   MAX(last_used_at) last_used_at, COUNT(*) n
   FROM oauth_tokens WHERE user_id = ? AND kind = 'access' AND expires_at > ?
-  GROUP BY client_id, org_id`);
+  GROUP BY client_id, org_id, scopes`);
 
 // ── clients ────────────────────────────────────────────────────────────────
 
