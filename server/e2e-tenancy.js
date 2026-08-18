@@ -44,7 +44,12 @@ process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
 require('./src/index.js'); // boots the app on :3153
 
-const { db } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const pages = require('./src/lib/status-pages');
 
@@ -59,18 +64,21 @@ async function waitForServer() {
   return false;
 }
 
-const mkOrg = (name, slug) => {
+const mkOrg = async (name, slug) => {
   const id = newId();
-  db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+  await q.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
     VALUES (?, ?, ?, 'enterprise', 'active', ?)`).run(id, name, slug, now());
   return id;
 };
-const mkCheck = (orgId, target) => db.prepare(`INSERT INTO synthetic_checks
+// `.insert()` rather than lastInsertRowid: the shim refuses that one, because
+// node-postgres has no such field and `undefined` in a foreign key is a NULL
+// nobody notices until a join comes back empty.
+const mkCheck = (orgId, target) => q.prepare(`INSERT INTO synthetic_checks
   (org_id, type, target, interval_s, timeout_ms, enabled, created_at)
-  VALUES (?, 'http', ?, 60, 5000, 1, ?)`).run(orgId, target, now()).lastInsertRowid;
-const mkComponent = (orgId, name) => db.prepare(`INSERT INTO components
+  VALUES (?, 'http', ?, 60, 5000, 1, ?)`).insert(orgId, target, now());
+const mkComponent = (orgId, name) => q.prepare(`INSERT INTO components
   (org_id, name, grp, status, sort, created_at) VALUES (?, ?, 'Core', 'operational', 0, ?)`)
-  .run(orgId, name, now()).lastInsertRowid;
+  .insert(orgId, name, now());
 
 async function main() {
   chk('server boots and answers /api/health', await waitForServer());
@@ -80,28 +88,31 @@ async function main() {
   // DIFFERENT location, plus one pinned nowhere. A probe authenticating as
   // location A must see its own pinned check and the unpinned ones — and must
   // NOT see the check pinned to location B, whichever org owns it.
-  const acme = mkOrg('Acme', 'acme-tenancy');
-  const globex = mkOrg('Globex', 'globex-tenancy');
+  const acme = await mkOrg('Acme', 'acme-tenancy');
+  const globex = await mkOrg('Globex', 'globex-tenancy');
 
-  const mkLoc = (label) => {
+  const mkLoc = async (label) => {
     const key = crypto.randomBytes(16).toString('hex');
-    const id = db.prepare(`INSERT INTO synthetic_locations
+    const id = await q.prepare(`INSERT INTO synthetic_locations
       (org_id, city, cc, kind, active, probe_key_hash, created_at)
-      VALUES (NULL, ?, 'DE', 'managed', 1, ?, ?)`).run(label, sha256(key), now()).lastInsertRowid;
+      VALUES (NULL, ?, 'DE', 'managed', 1, ?, ?)`).insert(label, sha256(key), now());
     return { id, key };
   };
-  const locA = mkLoc('Frankfurt');
-  const locB = mkLoc('Berlin');
+  const locA = await mkLoc('Frankfurt');
+  const locB = await mkLoc('Berlin');
 
-  const grant = db.prepare(`INSERT INTO org_location_access (org_id, location_id, source, created_at)
+  const grant = q.prepare(`INSERT INTO org_location_access (org_id, location_id, source, created_at)
     VALUES (?, ?, 'plan', ?) ON CONFLICT DO NOTHING`);
-  for (const o of [acme, globex]) { grant.run(o, locA.id, now()); grant.run(o, locB.id, now()); }
+  for (const o of [acme, globex]) {
+    await grant.run(o, locA.id, now());
+    await grant.run(o, locB.id, now());
+  }
 
-  const pin = db.prepare('INSERT INTO check_locations (check_id, location_id) VALUES (?, ?)');
-  const acmeOnA = mkCheck(acme, 'https://acme.test/on-a'); pin.run(acmeOnA, locA.id);
-  const acmeOnB = mkCheck(acme, 'https://acme.test/on-b'); pin.run(acmeOnB, locB.id);
-  const globexOnB = mkCheck(globex, 'https://globex.test/on-b'); pin.run(globexOnB, locB.id);
-  const acmeAnywhere = mkCheck(acme, 'https://acme.test/anywhere');
+  const pin = q.prepare('INSERT INTO check_locations (check_id, location_id) VALUES (?, ?)');
+  const acmeOnA = await mkCheck(acme, 'https://acme.test/on-a'); await pin.run(acmeOnA, locA.id);
+  const acmeOnB = await mkCheck(acme, 'https://acme.test/on-b'); await pin.run(acmeOnB, locB.id);
+  const globexOnB = await mkCheck(globex, 'https://globex.test/on-b'); await pin.run(globexOnB, locB.id);
+  const acmeAnywhere = await mkCheck(acme, 'https://acme.test/anywhere');
 
   const workList = async (key) => (await (await fetch(`${BASE}/v1/synthetics/checks`,
     { headers: { authorization: `Bearer ${key}` } })).json());
@@ -121,25 +132,25 @@ async function main() {
   chk('…and not the one pinned to the first location', !idsB.has(acmeOnA), [...idsB].join(','));
 
   // ── 2. a status page publishes only the incidents its components touch ─────
-  const compShown = mkComponent(DEFAULT_ORG_ID, 'Shown Component');
-  const compHidden = mkComponent(DEFAULT_ORG_ID, 'Hidden Component');
+  const compShown = await mkComponent(DEFAULT_ORG_ID, 'Shown Component');
+  const compHidden = await mkComponent(DEFAULT_ORG_ID, 'Hidden Component');
 
-  const mkIncident = (title, comps) => {
-    const id = db.prepare(`INSERT INTO incidents (org_id, title, status, published, started_at)
-      VALUES (?, ?, 'investigating', 1, ?)`).run(DEFAULT_ORG_ID, title, now()).lastInsertRowid;
+  const mkIncident = async (title, comps) => {
+    const id = await q.prepare(`INSERT INTO incidents (org_id, title, status, published, started_at)
+      VALUES (?, ?, 'investigating', 1, ?)`).insert(DEFAULT_ORG_ID, title, now());
     for (const c of comps) {
-      db.prepare('INSERT INTO incident_components (incident_id, component_id) VALUES (?, ?)').run(id, c);
+      await q.prepare('INSERT INTO incident_components (incident_id, component_id) VALUES (?, ?)').run(id, c);
     }
     return id;
   };
-  const incShown = mkIncident('Touches the shown component', [compShown]);
-  const incHidden = mkIncident('Touches only the hidden component', [compHidden]);
-  const incAnnounce = mkIncident('Linked to nothing — an announcement', []);
+  const incShown = await mkIncident('Touches the shown component', [compShown]);
+  const incHidden = await mkIncident('Touches only the hidden component', [compHidden]);
+  const incAnnounce = await mkIncident('Linked to nothing — an announcement', []);
 
   // a page restricted to ONE component
-  const pageId = db.prepare(`INSERT INTO status_pages (org_id, slug, name, published, created_at)
-    VALUES (?, 'tenancy-page', 'Tenancy Page', 1, ?)`).run(DEFAULT_ORG_ID, now()).lastInsertRowid;
-  db.prepare('INSERT INTO status_page_components (page_id, component_id) VALUES (?, ?) ON CONFLICT DO NOTHING')
+  const pageId = await q.prepare(`INSERT INTO status_pages (org_id, slug, name, published, created_at)
+    VALUES (?, 'tenancy-page', 'Tenancy Page', 1, ?)`).insert(DEFAULT_ORG_ID, now());
+  await q.prepare('INSERT INTO status_page_components (page_id, component_id) VALUES (?, ?) ON CONFLICT DO NOTHING')
     .run(pageId, compShown);
 
   const html = await (await fetch(`${BASE}/status/tenancy-page`)).text();
@@ -155,13 +166,24 @@ async function main() {
   // ── 3. only the pages whose components intersect get told ──────────────────
   // This is the subscriber fan-out. `pagesForIncidentComponents` decides who is
   // mailed, so a predicate that keeps everything mails everyone.
-  const forShown = pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compShown]).map((p) => p.id);
-  const forHidden = pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compHidden]).map((p) => p.id);
+  //
+  // The org's DEFAULT page is asked for rather than assumed. It is the
+  // unrestricted page the last check needs, and on SQLite it came for free — as
+  // an artefact of migration v18's backfill, which runs against the org
+  // migration 2 created. A Postgres database is built fresh from schema.sql at
+  // v-latest with no migration ladder, so nothing backfills it and the org has
+  // no default page until something asks. `defaultPage()` is the product's own
+  // lazy create — the invariant "an org has a default page" holds by
+  // construction there, not by migration — so asking for it is what the app
+  // does and what this harness should have done all along.
+  await pages.defaultPage(DEFAULT_ORG_ID);
+  const forShown = (await pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compShown])).map((p) => p.id);
+  const forHidden = (await pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compHidden])).map((p) => p.id);
   chk('a page is selected for an incident on its own component', forShown.includes(pageId), forShown.join(','));
   chk('…and NOT for one on a component it does not carry (the mail fan-out)',
     !forHidden.includes(pageId), 'WOULD MAIL A PAGE THAT DOES NOT SHOW THE INCIDENT');
   chk('…while an unrestricted page is selected either way',
-    pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compHidden]).length >= 1,
+    (await pages.pagesForIncidentComponents(DEFAULT_ORG_ID, [compHidden])).length >= 1,
     'the default page should still match');
 
   report();

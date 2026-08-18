@@ -78,16 +78,16 @@ function statusFor(orgId) {
   };
 }
 
-function save(orgId, patch) {
-  if (patch.provider !== undefined) setOrgSetting(orgId, KEYS.provider, PROVIDERS.includes(patch.provider) ? patch.provider : '');
-  if (patch.account !== undefined) setOrgSetting(orgId, KEYS.sid, String(patch.account).slice(0, 200));
-  if (patch.from !== undefined) setOrgSetting(orgId, KEYS.from, String(patch.from).slice(0, 32));
-  if (patch.webhookUrl !== undefined) setOrgSetting(orgId, KEYS.webhookUrl, String(patch.webhookUrl).slice(0, 500));
-  if (patch.priceSmsMicros !== undefined) setOrgSetting(orgId, KEYS.priceSms, String(Math.max(0, parseInt(patch.priceSmsMicros, 10) || 0)));
-  if (patch.priceVoiceMicros !== undefined) setOrgSetting(orgId, KEYS.priceVoice, String(Math.max(0, parseInt(patch.priceVoiceMicros, 10) || 0)));
+async function save(orgId, patch) {
+  if (patch.provider !== undefined) await setOrgSetting(orgId, KEYS.provider, PROVIDERS.includes(patch.provider) ? patch.provider : '');
+  if (patch.account !== undefined) await setOrgSetting(orgId, KEYS.sid, String(patch.account).slice(0, 200));
+  if (patch.from !== undefined) await setOrgSetting(orgId, KEYS.from, String(patch.from).slice(0, 32));
+  if (patch.webhookUrl !== undefined) await setOrgSetting(orgId, KEYS.webhookUrl, String(patch.webhookUrl).slice(0, 500));
+  if (patch.priceSmsMicros !== undefined) await setOrgSetting(orgId, KEYS.priceSms, String(Math.max(0, parseInt(patch.priceSmsMicros, 10) || 0)));
+  if (patch.priceVoiceMicros !== undefined) await setOrgSetting(orgId, KEYS.priceVoice, String(Math.max(0, parseInt(patch.priceVoiceMicros, 10) || 0)));
   // '' clears the stored secret; anything else replaces it. It is never read back.
   if (patch.secret !== undefined) {
-    setOrgSetting(orgId, KEYS.secretEnc, patch.secret ? encrypt(String(patch.secret), config.secret) : '');
+    await setOrgSetting(orgId, KEYS.secretEnc, patch.secret ? encrypt(String(patch.secret), config.secret) : '');
   }
 }
 

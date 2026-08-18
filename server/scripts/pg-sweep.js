@@ -23,10 +23,10 @@
  *
  * ── How statements are collected ─────────────────────────────────────────────
  *
- * By REQUIRING the app with `db.prepare` intercepted, not by grepping. Module-
- * scope statements — 121+ of them — are prepared at require time, so simply
- * loading every module under `src/` hands over their exact SQL, including the
- * ones built by template interpolation at module load. Statements prepared
+ * By REQUIRING the app with the shim's `prepare` intercepted, not by grepping.
+ * Module-scope statements — 121+ of them — are declared at require time, so
+ * simply loading every module under `src/` hands over their exact SQL, including
+ * the ones built by template interpolation at module load. Statements prepared
  * inside a request handler are reported as uncovered rather than guessed at:
  * this script says what it did NOT see, because a sweep that quietly skips half
  * the corpus is worse than no sweep.
@@ -34,9 +34,7 @@
  *   node scripts/pg-sweep.js "postgres://…"     (exit 1 on any failure)
  */
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const Database = require('better-sqlite3');
 
 const URL = process.argv[2] || process.env.DATABASE_URL;
 if (!URL) { console.error('usage: node scripts/pg-sweep.js <postgres-url> [--corpus file]'); process.exit(2); }
@@ -46,29 +44,56 @@ const CORPUS = (() => {
 })();
 
 // ── 1. collect every statement the app prepares at load time ────────────────
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-sweep-'));
-process.env.OPSCAT_DATA_DIR = tmp;
+// The shim connects at require time, so the URL under sweep is the one the app
+// modules will hold — which is also what makes `walk()` below safe to run.
+process.env.DATABASE_URL = URL;
 process.env.OPSCAT_SECRET = 'sweep';
 process.env.PORT = '0';
 
 const seen = new Map(); // sql -> "file:line" that prepared it
-const origPrepare = Database.prototype.prepare;
 // Attribution comes from the STACK, not from which file we happened to be
 // requiring: `require` is cached, so a module pulled in transitively would
 // otherwise be blamed on whoever triggered the first require. The frame we want
 // is the first one inside src/ that is not this script.
 function callSite() {
-  const st = new Error().stack.split('\n').slice(2);
-  for (const line of st) {
-    const m = /\((.*?\/src\/[^:]+):(\d+):\d+\)/.exec(line) || /at (.*?\/src\/[^:]+):(\d+):\d+/.exec(line);
-    if (m) return path.relative(path.join(__dirname, '..'), m[1]) + ':' + m[2];
-  }
-  return '(unknown)';
+  // The rule lives in sql-site.js: the recorder preload needs the identical one,
+  // and two answers to "where is the bad SQL" is worse than one wrong answer.
+  // It skips src/db/* — the shim is plumbing, not the author of a statement, and
+  // once Phase 4 routes ~700 call sites through it every statement would
+  // otherwise be attributed to that one file.
+  return require('./sql-site').callSite(3) || '(unknown)';
 }
-Database.prototype.prepare = function (sql) {
+
+/* The shim's prepare, intercepted — and hooking it at THIS level is not
+ * incidental.
+ *
+ * `q.prepare(sql)` is LAZY: it holds the text and touches the driver only when a
+ * call executes, and by then the work happens inside a promise callback where
+ * the caller's stack frames are gone — sql-site.js would find no application
+ * frame, return null, and the statement would be DROPPED from the corpus.
+ *
+ * Measured while Phase 4 was in flight: after four route files converted, a
+ * sweep hooked at the driver went from 448 statements to 240 and still printed
+ * "all of them PREPARE cleanly". That is the worst possible failure for this
+ * tool — coverage halved, in the direction of green, with the count the only
+ * evidence.
+ *
+ * prepare() is the right level: it is synchronous, it happens at module scope
+ * where the caller's frame is real, and it is the exact text the shim sends.
+ */
+const shim = require('../src/db/shim');
+const origShimPrepare = shim.prepare;
+shim.prepare = function (sql) {
   if (typeof sql === 'string' && !seen.has(sql)) seen.set(sql, callSite());
-  return origPrepare.call(this, sql);
+  return origShimPrepare.call(this, sql);
 };
+for (const fn of ['get', 'all', 'run']) {
+  const orig = shim[fn];
+  shim[fn] = function (sql, ...args) {
+    if (typeof sql === 'string' && !seen.has(sql)) seen.set(sql, callSite());
+    return orig.call(this, sql, ...args);
+  };
+}
 
 const SRC = path.join(__dirname, '..', 'src');
 function walk(dir) {
@@ -80,9 +105,8 @@ function walk(dir) {
     }
   }
 }
-require(path.join(SRC, 'db.js'));   // schema + migrations first
+require(path.join(SRC, 'db.js'));
 walk(SRC);
-Database.prototype.prepare = origPrepare;
 
 // Statements the harnesses caused the app to prepare inside request handlers,
 // recorded by scripts/sql-record.js. Module-load collection cannot see these —
@@ -100,31 +124,17 @@ if (CORPUS && fs.existsSync(CORPUS)) {
 }
 
 // ── 2. PREPARE each one against Postgres ────────────────────────────────────
-// `?` → `$n` is the adapter's job (plan claim 2); done here the same way so the
-// sweep tests the statements the adapter will actually send.
-function toDollar(sql) {
-  let n = 0, out = '', q = null;
-  // better-sqlite3 also accepts NAMED parameters (`@room_id`), which
-  // node-postgres does not have at all — the adapter will have to map them, so
-  // the sweep maps them the same way rather than reporting a false parse error.
-  // Same name twice reuses the same $n, which is what a correct adapter must do.
-  const named = new Map();
-  for (let i = 0; i < sql.length; i++) {
-    const c = sql[i];
-    if (q) { if (c === q) q = null; out += c; continue; }
-    if (c === '\'' || c === '"') { q = c; out += c; continue; }
-    if (c === '?') { out += '$' + (++n); continue; }
-    if (c === '@' && /[A-Za-z_]/.test(sql[i + 1] || '')) {
-      const m = /^@([A-Za-z_][A-Za-z0-9_]*)/.exec(sql.slice(i));
-      if (!named.has(m[1])) named.set(m[1], ++n);
-      out += '$' + named.get(m[1]);
-      i += m[0].length - 1;
-      continue;
-    }
-    out += c;
-  }
-  return out;
-}
+// `?` → `$n` is THE ADAPTER'S rewriter, imported rather than reimplemented.
+//
+// This file used to carry its own copy — subtly weaker (it did not skip
+// comments, and it refused nothing) — and it was the copy CI ran. So the sweep
+// was certifying statements in a spelling the adapter would not actually send,
+// which is the "second copy drifts, and the copy that drifts is the one that
+// runs" failure CLAUDE.md names for the classifier preview. Importing it makes
+// this sweep the corpus-level test of the rewriter for free: 680 real
+// statements, parsed by a real PostgreSQL, on every pull request.
+const { rewritePlaceholders } = require('../src/db/pg-sql');
+const toDollar = (sql) => rewritePlaceholders(sql).text;
 
 (async () => {
   const { Client } = require('pg');
@@ -140,34 +150,35 @@ function toDollar(sql) {
     process.exit(2);
   }
 
-  // Two categories are SQLite-only BY DESIGN and are not findings:
-  //   • PRAGMA / sqlite_master — introspection with no Postgres equivalent, used
-  //     by the migration guards;
-  //   • the migrations themselves — the plan's §2 says a fresh Postgres install
-  //     starts at the final shape and db.js's history stays SQLite-only, so
-  //     replaying it against Postgres is not a goal.
-  // Counting them as failures would bury the statements that actually matter.
-  const sqliteOnly = (sql) => /^\s*PRAGMA\b/i.test(sql)
-    || /\bsqlite_master\b/i.test(sql)
-    || /\b_org_map\b|\b_user_map\b/.test(sql);   // migration scratch tables
-
-  // DEFERRED, not ignored. `strftime` has no Postgres equivalent and its
-  // replacement `to_timestamp()` renders in the SESSION TimeZone — translating it
-  // is Phase 5 work with a real decision attached (the UTC pin), not a rename.
-  // Listing them keeps the sweep GREEN and therefore READ; a permanently red
-  // check is a check nobody looks at. Every deferral prints on every run, so the
-  // list cannot quietly grow.
-  const DEFERRED = [
-    { match: /\bstrftime\s*\(/i,
-      why: 'strftime → to_timestamp(...) AT TIME ZONE \'UTC\' (Phase 5; the timezone pin is the decision, and e2e-pipeline already fails if a day bucket shifts)' },
-  ];
+  /* There is no skip category left, and that is a change worth naming.
+   *
+   * The sweep used to excuse two: `PRAGMA`/`sqlite_master` introspection, and
+   * everything prepared by `src/db.js`, whose 25-step migration ladder was
+   * SQLite-only by design. Both went with SQLite (D6). `db.js` now holds six
+   * ordinary statements — the settings cache and the membership lookups — and
+   * they are swept like any others, which they always should have been.
+   */
+  // DEFERRED, not ignored: a statement listed here is one we know is not portable
+  // yet and have decided to carry, printed on every run so the list cannot
+  // quietly grow. Listing keeps the sweep GREEN and therefore READ; a
+  // permanently red check is a check nobody looks at.
+  //
+  // It is EMPTY, and that is the point. The one entry it ever held was
+  // `strftime`, deferred because its replacement renders in the SESSION
+  // TimeZone and pinning that to UTC was a decision rather than a rename. The
+  // decision got made — the three analytics charts bucket arithmetically now
+  // (util.js `utcDaySql`), so neither engine has an opinion about what a day is
+  // — and the entry came out with it. Deliberately: leaving the matcher behind
+  // would DEFER a reintroduced strftime instead of failing it, and now that a
+  // portable alternative exists in the codebase, reintroducing it should be a
+  // hard error rather than a line in a list.
+  const DEFERRED = [];
 
   const fails = [];
   const skipped = [];
   const deferred = [];
   let i = 0;
   for (const [sql, where] of seen) {
-    if (sqliteOnly(sql) || /^src\/db\.js:/.test(where)) { skipped.push(sql); continue; }
     // statements prepared by the harnesses themselves are not app code
     if (!/^src\//.test(where)) { skipped.push(sql); continue; }
     const d = DEFERRED.find((x) => x.match.test(sql));
@@ -185,8 +196,36 @@ function toDollar(sql) {
 
   console.log(`collected ${seen.size} statements`
     + (CORPUS ? ` (${seen.size - fromCorpus} at module load, ${fromCorpus} more from the harness corpus)` : ' at module load'));
-  console.log(`  ${skipped.length} SQLite-only by design (PRAGMA / sqlite_master / migrations) — not swept`);
-  console.log(`  ${seen.size - skipped.length} swept against PostgreSQL`);
+  console.log(`  ${skipped.length} prepared by the harnesses rather than by app code — not swept`);
+  const swept = seen.size - skipped.length;
+  console.log(`  ${swept} swept against PostgreSQL`);
+
+  /* A floor, because this tool's worst failure is shrinking quietly.
+   *
+   * It already happened once. Four route files converted to the storage shim,
+   * whose handle is LAZY — so their statements stopped reaching the hook at
+   * module load, and when they finally executed it was inside a promise callback
+   * with the caller's stack gone, so attribution failed and they were dropped.
+   * The corpus went 448 -> 240 and this script still printed "all of them
+   * PREPARE cleanly". Phase 4 converted every file, so left alone the sweep
+   * would have reduced itself to nothing while staying green the whole way.
+   *
+   * RAISE this number when the corpus grows. Lowering it is a decision that
+   * needs a sentence next to it saying which statements went away and why —
+   * "the number went down" is not that sentence.
+   */
+  // Only when a corpus was supplied, i.e. the full CI configuration. Running
+  // this script bare is a legitimate dev workflow that sees module-scope
+  // statements only, and failing THAT would be the gate crying wolf — which is
+  // how a gate stops being read.
+  const MIN_SWEPT = 430;
+  if (CORPUS && swept < MIN_SWEPT) {
+    console.error(`\nonly ${swept} statements swept, expected at least ${MIN_SWEPT}.`);
+    console.error('The corpus SHRANK. Something stopped being collected — check that new '
+      + 'storage layers are hooked in scripts/sql-record.js and above, and do not lower '
+      + 'MIN_SWEPT to make this pass.');
+    process.exit(1);
+  }
   if (deferred.length) {
     console.log(`\n${deferred.length} deferred to a later phase, on purpose:`);
     for (const d of deferred) console.log(`  ${d.where}\n    ${d.why}`);
@@ -208,6 +247,5 @@ function toDollar(sql) {
   } else {
     console.log('all of them PREPARE cleanly');
   }
-  fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(fails.length ? 1 : 0);
 })();

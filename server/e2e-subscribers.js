@@ -53,15 +53,25 @@ require('./src/index.js');
 
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util'); // boots the app on :3123
 
-const { db } = require('./src/db');
+const { schemaVersion } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const subs = require('./src/lib/subscribers');
 const statusPages = require('./src/lib/status-pages');
-const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);
+const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);   // async since Phase 4
 const inc = require('./src/lib/incidents');
 
 const BASE = 'http://127.0.0.1:3123';
 const mailsTo = (email) => MAILS.filter((m) => (Array.isArray(m.to) ? m.to : [m.to]).includes(email));
-const row = (email) => db.prepare('SELECT * FROM status_subscribers WHERE email = ?').get(email);
+const row = (email) => q.prepare('SELECT * FROM status_subscribers WHERE email = ?').get(email);
+// The check this serves is about the SHAPE of the table.
+const columnsOf = async (t) => (await q.all(
+  "SELECT column_name AS name FROM information_schema.columns "
+  + "WHERE table_schema = 'public' AND table_name = ?", t)).map((c) => c.name);
 const linkIn = (mail, pathPart) =>
   (mail.html.match(new RegExp(`https://ops\\.e2e\\.test(${pathPart}[^"< ]*)`)) || [])[1];
 
@@ -105,11 +115,12 @@ async function waitForServer() {
 
 async function main() {
   chk('server boots and answers /api/health', await waitForServer());
-  chk('user_version is at least 16', db.pragma('user_version', { simple: true }) >= 16);
+  chk('user_version is at least 16', await schemaVersion() >= 16);
   // 8 columns since schema v18: page_id joined the row when subscriptions moved
   // from the org to the PAGE they were made on.
-  chk('status_subscribers table exists', db.pragma('table_info(status_subscribers)').length === 8);
-  chk('…and is keyed to a page', db.pragma('table_info(status_subscribers)').some((c) => c.name === 'page_id'));
+  const subCols = await columnsOf('status_subscribers');
+  chk('status_subscribers table exists', subCols.length === 8, subCols.join(','));
+  chk('…and is keyed to a page', subCols.some((c) => c === 'page_id'));
 
   const admin = await login('seed-admin@e2e.test', 'seed-admin-password-1');
   chk('seeded admin can sign in', admin.status === 200, String(admin.status));
@@ -117,7 +128,7 @@ async function main() {
   // ── subscribe: the uniform, guarded front door ────────────────────────────
   const s1 = await anonJson('POST', '/api/status/subscribe', { email: 'alice@e2e.test' });
   chk('subscribe answers { ok: true }', s1.status === 200 && s1.j.ok === true, JSON.stringify(s1));
-  const p1 = row('alice@e2e.test');
+  const p1 = await row('alice@e2e.test');
   chk('a pending row exists, unconfirmed', p1 && p1.confirmed_at === null);
   chk('exactly one confirm mail went out', await until(() => mailsTo('alice@e2e.test').length === 1));
   const confirmMail = mailsTo('alice@e2e.test')[0];
@@ -125,12 +136,15 @@ async function main() {
     /Confirm/.test(confirmMail.subject), confirmMail.subject);
   const confirmPath = linkIn(confirmMail, '/status/confirm\\?token=');
   chk('the confirm mail carries a confirm link', !!confirmPath, confirmMail.html.slice(0, 200));
-  chk('the token is not stored in clear',
-    !confirmPath || !db.prepare('SELECT 1 FROM status_subscribers WHERE token_hash = ?')
-      .get(confirmPath.split('token=')[1]));
+  const clearHit = confirmPath
+    ? await q.prepare('SELECT 1 FROM status_subscribers WHERE token_hash = ?')
+      .get(confirmPath.split('token=')[1])
+    : null;
+  chk('the token is not stored in clear', !confirmPath || !clearHit);
 
   const hp = await anonJson('POST', '/api/status/subscribe', { email: 'bot@e2e.test', website: 'spam' });
-  chk('the honeypot answers ok and stores nothing', hp.j && hp.j.ok === true && !row('bot@e2e.test'));
+  chk('the honeypot answers ok and stores nothing',
+    hp.j && hp.j.ok === true && !(await row('bot@e2e.test')));
   const bad = await anonJson('POST', '/api/status/subscribe', { email: 'not-an-email' });
   chk('an invalid address answers ok and stores nothing', bad.j && bad.j.ok === true);
   const again = await anonJson('POST', '/api/status/subscribe', { email: 'alice@e2e.test' });
@@ -138,13 +152,13 @@ async function main() {
   chk('…and the resend throttle held the second mail back', mailsTo('alice@e2e.test').length === 1);
   const limited = await anonJson('POST', '/api/status/subscribe', { email: 'late@e2e.test' });
   chk('the rate limiter drops the 4th quick attempt silently',
-    limited.j && limited.j.ok === true && !row('late@e2e.test'));
+    limited.j && limited.j.ok === true && !(await row('late@e2e.test')));
 
   // ── confirm: single-use, then a real subscriber ───────────────────────────
   const c1 = await page(confirmPath);
   chk('the confirm link answers a confirmation page',
     c1.status === 200 && /confirmed/i.test(c1.text), c1.text.slice(0, 120));
-  chk('the row is now confirmed', !!row('alice@e2e.test').confirmed_at);
+  chk('the row is now confirmed', !!(await row('alice@e2e.test')).confirmed_at);
   const c2 = await page(confirmPath);
   chk('a second use of the confirm link is refused', /invalid|expired/i.test(c2.text));
   const cBad = await page('/status/confirm?token=definitely-not-a-token-1234');
@@ -152,12 +166,18 @@ async function main() {
 
   // second subscriber through the lib (the HTTP door is proven; the limiter
   // would otherwise make the harness wait out its bucket)
-  await subs.subscribe(defaultPage(), 'bob@e2e.test');
+  await subs.subscribe(await defaultPage(), 'bob@e2e.test');
+  // the confirm mail is fire-and-forget inside subscribe(), so wait for it
+  // rather than assuming it landed before subscribe() resolved
+  await until(() => mailsTo('bob@e2e.test').length === 1);
   const bobConfirm = linkIn(mailsTo('bob@e2e.test')[0], '/status/confirm\\?token=');
   await page(bobConfirm);
-  await subs.subscribe(defaultPage(), 'pending@e2e.test'); // stays unconfirmed on purpose
+  await subs.subscribe(await defaultPage(), 'pending@e2e.test'); // stays unconfirmed on purpose
+  // …same reason: let its confirm mail land before MAILS is cleared below,
+  // or it arrives inside the "an unpublished incident mails nobody" window
+  await until(() => mailsTo('pending@e2e.test').length === 1);
   chk('fixtures: two confirmed, one pending',
-    !!row('bob@e2e.test').confirmed_at && !row('pending@e2e.test').confirmed_at);
+    !!(await row('bob@e2e.test')).confirmed_at && !(await row('pending@e2e.test')).confirmed_at);
 
   // ── the send path: published is the switch ────────────────────────────────
   MAILS.length = 0;
@@ -199,22 +219,23 @@ async function main() {
   // ── unsubscribe: two-step, MAC-addressed, revocable ───────────────────────
   const u1 = await page(unsubPath);
   chk('the unsubscribe link shows a page with a button, removes nothing yet',
-    u1.status === 200 && /<button/.test(u1.text) && !!row('alice@e2e.test'));
+    u1.status === 200 && /<button/.test(u1.text) && !!(await row('alice@e2e.test')));
   const [, uid, usig] = unsubPath.match(/id=(\d+)&sig=([^&]+)/) || [];
   const u2 = await page('/status/unsubscribe', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `id=${uid}&sig=${usig}` });
-  chk('the POST removes the subscriber', /Unsubscribed/.test(u2.text) && !row('alice@e2e.test'));
+  chk('the POST removes the subscriber',
+    /Unsubscribed/.test(u2.text) && !(await row('alice@e2e.test')));
   const u3 = await page('/status/unsubscribe', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `id=${uid}&sig=${usig}` });
   chk('a second POST of the same link is refused', /invalid/i.test(u3.text));
-  const bobId = row('bob@e2e.test').id;
+  const bobId = (await row('bob@e2e.test')).id;
   const forged = await page('/status/unsubscribe', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `id=${bobId}&sig=${usig}` });
   chk('a MAC for one subscriber cannot remove another',
-    /invalid/i.test(forged.text) && !!row('bob@e2e.test'));
+    /invalid/i.test(forged.text) && !!(await row('bob@e2e.test')));
 
   // re-publishing after an unpublish is a first-publish again — and alice,
   // now unsubscribed, must be left out of exactly that fan-out
@@ -256,18 +277,19 @@ async function main() {
     list.status === 200 && list.j.confirmed === 1 && list.j.pending === 1, JSON.stringify(list.j));
   const pendingId = list.j.rows.find((r) => !r.confirmedAt).id;
   const del = await call(admin, 'DELETE', `/api/admin/status-subscribers/${pendingId}`);
-  chk('an admin can remove an address (GDPR)', del.status === 200 && !row('pending@e2e.test'));
+  chk('an admin can remove an address (GDPR)',
+    del.status === 200 && !(await row('pending@e2e.test')));
   chk('removing it twice is a 404',
     (await call(admin, 'DELETE', `/api/admin/status-subscribers/${pendingId}`)).status === 404);
 
   const { addMembership } = require('./src/db');
   const { salt, hash } = hashPassword('analyst-password-1');
   const aId = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, 'analyst@e2e.test', 'analyst', 'analyst', 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(aId, DEFAULT_ORG_ID, salt, hash, now());
-  addMembership(aId, DEFAULT_ORG_ID, 'analyst');
+  await addMembership(aId, DEFAULT_ORG_ID, 'analyst');
   const analyst = await login('analyst@e2e.test', 'analyst-password-1');
   chk('an analyst cannot read subscriber addresses',
     (await call(analyst, 'GET', '/api/admin/status-subscribers')).status === 403);
@@ -285,12 +307,12 @@ async function main() {
   // page and lands on a black OpsCat box has left the brand mid-flow — which is
   // the one thing a status page is bought to avoid. Mails are the same
   // conversation and get the same treatment.
-  await call(admin, 'PATCH', `/api/admin/status-pages/${defaultPage().id}`,
+  await call(admin, 'PATCH', `/api/admin/status-pages/${(await defaultPage()).id}`,
     { accent: '#0aa36f', theme: 'light', name: 'Acme' });
   // Straight at the library: the public endpoint's 3/min limiter has long been
   // spent by the checks above, and what is under test here is the MAIL, not the
   // front door that was already exercised at the top of this file.
-  await subs.subscribe(defaultPage(), 'branded@e2e.test');
+  await subs.subscribe(await defaultPage(), 'branded@e2e.test');
   chk('a confirm mail goes out for the branded page', await until(() => mailsTo('branded@e2e.test').length === 1));
   const bm = mailsTo('branded@e2e.test')[0];
   chk('the confirm mail carries the page accent', bm.html.includes('#0aa36f'), bm.html.slice(0, 120));

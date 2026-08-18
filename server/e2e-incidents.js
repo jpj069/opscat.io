@@ -59,21 +59,27 @@ const stub = http.createServer((req, res) => {
 
 require('./src/index.js'); // boots the app on :3121
 
-const { db, addMembership } = require('./src/db');
+const { addMembership, schemaVersion } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const scale = require('./src/lib/status-scale');
 
 const BASE = 'http://127.0.0.1:3121';
 const PASS = 'e2e-user-password-1';
 
-function mkUser(email, role, orgId = DEFAULT_ORG_ID) {
+async function mkUser(email, role, orgId = DEFAULT_ORG_ID) {
   const { salt, hash } = hashPassword(PASS);
   const uid = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(uid, orgId, role);
+  await addMembership(uid, orgId, role);
   return { id: uid, email };
 }
 
@@ -116,7 +122,22 @@ async function waitForServer() {
 // condition itself (or time out and let the check fail).
 const hooksFor = (label) => HOOKS.filter((h) => h.device === label);
 
-const compStatus = (id) => db.prepare('SELECT status FROM components WHERE id = ?').get(id).status;
+const compStatus = async (id) =>
+  (await q.prepare('SELECT status FROM components WHERE id = ?').get(id)).status;
+
+/* "does this table/column exist" without PRAGMA.
+ *
+ * `PRAGMA table_info` is SQLite's, and this harness runs on both engines now.
+ * The portable form of the same question is a statement that NAMES the object:
+ * it parses on both engines when the object is there and raises when it is not,
+ * which is exactly what the migration check is asserting. `LIMIT 1` keeps it
+ * from reading the table.
+ */
+async function exists(sql, ...args) {
+  try { await q.prepare(sql).all(...args); return true; } catch { return false; }
+}
+const tableExists = (t) => exists(`SELECT 1 FROM ${t} LIMIT 1`);
+const columnExists = (t, c) => exists(`SELECT ${c} FROM ${t} LIMIT 1`);
 
 async function main() {
   await new Promise((res) => stub.listen(0, '127.0.0.1', res));
@@ -125,11 +146,11 @@ async function main() {
   chk('server boots and answers /api/health', await waitForServer());
 
   // ── migration ─────────────────────────────────────────────────────────────
-  chk('user_version is at least 15', db.pragma('user_version', { simple: true }) >= 15);
-  const incCols = db.pragma('table_info(incidents)').map((c) => c.name);
-  chk('incidents carries assignee_id', incCols.includes('assignee_id'), incCols.join(','));
+  chk('user_version is at least 15', await schemaVersion() >= 15);
+  chk('incidents carries assignee_id', await columnExists('incidents', 'assignee_id'));
   for (const t of ['incident_components', 'incident_links', 'component_owners']) {
-    chk(`table ${t} exists`, db.pragma(`table_info(${t})`).length > 0);
+    // eslint-disable-next-line no-await-in-loop
+    chk(`table ${t} exists`, await tableExists(t));
   }
 
   // ── the shared scale (ONE ordering) ───────────────────────────────────────
@@ -142,8 +163,8 @@ async function main() {
   // ── setup: users, components, owner ───────────────────────────────────────
   const admin = await login('seed-admin@e2e.test', 'seed-admin-password-1');
   chk('seeded admin can sign in', admin.status === 200 && admin.user.role === 'admin', String(admin.status));
-  mkUser('lead@e2e.test', 'lead');
-  const analystU = mkUser('analyst@e2e.test', 'analyst');
+  await mkUser('lead@e2e.test', 'lead');
+  const analystU = await mkUser('analyst@e2e.test', 'analyst');
   const lead = await login('lead@e2e.test');
   const analyst = await login('analyst@e2e.test');
 
@@ -182,8 +203,8 @@ async function main() {
   chk('view carries the assignee name', inc1.assignee === 'analyst', String(inc1.assignee));
   chk('timeline records the assignment', inc1.updates.some((u) => /Assigned to analyst/.test(u.message)));
 
-  chk('derivation: component A is degraded', compStatus(cA) === 'degraded', compStatus(cA));
-  chk('derivation: component B is major', compStatus(cB) === 'major', compStatus(cB));
+  chk('derivation: component A is degraded', await compStatus(cA) === 'degraded', await compStatus(cA));
+  chk('derivation: component B is major', await compStatus(cB) === 'major', await compStatus(cB));
 
   const badComp = await call(lead, 'POST', '/api/incidents',
     { title: 'x', components: [{ id: 99999, impact: 'major' }] });
@@ -198,38 +219,42 @@ async function main() {
     JSON.stringify(HOOKS));
   chk('the resolve-only rule did not fire on create',
     !hooksFor(inc1.label).some((h) => h.event !== 'incident_created'));
-  const notif = db.prepare(`SELECT * FROM notifications WHERE rule_name = 'any incident event'
+  const notif = await q.prepare(`SELECT * FROM notifications WHERE rule_name = 'any incident event'
     ORDER BY ts DESC LIMIT 1`).get();
   chk('the notification log attributes the delivery to the incident',
     notif && notif.ok === 1 && notif.case_label === inc1.label, JSON.stringify(notif));
+  // `!row` on an UNAWAITED query is `false` whether the row is there or not — a
+  // Promise is truthy — so both of these resolve first and negate second.
   chk('severity_min still gates synthetic events',
-    !db.prepare(`SELECT 1 FROM notifications WHERE rule_name = 'too high' LIMIT 1`).get());
+    !(await q.prepare(`SELECT 1 FROM notifications WHERE rule_name = 'too high' LIMIT 1`).get()));
   chk('no pipeline event was created for the lifecycle', // alert-rule-only, per AUTOMATION-V1 §4.5
-    !db.prepare(`SELECT 1 FROM events WHERE name LIKE 'incident_%' LIMIT 1`).get());
+    !(await q.prepare(`SELECT 1 FROM events WHERE name LIKE 'incident_%' LIMIT 1`).get()));
 
   // ── worst-wins with a second incident ─────────────────────────────────────
   const dec2 = await call(lead, 'POST', '/api/incidents', {
     title: 'Gateway hard down', severity: 90, components: [{ id: cA, impact: 'major' }],
   });
   const inc2 = dec2.j;
-  chk('worst-wins: A escalates to major under a second incident', compStatus(cA) === 'major', compStatus(cA));
+  chk('worst-wins: A escalates to major under a second incident',
+    await compStatus(cA) === 'major', await compStatus(cA));
 
   const res2 = await call(lead, 'POST', `/api/incidents/${inc2.id}/status`,
     { status: 'resolved', message: 'fixed' });
   chk('resolve answers with resolvedAt set', res2.status === 200 && res2.j.resolvedAt !== null);
-  chk('worst-wins: A falls back to the still-open degraded', compStatus(cA) === 'degraded', compStatus(cA));
+  chk('worst-wins: A falls back to the still-open degraded',
+    await compStatus(cA) === 'degraded', await compStatus(cA));
 
   // ── manual override is recomputed away on the next transition ─────────────
   await call(admin, 'PATCH', `/api/admin/components/${cA}`, { status: 'operational' });
-  chk('manual override sticks until a transition', compStatus(cA) === 'operational');
+  chk('manual override sticks until a transition', await compStatus(cA) === 'operational');
   await call(lead, 'POST', `/api/incidents/${inc1.id}/status`, { status: 'identified' });
   chk('next incident transition recomputes the manual override away',
-    compStatus(cA) === 'degraded', compStatus(cA));
+    await compStatus(cA) === 'degraded', await compStatus(cA));
 
   // ── resolve the last incident → everything operational ────────────────────
   await call(lead, 'POST', `/api/incidents/${inc1.id}/status`, { status: 'resolved' });
-  chk('last resolve returns A to operational', compStatus(cA) === 'operational', compStatus(cA));
-  chk('last resolve returns B to operational', compStatus(cB) === 'operational', compStatus(cB));
+  chk('last resolve returns A to operational', await compStatus(cA) === 'operational', await compStatus(cA));
+  chk('last resolve returns B to operational', await compStatus(cB) === 'operational', await compStatus(cB));
   // catch-all gets status_changed + resolved; resolve-only adds a second
   // resolved delivery — so ≥2 resolved hooks for this incident, plus the
   // status_changed, prove both emits and the trigger filter at once.
@@ -250,11 +275,43 @@ async function main() {
   const roAs = await call(analyst, 'PATCH', `/api/incidents/${inc1.id}`, { assigneeId: analystU.id });
   chk('an analyst cannot mutate incidents', roAs.status === 403, String(roAs.status));
 
+  /* Assignment BY PATCH had no coverage at all, and it was broken.
+   *
+   * The three cases above look like they cover it and do not: `null` is the
+   * unassign path, `99999` expects a refusal, and the valid-uuid one is sent as
+   * an ANALYST, so the role gate answers 403 before the assignment code runs.
+   * Nothing ever asserted that a lead naming a real member actually assigns
+   * them — and the handler was still deciding with `Number.isInteger`, left over
+   * from the integer-id era. A uuid is not an integer, so it was replaced by
+   * `null`: the endpoint answered 200 and assigned NOBODY. Silently, on both
+   * engines, since the day ids became uuids.
+   *
+   * Asserted through the API rather than the row, because 200-with-no-effect is
+   * exactly what a caller cannot distinguish from success.
+   */
+  const beforeAs = (await call(lead, 'GET', `/api/incidents/${inc1.id}`)).j;
+  const updatesBefore = (beforeAs && beforeAs.updates ? beforeAs.updates : []).length;
+  const okAs = await call(lead, 'PATCH', `/api/incidents/${inc1.id}`, { assigneeId: analystU.id });
+  chk('a lead can assign an incident to an org member', okAs.status === 200, String(okAs.status));
+  chk('…and the assignee actually sticks — a 200 that assigns nobody is the bug',
+    okAs.j && okAs.j.assigneeId === analystU.id,
+    JSON.stringify(okAs.j && { id: okAs.j.assigneeId, name: okAs.j.assignee }));
+  /* Compared against the state BEFORE the PATCH, not searched for a pattern.
+   * This incident's timeline already contains "Assigned to …" from creation and
+   * "Unassigned." from the check above, so both `/assign/i` and a name match
+   * would pass on history while this PATCH did nothing at all. A new entry is
+   * the only thing that distinguishes "assigned" from "answered 200".
+   */
+  const updatesAfter = (okAs.j && okAs.j.updates ? okAs.j.updates : []);
+  chk('…and it is recorded in the timeline, not only in the column',
+    updatesAfter.length > updatesBefore,
+    `${updatesBefore} → ${updatesAfter.length}`);
+
   // ── promote: case → incident ──────────────────────────────────────────────
   const pipeline = require('./src/engine/pipeline');
-  pipeline.ingestEvent({ name: 'ddos', device: 'edge-01', severity: 85,
+  await pipeline.ingestEvent({ name: 'ddos', device: 'edge-01', severity: 85,
     description: 'volumetric attack' }, 'e2e', false, DEFAULT_ORG_ID);
-  const kase = db.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(DEFAULT_ORG_ID);
+  const kase = await q.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(DEFAULT_ORG_ID);
   chk('a high-severity event opened a case to promote', !!kase, 'no case row');
 
   const roProm = await call(analyst, 'POST', `/api/cases/${kase.id}/promote`, {});
@@ -270,7 +327,7 @@ async function main() {
     && pInc.links.some((l) => l.kind === 'event' && l.refId === kase.event_id), JSON.stringify(pInc.links));
   chk('promote assigns the promoter by default', pInc.assignee === 'lead', String(pInc.assignee));
   chk('the case note records the promotion',
-    /promoted to INC-/.test(db.prepare('SELECT note FROM cases WHERE id = ?').get(kase.id).note || ''));
+    /promoted to INC-/.test((await q.prepare('SELECT note FROM cases WHERE id = ?').get(kase.id)).note || ''));
   chk('the incident timeline names the case',
     pInc.updates.some((u) => u.message.includes(`C-${1000 + kase.id}`)));
 

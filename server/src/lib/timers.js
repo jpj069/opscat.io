@@ -27,7 +27,7 @@
  *  - **Cancellable.** `cancel` is a soft delete (`canceled_at`), so "why did
  *    this never fire?" has an answer in the table rather than an absence.
  */
-const { db } = require('../db');
+const store = require('../db/shim');
 const { now } = require('../util');
 
 const LEASE_MS = 60000; // a claimed timer is retried if it was not finished within this
@@ -38,28 +38,28 @@ const LEASE_MS = 60000; // a claimed timer is retried if it was not finished wit
  */
 function create(table, ownerCol) {
   const q = {
-    ins: db.prepare(`INSERT INTO ${table}
+    ins: store.prepare(`INSERT INTO ${table}
       (${ownerCol}, kind, ref, step_position, round, resume_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`),
-    due: db.prepare(`SELECT * FROM ${table}
+    due: store.prepare(`SELECT * FROM ${table}
       WHERE canceled_at IS NULL AND resume_at <= ?
         AND (claimed_at IS NULL OR claimed_at < ?)
       ORDER BY resume_at LIMIT ?`),
-    claim: db.prepare(`UPDATE ${table} SET claimed_at = ?
+    claim: store.prepare(`UPDATE ${table} SET claimed_at = ?
       WHERE id = ? AND canceled_at IS NULL AND (claimed_at IS NULL OR claimed_at < ?)`),
-    done: db.prepare(`DELETE FROM ${table} WHERE id = ?`),
-    cancelOwner: db.prepare(`UPDATE ${table} SET canceled_at = ?
+    done: store.prepare(`DELETE FROM ${table} WHERE id = ?`),
+    cancelOwner: store.prepare(`UPDATE ${table} SET canceled_at = ?
       WHERE ${ownerCol} = ? AND canceled_at IS NULL`),
-    cancelStep: db.prepare(`UPDATE ${table} SET canceled_at = ?
+    cancelStep: store.prepare(`UPDATE ${table} SET canceled_at = ?
       WHERE ${ownerCol} = ? AND kind = ? AND canceled_at IS NULL`),
-    pending: db.prepare(`SELECT * FROM ${table}
+    pending: store.prepare(`SELECT * FROM ${table}
       WHERE ${ownerCol} = ? AND canceled_at IS NULL ORDER BY resume_at`),
   };
 
   return {
     /** Come back to `ownerId` at `resumeAt`. `kind`/`ref` are the consumer's own. */
-    schedule(ownerId, { kind, ref = null, stepPosition = 0, round = 0, resumeAt }) {
-      return Number(q.ins.run(ownerId, kind, ref, stepPosition, round, resumeAt, now()).lastInsertRowid);
+    async schedule(ownerId, { kind, ref = null, stepPosition = 0, round = 0, resumeAt }) {
+      return Number(await q.ins.insert(ownerId, kind, ref, stepPosition, round, resumeAt, now()));
     },
 
     /** Everything still pending for one owner — the "what happens next" read. */
@@ -71,9 +71,9 @@ function create(table, ownerCol) {
      * escalation clock in the same breath, or the most common good-news path in
      * the product still wakes second line five minutes later.
      */
-    cancel(ownerId, kind) {
+    async cancel(ownerId, kind) {
       const t = now();
-      return (kind ? q.cancelStep.run(t, ownerId, kind) : q.cancelOwner.run(t, ownerId)).changes;
+      return (await (kind ? q.cancelStep.run(t, ownerId, kind) : q.cancelOwner.run(t, ownerId))).changes;
     },
 
     /**
@@ -81,18 +81,18 @@ function create(table, ownerCol) {
      * transaction so two sweeps (a timer tick landing on top of a boot sweep)
      * cannot both claim the same row.
      */
-    claimDue(limit = 100, at = now()) {
+    async claimDue(limit = 100, at = now()) {
       const taken = [];
-      db.transaction(() => {
-        for (const row of q.due.all(at, at - LEASE_MS, limit)) {
-          if (q.claim.run(at, row.id, at - LEASE_MS).changes) taken.push(row);
+      await store.withTx(async () => {
+        for (const row of await q.due.all(at, at - LEASE_MS, limit)) {
+          if ((await q.claim.run(at, row.id, at - LEASE_MS)).changes) taken.push(row);
         }
-      })();
+      });
       return taken;
     },
 
     /** The effect happened; the row has done its job. */
-    finish(id) { q.done.run(id); },
+    async finish(id) { await q.done.run(id); },
   };
 }
 

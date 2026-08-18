@@ -7,7 +7,7 @@
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const config = require('../config');
-const { db } = require('../db');
+const q = require('../db/shim');
 const { TOOLS } = require('./tools');
 const sec = require('../security');
 
@@ -67,12 +67,15 @@ function registerResources(server, principal) {
       // and the org's default page is the one this resource has always meant.
       const { statusData } = require('../routes/status');
       const statusPages = require('../lib/status-pages');
-      const page = statusPages.defaultPage(principal.orgId);
+      const page = await statusPages.defaultPage(principal.orgId);
       return {
         contents: [{
           uri: uri.href,
           mimeType: 'application/json',
-          text: JSON.stringify(page ? statusData(page) : { error: 'no status page' }, null, 2),
+          // awaited: statusData became async when routes/status.js moved to the
+          // storage shim (Phase 4). JSON.stringify of a native promise is "{}",
+          // so without this the resource answers an empty object with a 200.
+          text: JSON.stringify(page ? await statusData(page) : { error: 'no status page' }, null, 2),
         }],
       };
     },
@@ -87,14 +90,17 @@ function registerResources(server, principal) {
       mimeType: 'application/json',
     },
     async (uri) => {
-      const rows = db.prepare(`SELECT * FROM incidents WHERE org_id = ? AND resolved_at IS NULL
+      const rows = await q.prepare(`SELECT * FROM incidents WHERE org_id = ? AND resolved_at IS NULL
         ORDER BY started_at DESC LIMIT 25`).all(principal.orgId);
-      const incidents = rows.map((i) => ({
+      const incidents = await Promise.all(rows.map(async (i) => ({
         id: i.id, label: `INC-${1000 + i.id}`, title: i.title, severity: i.severity,
         status: i.status, published: !!i.published, startedAt: i.started_at,
-        updates: db.prepare(`SELECT ts, status, message FROM incident_updates
+        // awaited inside the object: JSON.stringify of a pending query renders
+        // "{}", so an unawaited `updates` would ship an empty object with a 200
+        // — the same failure `statusData` below carries a note about.
+        updates: await q.prepare(`SELECT ts, status, message FROM incident_updates
           WHERE incident_id = ? ORDER BY ts DESC LIMIT 10`).all(i.id),
-      }));
+      })));
       return {
         contents: [{
           uri: uri.href,
@@ -127,7 +133,16 @@ function createMcpServer(principal) {
         return await tool.handler(args || {}, principal, { server, extra });
       } catch (err) {
         console.error(`[mcp] ${tool.name} failed:`, err && err.message);
-        return { content: [{ type: 'text', text: `Tool failed: ${err && err.message}` }], isError: true };
+        // The literal annotation is load-bearing, not decoration: the SDK's
+        // content type is a union discriminated on `type`, and JS widens
+        // `'text'` to `string`, so without it this whole handler fails to match
+        // the registerTool signature. It surfaces as a Promise-typed complaint —
+        // the handler became async in Phase 4 — which reads exactly like a
+        // missed await and is not one.
+        return {
+          content: [{ type: /** @type {'text'} */ ('text'), text: `Tool failed: ${err && err.message}` }],
+          isError: true,
+        };
       }
     });
   }

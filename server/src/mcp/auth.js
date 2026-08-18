@@ -10,7 +10,7 @@
 
 const config = require('../config');
 const { getMembership } = require('../db');
-const { db } = require('../db');
+const q = require('../db/shim');
 const sec = require('../security');
 const oauth = require('../lib/oauth');
 const { RateLimiter } = require('../util');
@@ -23,9 +23,9 @@ const RESOURCE_METADATA_URL = `${config.baseUrl}/.well-known/oauth-protected-res
 // no per-user call limit, so neither does this (docs/MCP-PLAN.md §0).
 const mcpLimiter = new RateLimiter({ perMinute: 300, burst: 60 });
 
-const getUserRow = db.prepare(`SELECT id, org_id, email, name, is_super_admin, color, active
+const getUserRow = q.prepare(`SELECT id, org_id, email, name, is_super_admin, color, active
   FROM users WHERE id = ?`);
-const getOrgRow = db.prepare('SELECT id, name, slug, plan, status FROM organizations WHERE id = ?');
+const getOrgRow = q.prepare('SELECT id, name, slug, plan, status FROM organizations WHERE id = ?');
 
 function challenge(res, status, error, description) {
   res.set('WWW-Authenticate',
@@ -33,12 +33,12 @@ function challenge(res, status, error, description) {
   res.status(status).json({ error, error_description: description });
 }
 
-function requireMcpAuth(req, res, next) {
+async function requireMcpAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/i.exec(header.trim());
   if (!m) return challenge(res, 401, 'invalid_request', 'A Bearer access token is required.');
 
-  const token = oauth.verifyAccessToken(m[1]);
+  const token = await oauth.verifyAccessToken(m[1]);
   if (!token) return challenge(res, 401, 'invalid_token', 'The access token is invalid or expired.');
 
   // RFC 8707 audience binding. Unlike a server that predates binding, this one
@@ -48,15 +48,15 @@ function requireMcpAuth(req, res, next) {
     return challenge(res, 401, 'invalid_token', 'Token is not bound to this resource.');
   }
 
-  const user = getUserRow.get(token.user_id);
+  const user = await getUserRow.get(token.user_id);
   if (!user || !user.active) return challenge(res, 401, 'invalid_token', 'Account is disabled.');
 
-  const membership = getMembership(user.id, token.org_id);
+  const membership = await getMembership(user.id, token.org_id);
   if (!membership) {
     return challenge(res, 403, 'insufficient_scope', 'You are no longer a member of this organization.');
   }
 
-  const org = getOrgRow.get(token.org_id);
+  const org = await getOrgRow.get(token.org_id);
   if (!org) return challenge(res, 401, 'invalid_token', 'Organization missing.');
   if (org.status === 'suspended') {
     return challenge(res, 403, 'insufficient_scope', 'Organization suspended.');

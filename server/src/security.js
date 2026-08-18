@@ -1,5 +1,6 @@
 'use strict';
-const { db, getMembership, anyMembership } = require('./db');
+const q = require('./db/shim');
+const { getMembership, anyMembership } = require('./db');
 const config = require('./config');
 const edition = require('./edition');
 const { now, sha256, randHex, RateLimiter, httpError, isOrgId, DEFAULT_ORG_ID } = require('./util');
@@ -10,21 +11,24 @@ const authLimiter = new RateLimiter({ perMinute: 10, burst: 10 });
 const apiLimiter = new RateLimiter({ perMinute: 300, burst: 60 });
 const ingestLimiter = new RateLimiter({ perMinute: 600, burst: 200 });
 
-const getSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const touchSession = db.prepare('UPDATE sessions SET last_used_at = ? WHERE id = ?');
+const getSession = q.prepare('SELECT * FROM sessions WHERE id = ?');
+const touchSession = q.prepare('UPDATE sessions SET last_used_at = ? WHERE id = ?');
 // The request context deliberately never carries pass_salt/pass_hash — nothing
 // downstream needs the credential, and not having it there is one fewer way to
 // leak it into a log line. The UI does need to know WHETHER a password exists
 // (an invited account has none), so that one bit is derived in SQL instead.
-const getUser = db.prepare(`SELECT id, org_id, email, name, role, is_super_admin, color, active,
+const getUser = q.prepare(`SELECT id, org_id, email, name, role, is_super_admin, color, active,
   must_change_password, (pass_hash != '') AS has_password FROM users WHERE id = ?`);
-const getOrg = db.prepare('SELECT id, name, slug, plan, status FROM organizations WHERE id = ?');
-const touchUser = db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?');
-const delSession = db.prepare('DELETE FROM sessions WHERE id = ?');
-const getKeyByHash = db.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND active = 1');
-const touchKey = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
-const setSessionOrg = db.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?');
-const getUserHomeOrg = db.prepare('SELECT org_id FROM users WHERE id = ?');
+const getOrg = q.prepare('SELECT id, name, slug, plan, status FROM organizations WHERE id = ?');
+const touchUser = q.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?');
+const delSession = q.prepare('DELETE FROM sessions WHERE id = ?');
+const getKeyByHash = q.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND active = 1');
+const touchKey = q.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+const setSessionOrg = q.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?');
+const getUserHomeOrg = q.prepare('SELECT org_id FROM users WHERE id = ?');
+const insSession = q.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+const insAudit = q.prepare('INSERT INTO audit_log (org_id, ts, user_id, action, detail) VALUES (?, ?, ?, ?, ?)');
 
 function parseCookies(req) {
   const out = {};
@@ -49,16 +53,15 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
 
-function createSession(userId, req, activeOrgId = null) {
+async function createSession(userId, req, activeOrgId = null) {
   const sid = randHex(32);
   const csrf = randHex(16);
   if (!activeOrgId) {
-    const u = getUserHomeOrg.get(userId);
+    const u = await getUserHomeOrg.get(userId);
     activeOrgId = u ? u.org_id : null;
   }
-  db.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(sid, userId, activeOrgId, csrf, now(), now(), clientIp(req), String(req.headers['user-agent'] || '').slice(0, 300));
+  await insSession.run(sid, userId, activeOrgId, csrf, now(), now(), clientIp(req),
+    String(req.headers['user-agent'] || '').slice(0, 300));
   return { sid, csrf };
 }
 
@@ -76,18 +79,30 @@ function clientIp(req) {
   return req.socket.remoteAddress || '';
 }
 
-// Session auth for /api. Also enforces CSRF header on state-changing methods.
-function requireSession(req, res, next) {
+/* Session auth for /api. Also enforces the CSRF header on state-changing methods.
+ *
+ * Express 5 awaits a middleware's returned promise and forwards a rejection to
+ * the error handler, so `async` here costs nothing at the mount sites.
+ *
+ * Every membership read below is parenthesised — `!(await getMembership(...))`
+ * rather than `!await getMembership(...)` — because this is the one place in the
+ * file where a lost `await` is SILENT: a Promise is truthy, `!membership` is
+ * `false`, the 403 twenty lines down never fires, and a user with no membership
+ * in the requested org is served that org's data with a 200 and no log line.
+ * Neither the type gate nor the strict thenable can see a value that is only
+ * tested. e2e-crossorg.js is what can, and does.
+ */
+async function requireSession(req, res, next) {
   const sid = parseCookies(req).opscat_sid;
   if (!sid) return httpError(res, 401, 'not authenticated');
-  const sess = getSession.get(sid);
+  const sess = await getSession.get(sid);
   const t = now();
   if (!sess || t - sess.last_used_at > config.sessionIdleMs || t - sess.created_at > config.sessionMaxMs) {
-    if (sess) delSession.run(sid);
+    if (sess) await delSession.run(sid);
     clearSessionCookie(res);
     return httpError(res, 401, 'session expired');
   }
-  const user = getUser.get(sess.user_id);
+  const user = await getUser.get(sess.user_id);
   if (!user || !user.active) return httpError(res, 401, 'account disabled');
 
   // Resolve the org this session is acting in (multi-org). Start from the
@@ -105,10 +120,10 @@ function requireSession(req, res, next) {
   // Everyone else must hold a membership in the active org. If the session's
   // active org is stale (membership revoked), fall back to the home org or any
   // remaining membership and persist that so later requests are consistent.
-  let membership = getMembership(user.id, orgId);
+  let membership = await getMembership(user.id, orgId);
   if (!membership && !superOverride) {
-    membership = getMembership(user.id, user.org_id) || anyMembership(user.id);
-    if (membership) { orgId = membership.org_id; setSessionOrg.run(orgId, sid); }
+    membership = (await getMembership(user.id, user.org_id)) || (await anyMembership(user.id));
+    if (membership) { orgId = membership.org_id; await setSessionOrg.run(orgId, sid); }
   }
   if (!membership && !user.is_super_admin) return httpError(res, 403, 'no organization membership');
   // A platform operator looking at a customer's data leaves a record. Writes
@@ -117,7 +132,7 @@ function requireSession(req, res, next) {
   // access record and which the operator's own org cannot see at all.
   if (superOverride && !membership) noteCrossOrgAccess(user, orgId, sid, req);
 
-  const org = getOrg.get(orgId);
+  const org = await getOrg.get(orgId);
   if (!org) return httpError(res, 401, 'organization missing');
   if (org.status === 'suspended' && !user.is_super_admin) {
     return httpError(res, 403, 'organization suspended');
@@ -126,8 +141,8 @@ function requireSession(req, res, next) {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     if (req.headers['x-opscat-csrf'] !== sess.csrf) return httpError(res, 403, 'CSRF check failed');
   }
-  touchSession.run(t, sid);
-  touchUser.run(t, user.id);
+  await touchSession.run(t, sid);
+  await touchUser.run(t, user.id);
   // Role is per-org: use the membership role for the active org. A super-admin
   // acting inside an org they don't belong to operates as an admin there.
   user.role = membership ? membership.role : 'admin';
@@ -175,22 +190,22 @@ function requireRole(minRole) {
 // credential that can mint another credential is a privilege-escalation path.
 const apiTokenLimiter = new RateLimiter({ perMinute: 300, burst: 60 });
 
-function bearerPrincipal(req, res, next, token) {
+async function bearerPrincipal(req, res, next, token) {
   const { getMembership } = require('./db');
   const org = (id) => getOrg.get(id);
 
   // 1. OAuth access token (MCP). Same credential, wider surface.
   const oauth = require('./lib/oauth');
-  const tok = oauth.verifyAccessToken(token);
+  const tok = await oauth.verifyAccessToken(token);
   if (tok) {
     const needed = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
     const scopes = String(tok.scopes || '').split(',').filter(Boolean);
     if (!scopes.includes(needed)) return httpError(res, 403, `token lacks scope '${needed}'`);
-    const user = getUser.get(tok.user_id);
+    const user = await getUser.get(tok.user_id);
     if (!user || !user.active) return httpError(res, 401, 'account disabled');
-    const membership = getMembership(user.id, tok.org_id);
+    const membership = await getMembership(user.id, tok.org_id);
     if (!membership) return httpError(res, 403, 'no organization membership');
-    const o = org(tok.org_id);
+    const o = await org(tok.org_id);
     if (!o) return httpError(res, 401, 'organization missing');
     if (o.status === 'suspended' && !user.is_super_admin) return httpError(res, 403, 'organization suspended');
     if (!apiTokenLimiter.allow(`t${tok.id}`)) return httpError(res, 429, 'rate limit exceeded');
@@ -203,14 +218,14 @@ function bearerPrincipal(req, res, next, token) {
   }
 
   // 2. API key with the `api` scope.
-  const row = getKeyByHash.get(sha256(token));
+  const row = await getKeyByHash.get(sha256(token));
   if (!row) return httpError(res, 401, 'invalid token');
   if (!row.scopes.split(',').includes('api')) return httpError(res, 403, "key lacks scope 'api'");
-  const o = org(row.org_id);
+  const o = await org(row.org_id);
   if (!o) return httpError(res, 401, 'organization missing');
   if (o.status === 'suspended') return httpError(res, 403, 'organization suspended');
   if (!apiTokenLimiter.allow(`k${row.id}`)) return httpError(res, 429, 'rate limit exceeded');
-  touchKey.run(now(), row.id);
+  await touchKey.run(now(), row.id);
   // A key is not a person. It acts as the user who created it, so audit entries
   // and assignments still name a human; the key's own role caps what it may do.
   req.user = {
@@ -237,18 +252,18 @@ function requireSessionOrToken(req, res, next) {
 
 // API-key auth for /v1 ingest surfaces. Key via Authorization: Bearer or X-Api-Key or ?key=
 function requireApiKey(scope) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     let key = null;
     const auth = req.headers.authorization;
     if (auth && auth.startsWith('Bearer ')) key = auth.slice(7).trim();
     if (!key && req.headers['x-api-key']) key = String(req.headers['x-api-key']).trim();
     if (!key && req.query.key) key = String(req.query.key);
     if (!key) return httpError(res, 401, 'missing API key');
-    const row = getKeyByHash.get(sha256(key));
+    const row = await getKeyByHash.get(sha256(key));
     if (!row) return httpError(res, 401, 'invalid API key');
     if (!row.scopes.split(',').includes(scope)) return httpError(res, 403, `key lacks scope '${scope}'`);
     if (!ingestLimiter.allow(`k${row.id}`)) return httpError(res, 429, 'rate limit exceeded');
-    touchKey.run(now(), row.id);
+    await touchKey.run(now(), row.id);
     req.apiKey = row;
     req.orgId = row.org_id;   // ingest is stamped with the key's organization
     next();
@@ -366,10 +381,33 @@ function noteCrossOrgAccess(user, orgId, sid, req) {
   audit(user.id, 'superadmin_org_access', `${via} · ${req.method} ${where}`, orgId);
 }
 
+/* `audit()` keeps its SYNCHRONOUS call shape, and that is deliberate.
+ *
+ * It is called as a bare statement after the mutation it records, at 126 sites.
+ * Awaiting it at every one of them buys nothing — the write it describes has
+ * already happened — and failing the request because the audit row failed would
+ * report an error for work that succeeded. So the promise is caught here and
+ * logged loudly. This is the one place in the port where a discarded promise is
+ * correct rather than a bug; said out loud so the next reader does not "fix" it.
+ *
+ * The cost, stated: a failed audit write becomes a log line rather than a failed
+ * request.
+ *
+ * The rule this DOES have to respect: never inside a `withTx` body. Fire-and-
+ * forget inside an open transaction lands the row on a different pooled
+ * connection under Postgres, so a rolled-back transaction would leave an audit
+ * row claiming an action that never happened — a log that records phantom
+ * actions is worse than one with a hole, because the hole is visible. Measured
+ * across the repo (brace-matched, not grepped): all 126 call sites are outside
+ * every transaction body, and the four that sit closest — routes/oncall.js ×3,
+ * routes/vendors.js ×1 — are on the line AFTER `await q.withTx(...)` returns,
+ * which is exactly where an audit of a committed fact belongs. Keep it that way:
+ * an audit describes something that COMMITTED.
+ */
 function audit(userId, action, detail, orgId = DEFAULT_ORG_ID) {
-  db.prepare('INSERT INTO audit_log (org_id, ts, user_id, action, detail) VALUES (?, ?, ?, ?, ?)')
-    .run(orgId || DEFAULT_ORG_ID, now(), userId || null, action,
-      detail ? String(detail).slice(0, 1000) : null);
+  insAudit.run(orgId || DEFAULT_ORG_ID, now(), userId || null, action,
+    detail ? String(detail).slice(0, 1000) : null)
+    .catch((e) => console.error('audit write failed:', action, e && e.message));
 }
 
 module.exports = {

@@ -22,7 +22,7 @@
  *     method quietly not being in the list — a person who added their phone and
  *     is never called has no way to tell the difference from a quiet night.
  */
-const { db } = require('../db');
+const q = require('../db/shim');
 const config = require('../config');
 const { encrypt, decrypt } = require('../util');
 const plans = require('../plans');
@@ -70,17 +70,19 @@ function displayAddress(row) {
   return decodeAddress(row) ?? '(unreadable — the app secret changed)';
 }
 
+const qOrgPlan = q.prepare('SELECT plan FROM organizations WHERE id = ?');
+
 /**
  * May this method be used to deliver an alert for `orgId`?
  * Returns `{ ok: true }` or `{ ok: false, reason }`. The reason is written to
  * the notification log, so it must read as an explanation to a human at 03:00.
  */
-function usable(row, orgId) {
+async function usable(row, orgId) {
   if (!isMetered(row.kind)) return { ok: true };
   if (!row.verified_at) {
     return { ok: false, reason: `${row.kind} number not verified — verify it under On-Call › My on-call` };
   }
-  const org = db.prepare('SELECT plan FROM organizations WHERE id = ?').get(orgId);
+  const org = await qOrgPlan.get(orgId);
   if (!plans.hasFeature(org ? org.plan : 'free', row.kind)) {
     return { ok: false, reason: `${row.kind} is not included in this organization's plan` };
   }

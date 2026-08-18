@@ -40,8 +40,14 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 
-const R = [];
-const chk = (name, pass, detail = '') => R.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ` — ${detail}`}`);
+/* The shared helpers, not a private copy of `chk`.
+ *
+ * The one-liner this replaces records a PASS for anything truthy — and a
+ * Promise is truthy. With the fixtures on the async shim every assertion below
+ * reads a row, so a single missed `await` would have turned its check
+ * permanently green. `e2e-lib`'s chk throws on a thenable instead.
+ */
+const { chk, report, die } = require('./e2e-lib').harness();
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-loud-'));
 process.env.OPSCAT_DATA_DIR = tmp;
@@ -57,7 +63,13 @@ delete process.env.SMTP_HOST;
 
 require('./src/index.js');
 
-const { db, addMembership, setOrgSetting } = require('./src/db');
+const { addMembership, setOrgSetting, schemaVersion } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { hashPassword, now, newId, DEFAULT_ORG_ID, sha256 } = require('./src/util');
 const contacts = require('./src/lib/contacts');
 const telephony = require('./src/lib/telephony');
@@ -85,25 +97,27 @@ const stub = http.createServer((req, res) => {
 });
 
 // ---- fixtures ---------------------------------------------------------------
-function mkOrg(name, plan = 'enterprise') {
+async function mkOrg(name, plan = 'enterprise') {
   const id = newId();
-  db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+  await q.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
     VALUES (?, ?, ?, ?, 'active', ?)`).run(id, name, name.toLowerCase(), plan, now());
   return id;
 }
-function mkUser(email, role, orgId = DEFAULT_ORG_ID) {
+async function mkUser(email, role, orgId = DEFAULT_ORG_ID) {
   const { salt, hash } = hashPassword(PASS);
   const uid = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(uid, orgId, role);
+  await addMembership(uid, orgId, role);
   return { id: uid, email, name: email.split('@')[0] };
 }
-function mkCase(severity = 90, orgId = DEFAULT_ORG_ID) {
-  return Number(db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
-    VALUES (?, NULL, 'disk_full', 'core-01', ?, 'open', ?)`).run(orgId, severity, now()).lastInsertRowid);
+// `insert()` (RETURNING id), never lastInsertRowid — the shim refuses it, and
+// node-postgres has no such field at all.
+async function mkCase(severity = 90, orgId = DEFAULT_ORG_ID) {
+  return Number(await q.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
+    VALUES (?, NULL, 'disk_full', 'core-01', ?, 'open', ?)`).insert(orgId, severity, now()));
 }
 
 async function login(email, password = PASS) {
@@ -133,25 +147,31 @@ async function waitForServer() {
   return false;
 }
 const tick = () => new Promise((res) => setTimeout(res, 80));
-const methodRow = (id) => db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(id);
-const alertRow = (id) => db.prepare('SELECT * FROM alerts WHERE id = ?').get(id);
-const notifsFor = (id) => db.prepare('SELECT * FROM notifications WHERE alert_id = ? ORDER BY id').all(id);
+const methodRow = (id) => q.prepare('SELECT * FROM contact_methods WHERE id = ?').get(id);
+const alertRow = (id) => q.prepare('SELECT * FROM alerts WHERE id = ?').get(id);
+const notifsFor = (id) => q.prepare('SELECT * FROM notifications WHERE alert_id = ? ORDER BY id').all(id);
+
+/* "does this column exist" without PRAGMA — see the same helper in e2e-oncall.
+ * A statement that NAMES the column parses on both engines when it is there and
+ * raises when it is not, which is what the migration check is asserting. */
+async function columnExists(t, c) {
+  try { await q.prepare(`SELECT ${c} FROM ${t} LIMIT 1`).all(); return true; } catch { return false; }
+}
 
 async function main() {
   await new Promise((res) => stub.listen(3152, '127.0.0.1', res));
   chk('server boots and answers /api/health', await waitForServer());
 
   // ---- migration ---------------------------------------------------------
-  chk('migration reached version 25', db.pragma('user_version', { simple: true }) >= 25);
-  const cols = db.pragma('table_info(contact_methods)').map((c) => c.name);
+  chk('migration reached version 25', await schemaVersion() >= 25);
   for (const c of ['encrypted', 'verify_hash', 'verify_expires_at', 'verify_tries']) {
-    chk(`contact_methods gained ${c}`, cols.includes(c));
+    // eslint-disable-next-line no-await-in-loop
+    chk(`contact_methods gained ${c}`, await columnExists('contact_methods', c));
   }
-  chk('notifications gained cost_micros',
-    db.pragma('table_info(notifications)').some((c) => c.name === 'cost_micros'));
+  chk('notifications gained cost_micros', await columnExists('notifications', 'cost_micros'));
 
-  const anna = mkUser('anna@e2e.test', 'admin');
-  const ben = mkUser('ben@e2e.test', 'analyst');
+  const anna = await mkUser('anna@e2e.test', 'admin');
+  const ben = await mkUser('ben@e2e.test', 'analyst');
   const admin = await login(anna.email);
   const junior = await login(ben.email);
   chk('admin can sign in', admin.status === 200, `status ${admin.status}`);
@@ -173,7 +193,7 @@ async function main() {
   chk('the provider is configured', after.j.configured === true, JSON.stringify(after.j));
   chk('the secret is NEVER returned — only that one is set',
     after.j.hasSecret === true && after.j.secret === undefined, JSON.stringify(after.j));
-  const storedSecret = db.prepare("SELECT value FROM org_settings WHERE key = 'telephony_secret'").get();
+  const storedSecret = await q.prepare("SELECT value FROM org_settings WHERE key = 'telephony_secret'").get();
   chk('...and it is encrypted at rest, not sitting in org_settings in the clear',
     !!storedSecret && !storedSecret.value.includes('super-secret-token'), storedSecret && storedSecret.value);
 
@@ -186,7 +206,7 @@ async function main() {
   chk('an international number is accepted', smsResp.status === 201, JSON.stringify(smsResp.j));
   chk('...and the API says it still needs verifying', smsResp.j.needsVerification === true);
   const smsId = smsResp.j.id;
-  const row = methodRow(smsId);
+  const row = await methodRow(smsId);
   chk('the number is CIPHERTEXT in the database', row.encrypted === 1 && !row.address.includes('15112345678'),
     row.address);
   chk('...and decodes back to the normalised number',
@@ -198,7 +218,7 @@ async function main() {
     })());
 
   // ---- unverified means unreachable ---------------------------------------
-  const gate = contacts.usable(methodRow(smsId), DEFAULT_ORG_ID);
+  const gate = await contacts.usable(await methodRow(smsId), DEFAULT_ORG_ID);
   chk('an unverified number may not be rung', gate.ok === false, JSON.stringify(gate));
   chk('...and the reason is one a human can act on',
     /not verified/.test(gate.reason || ''), gate.reason);
@@ -216,13 +236,15 @@ async function main() {
     JSON.stringify(gateway));
   const code = (String(gateway[0].text).match(/(\d{6})/) || [])[1];
   chk('the message carries a six-digit code', !!code, gateway[0] && gateway[0].text);
+  const hashed = await methodRow(smsId);
   chk('the code is HASHED at rest, like every other credential',
-    methodRow(smsId).verify_hash === sha256(code) && !methodRow(smsId).verify_hash.includes(code));
+    hashed.verify_hash === sha256(code) && !hashed.verify_hash.includes(code));
 
   const wrong = await call(admin, 'POST', `/api/oncall/me/methods/${smsId}/verify/confirm`, { code: '000000' });
   chk('a wrong code is refused', wrong.status === 400);
+  const tried = await methodRow(smsId);
   chk('...and counted — six digits is only safe with a try limit',
-    methodRow(smsId).verify_tries === 1, String(methodRow(smsId).verify_tries));
+    tried.verify_tries === 1, String(tried.verify_tries));
   for (let i = 0; i < 4; i++) {
     await call(admin, 'POST', `/api/oncall/me/methods/${smsId}/verify/confirm`, { code: '000001' });
   }
@@ -233,34 +255,35 @@ async function main() {
   gateway.length = 0;
   await call(admin, 'POST', `/api/oncall/me/methods/${smsId}/verify`, {});
   const code2 = (String(gateway[0].text).match(/(\d{6})/) || [])[1];
-  chk('a fresh code resets the try counter', methodRow(smsId).verify_tries === 0);
+  chk('a fresh code resets the try counter', (await methodRow(smsId)).verify_tries === 0);
   const good = await call(admin, 'POST', `/api/oncall/me/methods/${smsId}/verify/confirm`, { code: code2 });
-  chk('the right code verifies the number', good.status === 200 && !!methodRow(smsId).verified_at);
-  chk('...and the code is destroyed once used', methodRow(smsId).verify_hash === null);
-  chk('a verified number may now be rung', contacts.usable(methodRow(smsId), DEFAULT_ORG_ID).ok === true);
+  chk('the right code verifies the number', good.status === 200 && !!(await methodRow(smsId)).verified_at);
+  chk('...and the code is destroyed once used', (await methodRow(smsId)).verify_hash === null);
+  chk('a verified number may now be rung',
+    (await contacts.usable(await methodRow(smsId), DEFAULT_ORG_ID)).ok === true);
 
   // An expired code is refused even when it is the right one.
-  db.prepare('UPDATE contact_methods SET verified_at = NULL, verify_hash = ?, verify_expires_at = ? WHERE id = ?')
+  await q.prepare('UPDATE contact_methods SET verified_at = NULL, verify_hash = ?, verify_expires_at = ? WHERE id = ?')
     .run(sha256('123456'), now() - 1000, smsId);
   const expired = await call(admin, 'POST', `/api/oncall/me/methods/${smsId}/verify/confirm`, { code: '123456' });
   chk('an expired code is refused', expired.status === 400, `status ${expired.status}`);
-  db.prepare('UPDATE contact_methods SET verified_at = ?, verify_hash = NULL WHERE id = ?').run(now(), smsId);
+  await q.prepare('UPDATE contact_methods SET verified_at = ?, verify_hash = NULL WHERE id = ?').run(now(), smsId);
 
   // ---- the plan gate -------------------------------------------------------
   // Turned on explicitly: this proves the GATE, and the check after it proves
   // the community edition does not apply one. Running the whole app in the cloud
   // edition would have made the loopback stub unreachable through the SSRF guard.
-  const freeOrg = mkOrg('Frugal', 'free');
-  const proOrg = mkOrg('Paying', 'pro');
+  const freeOrg = await mkOrg('Frugal', 'free');
+  const proOrg = await mkOrg('Paying', 'pro');
   chk('community edition gates nothing — the CE promise',
-    contacts.usable(methodRow(smsId), freeOrg).ok === true);
+    (await contacts.usable(await methodRow(smsId), freeOrg)).ok === true);
   plans.setEnforce(true);
   try {
-    const onFree = contacts.usable(methodRow(smsId), freeOrg);
+    const onFree = await contacts.usable(await methodRow(smsId), freeOrg);
     chk('with enforcement on, a free org may not send SMS', onFree.ok === false, JSON.stringify(onFree));
     chk('...and the reason names the plan, not the number',
       /plan/.test(onFree.reason || ''), onFree.reason);
-    chk('a pro org may', contacts.usable(methodRow(smsId), proOrg).ok === true);
+    chk('a pro org may', (await contacts.usable(await methodRow(smsId), proOrg)).ok === true);
     chk('voice follows the same line', plans.hasFeature('pro', 'voice') && !plans.hasFeature('free', 'voice'));
     chk('everything else in On-Call stays ungated — a chain that stops at a licence is not a guarantee',
       plans.hasFeature('free', 'email_alerts'));
@@ -280,7 +303,7 @@ async function main() {
     { rules: [{ urgency: 'high', delayM: 0, methodId: smsId }] });
 
   gateway.length = 0;
-  const caseA = mkCase(90);
+  const caseA = await mkCase(90);
   const A = (await call(admin, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseA, policyId: pol.id })).j;
   await tick(); await tick();
@@ -290,30 +313,30 @@ async function main() {
   chk('...addressed to the decrypted number', smsOut && smsOut.to === '+4915112345678');
   chk('...carrying the acknowledgement link, because inbound replies are out of scope',
     smsOut && /\/a\/[0-9a-f]{64}/.test(smsOut.text), smsOut && smsOut.text);
-  const smsNotif = notifsFor(A.id).find((n) => n.channel === 'sms');
+  const smsNotif = (await notifsFor(A.id)).find((n) => n.channel === 'sms');
   chk('the delivery is logged', !!smsNotif && smsNotif.ok === 1);
   chk('...with what it cost — the provider reported 0.0075',
     smsNotif && smsNotif.cost_micros === 7500, smsNotif && String(smsNotif.cost_micros));
 
   // A gateway that refuses is a failed delivery with the reason, not silence.
   gatewayFails = true;
-  const caseB = mkCase(90);
+  const caseB = await mkCase(90);
   const B = (await call(admin, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseB, policyId: pol.id })).j;
   await tick(); await tick();
-  const failed = notifsFor(B.id).find((n) => n.channel === 'sms');
+  const failed = (await notifsFor(B.id)).find((n) => n.channel === 'sms');
   chk('a gateway that refuses is recorded as a failed delivery',
     !!failed && failed.ok === 0 && /500/.test(failed.error || ''), JSON.stringify(failed));
   gatewayFails = false;
 
   // ---- the voice round trip ------------------------------------------------
   gateway.length = 0;   // otherwise the token found below belongs to an EARLIER alert
-  const caseC = mkCase(90);
+  const caseC = await mkCase(90);
   const C = (await call(admin, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseC, policyId: pol.id })).j;
   await tick();
   const token = (String((gateway.find((g) => g.text && /\/a\//.test(g.text)) || {}).text || '')
-    .match(/\/a\/([0-9a-f]{64})/) || [])[1] || mintTokenFor(C.id, anna.id);
+    .match(/\/a\/([0-9a-f]{64})/) || [])[1] || await mintTokenFor(C.id, anna.id);
 
   const flow = await fetch(`${BASE}/v/${token}/twiml`);
   const xml = await flow.text();
@@ -324,21 +347,21 @@ async function main() {
   // The exact reason the flow document and the digit callback are separate: the
   // provider fetches this URL to find out what to say, before anyone has heard
   // anything. It is a mail scanner with a phone line.
-  chk('fetching the call flow does NOT acknowledge', alertRow(C.id).status === 'active');
+  chk('fetching the call flow does NOT acknowledge', (await alertRow(C.id)).status === 'active');
 
   const wrongDigit = await fetch(`${BASE}/v/${token}/digits`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ Digits: '9' }).toString(),
   });
   chk('a wrong key does not acknowledge either',
-    wrongDigit.status === 200 && alertRow(C.id).status === 'active');
+    wrongDigit.status === 200 && (await alertRow(C.id)).status === 'active');
 
   const pressOne = await fetch(`${BASE}/v/${token}/digits`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ Digits: '1' }).toString(),
   });
   const ackXml = await pressOne.text();
-  chk('pressing 1 acknowledges', alertRow(C.id).status === 'acked', alertRow(C.id).status);
+  chk('pressing 1 acknowledges', (await alertRow(C.id)).status === 'acked', (await alertRow(C.id)).status);
   chk('...and the caller is told so', /Acknowledged/.test(ackXml), ackXml.slice(0, 200));
 
   const spentFlow = await fetch(`${BASE}/v/${token}/twiml`);
@@ -346,10 +369,10 @@ async function main() {
     /already been handled/.test(await spentFlow.text()));
 
   // Vonage speaks a different document for the same conversation.
-  const caseD = mkCase(90);
+  const caseD = await mkCase(90);
   const D = (await call(admin, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseD, policyId: pol.id })).j;
-  const token2 = mintTokenFor(D.id, anna.id);
+  const token2 = await mintTokenFor(D.id, anna.id);
   const ncco = await (await fetch(`${BASE}/v/${token2}/ncco`)).json();
   chk('the Vonage flow is an NCCO with a talk step', Array.isArray(ncco) && ncco[0].action === 'talk');
   chk('...and a DTMF input step', ncco.some((a) => a.action === 'input' && a.dtmf));
@@ -358,13 +381,13 @@ async function main() {
     body: JSON.stringify({ dtmf: { digits: '1' } }),
   });
   chk('a Vonage keypress acknowledges the same way',
-    nccoDigits.status === 200 && alertRow(D.id).status === 'acked');
+    nccoDigits.status === 200 && (await alertRow(D.id)).status === 'acked');
 
   // ---- Web Push ------------------------------------------------------------
   const keyResp = await call(admin, 'GET', '/api/oncall/me/push-key');
   chk('a VAPID public key is served', keyResp.status === 200 && typeof keyResp.j.key === 'string'
     && keyResp.j.key.length > 40, JSON.stringify(keyResp.j).slice(0, 120));
-  const stored = db.prepare("SELECT value FROM settings WHERE key = 'vapid_public'").get();
+  const stored = await q.prepare("SELECT value FROM settings WHERE key = 'vapid_public'").get();
   chk('...and it is STORED — regenerating it would silently kill every subscription',
     !!stored && stored.value === keyResp.j.key);
   const again = await call(admin, 'GET', '/api/oncall/me/push-key');
@@ -375,7 +398,7 @@ async function main() {
   const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc123def456', keys: { p256dh: 'BPk', auth: 'xyz' } };
   const pushResp = await call(admin, 'POST', '/api/oncall/me/push', { subscription: sub, label: 'Firefox on Linux' });
   chk('a browser can subscribe', pushResp.status === 201, JSON.stringify(pushResp.j));
-  const pushRow = methodRow(pushResp.j.id);
+  const pushRow = await methodRow(pushResp.j.id);
   chk('the subscription is encrypted at rest — it is a bearer capability',
     pushRow.encrypted === 1 && !pushRow.address.includes('fcm.googleapis.com'));
   const dupe = await call(admin, 'POST', '/api/oncall/me/push', { subscription: sub });
@@ -394,20 +417,17 @@ async function main() {
 
   // ---- report --------------------------------------------------------------
   stub.close();
-  const failedChecks = R.filter((l) => l.startsWith('FAIL'));
-  console.log(R.join('\n'));
-  console.log(`\n${R.length - failedChecks.length}/${R.length} checks passed`);
-  process.exit(failedChecks.length ? 1 : 0);
+  report();
 }
 
 // A token minted the way the chain mints one, for the paths where no delivery
 // carried it (a Vonage call, or a gateway that swallowed the text).
-function mintTokenFor(alertId, userId) {
+async function mintTokenFor(alertId, userId) {
   const { randHex } = require('./src/util');
   const t = randHex(32);
-  db.prepare(`INSERT INTO alert_tokens (token_hash, alert_id, user_id, purpose, expires_at)
+  await q.prepare(`INSERT INTO alert_tokens (token_hash, alert_id, user_id, purpose, expires_at)
     VALUES (?, ?, ?, 'ack', ?)`).run(sha256(t), alertId, userId, now() + 3600000);
   return t;
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(die);

@@ -19,7 +19,7 @@
 //      from `pageByDomain`, which is verified-only and plan-gated.
 const dnsPromises = require('dns').promises;
 const crypto = require('crypto');
-const { db } = require('../db');
+const store = require('../db/shim');
 const { now } = require('../util');
 const config = require('../config');
 
@@ -57,29 +57,29 @@ const newToken = () => `opscat-verify-${crypto.randomBytes(16).toString('hex')}`
 const challengeHost = (domain) => `${CHALLENGE_PREFIX}.${domain}`;
 
 const q = {
-  byDomain: db.prepare('SELECT id, org_id FROM status_pages WHERE domain = ?'),
-  set: db.prepare(`UPDATE status_pages SET domain = ?, domain_token = ?, domain_verified_at = NULL
+  byDomain: store.prepare('SELECT id, org_id FROM status_pages WHERE domain = ?'),
+  set: store.prepare(`UPDATE status_pages SET domain = ?, domain_token = ?, domain_verified_at = NULL
     WHERE id = ?`),
-  verified: db.prepare('UPDATE status_pages SET domain_verified_at = ? WHERE id = ?'),
-  clear: db.prepare(`UPDATE status_pages SET domain = NULL, domain_token = NULL,
+  verified: store.prepare('UPDATE status_pages SET domain_verified_at = ? WHERE id = ?'),
+  clear: store.prepare(`UPDATE status_pages SET domain = NULL, domain_token = NULL,
     domain_verified_at = NULL WHERE id = ?`),
 };
 
 // Claiming a domain is always unverified — even re-claiming the same one, and
 // even for the page that already had it. Re-verification is cheap, and skipping
 // it after an edit is how a stale proof outlives the DNS it was proving.
-function setDomain(page, rawDomain) {
+async function setDomain(page, rawDomain) {
   const domain = normalize(rawDomain);
   const problem = domainProblem(domain);
   if (problem) return { ok: false, error: problem };
-  const taken = q.byDomain.get(domain);
+  const taken = await q.byDomain.get(domain);
   if (taken && taken.id !== page.id) return { ok: false, error: 'that domain is already in use' };
   const token = newToken();
-  q.set.run(domain, token, page.id);
+  await q.set.run(domain, token, page.id);
   return { ok: true, domain, token, record: { host: challengeHost(domain), type: 'TXT', value: token } };
 }
 
-function clearDomain(page) { q.clear.run(page.id); }
+async function clearDomain(page) { await q.clear.run(page.id); }
 
 // The resolver is injectable for the same reason it is in engine/reputation.js:
 // a test must be able to answer DNS deterministically, and the CI box has no
@@ -116,7 +116,7 @@ async function verifyDomain(page, resolver = null) {
     return { ok: false, error: `the TXT record at ${host} does not carry the expected value`,
       found: values.slice(0, 5) };
   }
-  q.verified.run(now(), page.id);
+  await q.verified.run(now(), page.id);
   return { ok: true };
 }
 

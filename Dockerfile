@@ -8,9 +8,11 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-# --- Stage 2: server dependencies (build tools for better-sqlite3 fallback) ---
+# --- Stage 2: server dependencies ---
+# No build toolchain: `python3 make g++` were here to compile better-sqlite3, the
+# only native dependency this image ever had. SQLite is gone (decision D6) and
+# `pg` is pure JavaScript, so there is nothing left to build from source.
 FROM node:22-alpine AS serverdeps
-RUN apk add --no-cache python3 make g++
 WORKDIR /build/server
 COPY server/package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund

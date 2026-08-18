@@ -1,0 +1,41 @@
+{
+  "// why": [
+    "Type-checking only — this project is plain JavaScript and stays that way.",
+    "`checkJs` is what turns src/db/shim.d.ts into a gate over all 46 files:",
+    "a missed await on a shim call becomes 'Property map does not exist on",
+    "type Promise<Row[]>' at build time rather than a truthy Promise at runtime.",
+    "",
+    "`strict` is off deliberately. Turning it on across a codebase that was",
+    "never written for it produces thousands of unrelated nullability errors,",
+    "which would bury the one class this gate exists to surface. It can be",
+    "raised per-file later; the await class does not need it.",
+    "",
+    "The harnesses are INCLUDED, and that is not tidiness. The gate used to stop",
+    "at src/, so converting an engine turned every e2e-*.js that drives it into a",
+    "missed-await site the gate could not see — and the harness is where the",
+    "coverage lives, so the conversion's own verification is what breaks first,",
+    "looking like a regression in the engine. Measured: converting the four small",
+    "engines left eleven un-awaited call sites across three harnesses, all",
+    "invisible here. Including them costs advisory noise (counted, not gated).",
+    "",
+    "It closes most of that frontier, not all of it, and the remainder is worth",
+    "knowing: a DISCARDED promise — `retention.pruneLogs(now());` as a bare",
+    "statement — reads no property off anything, so no type system can see it.",
+    "Measured: re-dropping that await leaves this gate silent while the harness",
+    "itself goes from 23/23 to 15/23. The layers do different jobs; this one",
+    "catches a Promise being USED, and only a run catches one being ignored."
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "strict": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.js", "src/**/*.d.ts", "e2e-*.js", "run-e2e.js", "scripts/*.js"],
+  "exclude": ["node_modules"]
+}

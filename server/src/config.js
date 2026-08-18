@@ -5,16 +5,17 @@ const crypto = require('crypto');
 function bool(v, d) { if (v === undefined || v === '') return d; return v === '1' || v === 'true'; }
 function int(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; }
 
+// Kept for anything the app writes to disk beside the database (nothing does,
+// today). `dbFile` went with SQLite — the database is a connection string now,
+// and a stale path constant is how somebody reintroduces a file.
 const dataDir = process.env.OPSCAT_DATA_DIR || path.join(__dirname, '..', 'data');
 
 module.exports = {
   port: int(process.env.PORT, 3000),
   dataDir,
-  dbFile: path.join(dataDir, 'opscat.db'),
-  // PostgreSQL connection string. Read but not yet USED — the adapter arrives in
-  // Phase 5 of docs/POSTGRES-MIGRATION-PLAN.md. It is declared now so the value
-  // has one home from the start, and so the compose whitelists that must carry
-  // it are written and reviewed before anything depends on them.
+  // PostgreSQL connection string. REQUIRED — it is the only engine (decision D6);
+  // src/db/shim.js refuses to load without it rather than falling back to
+  // anything.
   databaseUrl: process.env.DATABASE_URL || null,
   publicDir: process.env.OPSCAT_PUBLIC_DIR || path.join(__dirname, '..', 'public'),
   wwwDir: process.env.OPSCAT_WWW_DIR || path.join(__dirname, '..', 'public-www'),

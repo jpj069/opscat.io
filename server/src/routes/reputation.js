@@ -6,7 +6,7 @@
 // every episode of being listed). See engine/reputation.js for why those are two
 // tables and docs/ARCHITECTURE.md for why they are not synthetic_checks rows.
 const express = require('express');
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now, isStr, clampInt, httpError } = require('../util');
 const sec = require('../security');
 const plans = require('../plans');
@@ -28,14 +28,14 @@ const MIN_INTERVAL_S = 3600;       // 1h
 // The effective floor: this feature's minimum, never below the org's plan floor.
 const floorFor = (plan) => Math.max(MIN_INTERVAL_S, plans.minIntervalFor(plan));
 
-const listAssets = db.prepare('SELECT * FROM reputation_assets WHERE org_id = ? ORDER BY id');
-const getAsset = db.prepare('SELECT * FROM reputation_assets WHERE id = ? AND org_id = ?');
-const latestRun = db.prepare(
+const listAssets = q.prepare('SELECT * FROM reputation_assets WHERE org_id = ? ORDER BY id');
+const getAsset = q.prepare('SELECT * FROM reputation_assets WHERE id = ? AND org_id = ?');
+const latestRun = q.prepare(
   'SELECT * FROM reputation_runs WHERE asset_id = ? ORDER BY ts DESC, id DESC LIMIT 1');
-const openListings = db.prepare(`SELECT * FROM reputation_listings
+const openListings = q.prepare(`SELECT * FROM reputation_listings
   WHERE asset_id = ? AND resolved_at IS NULL ORDER BY
     CASE tier WHEN 'critical' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END, name`);
-const listingHistory = db.prepare(`SELECT * FROM reputation_listings
+const listingHistory = q.prepare(`SELECT * FROM reputation_listings
   WHERE asset_id = ? ORDER BY COALESCE(resolved_at, first_seen) DESC, id DESC LIMIT ?`);
 
 const parseJson = (raw, fallback) => {
@@ -69,9 +69,9 @@ const toListing = (l) => ({
 //   clean         - queried successfully, nothing found
 //   unknown       - could not be checked (no reachable critical zone / error)
 //   pending       - never run yet
-function toAsset(asset) {
-  const run = latestRun.get(asset.id);
-  const listings = openListings.all(asset.id).map(toListing);
+async function toAsset(asset) {
+  const run = await latestRun.get(asset.id);
+  const listings = (await openListings.all(asset.id)).map(toListing);
   return {
     id: asset.id,
     target: asset.target,
@@ -100,12 +100,12 @@ function toAsset(asset) {
 
 // ---- assets -----------------------------------------------------------------
 
-router.get('/assets', (req, res) => {
-  res.json(listAssets.all(req.orgId).map(toAsset));
+router.get('/assets', async (req, res) => {
+  res.json(await Promise.all((await listAssets.all(req.orgId)).map(toAsset)));
 });
 
-router.get('/overview', (req, res) => {
-  const assets = listAssets.all(req.orgId).map(toAsset);
+router.get('/overview', async (req, res) => {
+  const assets = await Promise.all((await listAssets.all(req.orgId)).map(toAsset));
   const count = (s) => assets.filter((a) => a.status === s).length;
   // Coverage is "how many lists actually answered", which is the honest ceiling
   // on what any verdict here is worth — a resolver the lists refuse silently
@@ -134,7 +134,7 @@ router.get('/overview', (req, res) => {
   });
 });
 
-router.post('/assets', sec.requireRole('lead'), (req, res) => {
+router.post('/assets', sec.requireRole('lead'), async (req, res) => {
   const { target, intervalS } = req.body || {};
   if (!isStr(target, 300)) return httpError(res, 400, 'target required');
   const normalized = reputation.normalizeTarget(target);
@@ -145,30 +145,32 @@ router.post('/assets', sec.requireRole('lead'), (req, res) => {
   // Compare canonical keys, not raw strings: MAIL.example.com. and
   // mail.example.com are one asset, and so are 2001:0db8::1 and 2001:db8::1.
   const key = reputation.targetKey(normalized);
-  const dup = listAssets.all(req.orgId).find((a) => reputation.targetKey(a.target) === key);
+  const dup = (await listAssets.all(req.orgId)).find((a) => reputation.targetKey(a.target) === key);
   if (dup) return httpError(res, 409, 'this target is already monitored');
   // Shares the org's check budget — the `checks` counter in plans.js spans both
   // tables, so assets cannot be used to slip past the plan limit.
-  const lim = plans.checkLimit(req.orgId, req.org.plan, 'checks');
+  const lim = await plans.checkLimit(req.orgId, req.org.plan, 'checks');
   if (!lim.ok) {
     return httpError(res, 402, `plan limit reached (${lim.used}/${lim.limit} checks) — upgrade your plan to add more`);
   }
   const minIv = floorFor(req.org.plan);
-  const info = db.prepare(`INSERT INTO reputation_assets
+  // insert() rather than run().lastInsertRowid: better-sqlite3 reports one and
+  // node-postgres has no such field, so the shim uses RETURNING id on both.
+  const id = await q.prepare(`INSERT INTO reputation_assets
       (org_id, target, kind, rdns, interval_s, enabled, created_at)
     VALUES (?, ?, ?, NULL, ?, 1, ?)`)
-    .run(req.orgId, normalized, parsed.kind,
+    .insert(req.orgId, normalized, parsed.kind,
       clampInt(intervalS, minIv, MAX_INTERVAL_S, Math.max(DEFAULT_INTERVAL_S, minIv)), now());
   sec.audit(req.user.id, 'reputation_asset_create', normalized, req.orgId);
-  res.json({ id: info.lastInsertRowid });
+  res.json({ id });
 });
 
-router.patch('/assets/:id', sec.requireRole('lead'), (req, res) => {
-  const asset = getAsset.get(req.params.id, req.orgId);
+router.patch('/assets/:id', sec.requireRole('lead'), async (req, res) => {
+  const asset = await getAsset.get(req.params.id, req.orgId);
   if (!asset) return httpError(res, 404, 'asset not found');
   const b = req.body || {};
   const minIv = floorFor(req.org.plan);
-  db.prepare(`UPDATE reputation_assets SET enabled = COALESCE(?, enabled),
+  await q.prepare(`UPDATE reputation_assets SET enabled = COALESCE(?, enabled),
       interval_s = COALESCE(?, interval_s) WHERE id = ? AND org_id = ?`)
     .run(typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
       Number.isFinite(b.intervalS)
@@ -180,11 +182,11 @@ router.patch('/assets/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/assets/:id', sec.requireRole('lead'), (req, res) => {
-  const asset = getAsset.get(req.params.id, req.orgId);
+router.delete('/assets/:id', sec.requireRole('lead'), async (req, res) => {
+  const asset = await getAsset.get(req.params.id, req.orgId);
   if (!asset) return httpError(res, 404, 'asset not found');
   // runs + listings cascade
-  db.prepare('DELETE FROM reputation_assets WHERE id = ? AND org_id = ?').run(asset.id, req.orgId);
+  await q.prepare('DELETE FROM reputation_assets WHERE id = ? AND org_id = ?').run(asset.id, req.orgId);
   reputation.resetSchedule(asset.id);
   sec.audit(req.user.id, 'reputation_asset_delete', asset.target, req.orgId);
   res.json({ ok: true });
@@ -193,22 +195,22 @@ router.delete('/assets/:id', sec.requireRole('lead'), (req, res) => {
 // Every episode of being listed, newest first — open ones and delisted ones.
 // This is what the new model buys: the answer to "how long were we on Spamhaus
 // in March", which a table of samples cannot give.
-router.get('/assets/:id/history', (req, res) => {
-  const asset = getAsset.get(req.params.id, req.orgId);
+router.get('/assets/:id/history', async (req, res) => {
+  const asset = await getAsset.get(req.params.id, req.orgId);
   if (!asset) return httpError(res, 404, 'asset not found');
   const limit = clampInt(req.query.limit, 1, 500, 100);
-  res.json(listingHistory.all(asset.id, limit).map(toListing));
+  res.json((await listingHistory.all(asset.id, limit)).map(toListing));
 });
 
 // Run one asset now. 31 zones at up to 3s each, so this can take a few seconds
 // on a cold canary cache — the client shows a spinner rather than polling.
 router.post('/assets/:id/run', sec.requireRole('lead'), async (req, res) => {
-  const asset = getAsset.get(req.params.id, req.orgId);
+  const asset = await getAsset.get(req.params.id, req.orgId);
   if (!asset) return httpError(res, 404, 'asset not found');
   try {
     await reputation.runAsset(asset);
     // re-read: runAsset may have updated rdns and has written a new run
-    return res.json({ ok: true, result: toAsset(getAsset.get(asset.id, req.orgId)) });
+    return res.json({ ok: true, result: await toAsset(await getAsset.get(asset.id, req.orgId)) });
   } catch (e) {
     return httpError(res, 502, `lookup failed: ${String(e.message).slice(0, 200)}`);
   }
@@ -235,7 +237,7 @@ router.post('/discover', sec.requireRole('lead'), async (req, res) => {
   }
   // Mark what is already monitored so the UI can pre-select only the rest
   // instead of offering duplicates that would 409 one by one.
-  const known = new Set(listAssets.all(req.orgId).map((a) => reputation.targetKey(a.target)));
+  const known = new Set((await listAssets.all(req.orgId)).map((a) => reputation.targetKey(a.target)));
   res.json({
     ...result,
     candidates: result.candidates.map((c) => ({
@@ -247,13 +249,13 @@ router.post('/discover', sec.requireRole('lead'), async (req, res) => {
 // Add several assets at once — the natural follow-up to discovery. Partial
 // success is reported per target rather than failing the batch: one bad entry in
 // a list of eight should not cost the other seven.
-router.post('/assets/bulk', sec.requireRole('lead'), (req, res) => {
+router.post('/assets/bulk', sec.requireRole('lead'), async (req, res) => {
   const targets = Array.isArray(req.body?.targets) ? req.body.targets.slice(0, 100) : null;
   if (!targets || !targets.length) return httpError(res, 400, 'expected {targets:[...]}');
   const minIv = floorFor(req.org.plan);
   const intervalS = clampInt(req.body?.intervalS, minIv, MAX_INTERVAL_S,
     Math.max(DEFAULT_INTERVAL_S, minIv));
-  const ins = db.prepare(`INSERT INTO reputation_assets
+  const ins = q.prepare(`INSERT INTO reputation_assets
       (org_id, target, kind, rdns, interval_s, enabled, created_at)
     VALUES (?, ?, ?, NULL, ?, 1, ?)`);
 
@@ -265,15 +267,15 @@ router.post('/assets/bulk', sec.requireRole('lead'), (req, res) => {
     const key = reputation.targetKey(normalized);
     // Re-read inside the loop: two targets in the same batch can collapse onto
     // one canonical key, and the earlier one is already in the table by then.
-    if (listAssets.all(req.orgId).some((a) => reputation.targetKey(a.target) === key)) {
+    if ((await listAssets.all(req.orgId)).some((a) => reputation.targetKey(a.target) === key)) {
       skipped.push({ target: normalized, reason: 'already monitored' });
       continue;
     }
     // Checked per row, not once up front: the budget is consumed as we go, so a
     // batch must stop at the limit rather than sail past it.
-    const lim = plans.checkLimit(req.orgId, req.org.plan, 'checks');
+    const lim = await plans.checkLimit(req.orgId, req.org.plan, 'checks');
     if (!lim.ok) { skipped.push({ target: normalized, reason: `plan limit reached (${lim.used}/${lim.limit})` }); continue; }
-    ins.run(req.orgId, normalized, reputation.parseTarget(normalized).kind, intervalS, now());
+    await ins.run(req.orgId, normalized, reputation.parseTarget(normalized).kind, intervalS, now());
     added.push(normalized);
   }
   if (added.length) sec.audit(req.user.id, 'reputation_asset_create', `${added.length} from SPF: ${added.join(', ')}`.slice(0, 300), req.orgId);
@@ -281,7 +283,7 @@ router.post('/assets/bulk', sec.requireRole('lead'), (req, res) => {
 });
 
 // The curated zone list, so the UI can explain what "19 of 31" actually covers.
-router.get('/zones', (req, res) => {
+router.get('/zones', async (req, res) => {
   const shape = (z) => ({ name: z.name, zone: z.zone, tier: z.tier });
   res.json({ ip: reputation.IP_ZONES.map(shape), domain: reputation.DOMAIN_ZONES.map(shape) });
 });

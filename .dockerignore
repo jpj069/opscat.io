@@ -9,9 +9,11 @@
 # 2. **The host's `node_modules` was uploaded and then discarded.** Both images
 #    `COPY server/ ./server/` and immediately overwrite it with
 #    `COPY --from=serverdeps …/node_modules`. Hundreds of MB of build context for
-#    nothing — and the host's `better-sqlite3` is compiled for the DEVELOPER'S
-#    platform, so if that overwrite order is ever changed, a macOS or glibc binary
-#    lands in an Alpine image and fails at runtime rather than at build time.
+#    nothing. It used to be worse than wasteful: the host's `better-sqlite3` was
+#    compiled for the DEVELOPER'S platform, so changing that overwrite order put
+#    a macOS or glibc binary into an Alpine image, failing at runtime rather than
+#    at build time. There is no native dependency left (D6), so today it is only
+#    the wasted upload.
 #
 # ── What must NOT be excluded, and why it is easy to get wrong ────────────────
 #

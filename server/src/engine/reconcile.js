@@ -6,7 +6,7 @@
 // nodes marked 'dead'. Runs hourly; every action lands in the audit log via
 // the caller-less system entry (user_id NULL is not supported by sec.audit, so
 // we log to console + mark rows instead).
-const { db } = require('../db');
+const q = require('../db/shim');
 const config = require('../config');
 const { decrypt } = require('../util');
 const providers = require('../providers');
@@ -18,14 +18,15 @@ async function sweepCredential(cred) {
   const p = providers.provider(cred.provider);
   // regions we ever provisioned with this credential (AWS lists per region)
   const regions = cred.provider === 'aws'
-    ? db.prepare(`SELECT DISTINCT provider_region r FROM sensor_nodes
-        WHERE cloud_credential_id = ? AND provider_region IS NOT NULL`).all(cred.id).map((x) => x.r)
+    ? (await q.prepare(`SELECT DISTINCT provider_region r FROM sensor_nodes
+        WHERE cloud_credential_id = ? AND provider_region IS NOT NULL`).all(cred.id)).map((x) => x.r)
     : [null];
   for (const region of regions) {
     const instances = await p.listInstances(secret, { region });
     for (const inst of instances) {
+      // eslint-disable-next-line no-await-in-loop
       const loc = inst.locationId
-        ? db.prepare('SELECT id FROM synthetic_locations WHERE id = ? AND active = 1').get(inst.locationId)
+        ? await q.prepare('SELECT id FROM synthetic_locations WHERE id = ? AND active = 1').get(inst.locationId)
         : null;
       if (loc) continue; // healthy: instance ↔ active location
       try {
@@ -38,12 +39,13 @@ async function sweepCredential(cred) {
     }
   }
   // retry teardown of nodes whose destroy failed at delete time
-  const dead = db.prepare(`SELECT * FROM sensor_nodes
+  const dead = await q.prepare(`SELECT * FROM sensor_nodes
     WHERE cloud_credential_id = ? AND status = 'dead' AND provider_instance_id IS NOT NULL`).all(cred.id);
   for (const node of dead) {
     try {
       await p.destroyInstance(secret, { region: node.provider_region, providerInstanceId: node.provider_instance_id });
-      db.prepare('DELETE FROM sensor_nodes WHERE id = ?').run(node.id);
+      // eslint-disable-next-line no-await-in-loop
+      await q.prepare('DELETE FROM sensor_nodes WHERE id = ?').run(node.id);
       console.log(`[reconcile] retried teardown of dead node ${node.id} ok`);
     } catch { /* keep for next sweep */ }
   }
@@ -54,13 +56,13 @@ async function sweep() {
   if (running) return;
   running = true;
   try {
-    const creds = db.prepare('SELECT * FROM cloud_credentials').all();
+    const creds = await q.prepare('SELECT * FROM cloud_credentials').all();
     for (const cred of creds) {
       try { await sweepCredential(cred); }
       catch (e) { console.error(`[reconcile] credential ${cred.id} (${cred.provider}): ${e.message}`); }
     }
     // nodes without any instance id and older than an hour never came up — drop them
-    db.prepare(`DELETE FROM sensor_nodes WHERE provider_instance_id IS NULL
+    await q.prepare(`DELETE FROM sensor_nodes WHERE provider_instance_id IS NULL
       AND status = 'provisioning' AND created_at < ?`).run(Date.now() - SWEEP_MS);
   } finally { running = false; }
 }

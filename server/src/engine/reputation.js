@@ -29,7 +29,7 @@ const crypto = require('crypto');
 
 const dns = require('dns');
 const net = require('net');
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
 
@@ -490,20 +490,30 @@ function targetKey(raw) {
 
 // ---- persistence -------------------------------------------------------------
 
-const insRun = db.prepare(`INSERT INTO reputation_runs
+const insRun = q.prepare(`INSERT INTO reputation_runs
   (asset_id, ts, status, zones_queried, zones_total, worst_tier, duration_ms,
    unavailable, errored, policy, error, mx_hosts)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-const openListingsFor = db.prepare(
+const openListingsFor = q.prepare(
   'SELECT * FROM reputation_listings WHERE asset_id = ? AND resolved_at IS NULL');
-const touchListing = db.prepare(`UPDATE reputation_listings
-  SET last_seen = ?, codes = ?, url = ?, tier = ?, name = ? WHERE id = ?`);
-const openListing = db.prepare(`INSERT INTO reputation_listings
+// Open-or-extend an episode in ONE statement, against the same partial unique
+// index that defines "at most one OPEN listing per (asset, subject, zone)". The
+// two used to be a check-then-insert on a JS lookup of the open listings, and a
+// losing INSERT raises 23505 under Postgres — which aborts the enclosing
+// transaction, so one racing run would discard an entire asset's findings rather
+// than record a duplicate. `first_seen` is NOT in the DO UPDATE list: an episode
+// keeps the instant it started, which is what makes the history read as distinct
+// episodes rather than one smear. A RESOLVED row does not conflict (the index is
+// `WHERE resolved_at IS NULL`), so a re-listing still opens a new row.
+const upsertListing = q.prepare(`INSERT INTO reputation_listings
   (asset_id, zone, name, tier, codes, url, subject, first_seen, last_seen, resolved_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
-const resolveListing = db.prepare('UPDATE reputation_listings SET resolved_at = ? WHERE id = ?');
-const setRdns = db.prepare('UPDATE reputation_assets SET rdns = ? WHERE id = ?');
-const enabledAssets = db.prepare('SELECT * FROM reputation_assets WHERE enabled = 1');
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+  ON CONFLICT(asset_id, subject, zone) WHERE resolved_at IS NULL DO UPDATE SET
+    last_seen = excluded.last_seen, codes = excluded.codes, url = excluded.url,
+    tier = excluded.tier, name = excluded.name`);
+const resolveListing = q.prepare('UPDATE reputation_listings SET resolved_at = ? WHERE id = ?');
+const setRdns = q.prepare('UPDATE reputation_assets SET rdns = ? WHERE id = ?');
+const enabledAssets = q.prepare('SELECT * FROM reputation_assets WHERE enabled = 1');
 
 const jsonOrNull = (v) => (v && v.length ? JSON.stringify(v) : null);
 
@@ -523,32 +533,31 @@ const jsonOrNull = (v) => (v && v.length ? JSON.stringify(v) : null);
 // those are separate facts with separate lifecycles, so they get separate keys.
 const listingKey = (subject, zone) => `${subject || ''}\u0000${zone}`;
 
-function syncListings(assetId, found, answeredKeys, ts) {
+async function syncListings(assetId, found, answeredKeys, ts) {
   const answered = new Set(answeredKeys);
-  const open = openListingsFor.all(assetId);
-  const byKey = new Map(open.map((l) => [listingKey(l.subject, l.zone), l]));
+  const open = await openListingsFor.all(assetId);
+  const openKeys = new Set(open.map((l) => listingKey(l.subject, l.zone)));
   const foundKeys = new Set(found.map((f) => listingKey(f.subject, f.zone)));
   const opened = [];
   const resolved = [];
 
   for (const f of found) {
-    const existing = byKey.get(listingKey(f.subject, f.zone));
-    if (existing) {
-      // Same episode continuing: extend it, and refresh the fields a list can
-      // change under us (a new return code, a moved delisting page).
-      touchListing.run(ts, jsonOrNull(f.codes), f.url || null, f.tier, f.name, existing.id);
-    } else {
-      openListing.run(assetId, f.zone, f.name, f.tier, jsonOrNull(f.codes), f.url || null,
-        f.subject || '', ts, ts);
-      opened.push(f);
-    }
+    // The read decides only whether this is a NEW EPISODE — i.e. whether it is
+    // worth a `reputation_listed` event. The write is the same statement either
+    // way: an existing open episode is extended (and the fields a list can change
+    // under us are refreshed — a new return code, a moved delisting page), a new
+    // one is opened. See upsertListing for why the write may not branch on a read.
+    const isNew = !openKeys.has(listingKey(f.subject, f.zone));
+    await upsertListing.run(assetId, f.zone, f.name, f.tier, jsonOrNull(f.codes), f.url || null,
+      f.subject || '', ts, ts);
+    if (isNew) opened.push(f);
   }
 
   for (const l of open) {
     const key = listingKey(l.subject, l.zone);
     if (foundKeys.has(key)) continue;
     if (!answered.has(key)) continue; // silent zone — prove nothing, change nothing
-    resolveListing.run(ts, l.id);
+    await resolveListing.run(ts, l.id);
     resolved.push(l);
   }
   return { opened, resolved };
@@ -698,7 +707,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
   if (!res) {
     // An unusable target or a resolver that gave us nothing at all. Recorded as
     // `unknown`, never as clean, and the open listings stay open.
-    insRun.run(asset.id, ts, 'unknown', 0, 0, null, durationMs, null, null, null, failure, null);
+    await insRun.run(asset.id, ts, 'unknown', 0, 0, null, durationMs, null, null, null, failure, null);
     return { status: 'unknown', error: failure, listed: [], opened: [], resolved: [] };
   }
 
@@ -709,7 +718,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
     try {
       const names = await (injectedResolver || dns.promises).reverse(asset.target);
       const rdns = names && names.length ? String(names[0]).slice(0, 253) : null;
-      if (rdns !== asset.rdns) setRdns.run(rdns, asset.id);
+      if (rdns !== asset.rdns) await setRdns.run(rdns, asset.id);
     } catch { /* no PTR, or the resolver refused — keep the last known value */ }
   }
 
@@ -742,7 +751,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
   const error = res.criticalCovered ? null
     : 'no critical blocklist reachable — check the resolver (OPSCAT_REPUTATION_DNS)';
 
-  insRun.run(asset.id, ts, status, res.zonesQueried, res.zonesTotal,
+  await insRun.run(asset.id, ts, status, res.zonesQueried, res.zonesTotal,
     worstTier || null, durationMs,
     jsonOrNull(res.unavailable), jsonOrNull(res.errored), jsonOrNull(res.policy), error,
     jsonOrNull(mx.hosts));
@@ -751,13 +760,13 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
     ...res.answered.map((z) => listingKey('', z)),
     ...mx.answered,
   ];
-  const { opened, resolved } = syncListings(asset.id, allFound, answeredKeys, ts);
+  const { opened, resolved } = await syncListings(asset.id, allFound, answeredKeys, ts);
 
   if (actionable.length) {
     // Name the mail server when that is what is listed. "link11.com listed on
     // Spamhaus ZEN" would send someone looking at the wrong thing entirely.
     const names = actionable.map((l) => (l.subject ? `${l.name} (${l.subject})` : l.name)).join(', ');
-    pipeline.ingestEvent({
+    await pipeline.ingestEvent({
       name: 'reputation_listed', device: asset.target, target: asset.target,
       severity: TIER_SEVERITY[worstTier] || TIER_SEVERITY.standard,
       description: `reputation_listed ${asset.target} listed on ${actionable.length} blocklist(s): ${names}`.slice(0, 300),
@@ -768,7 +777,7 @@ async function runAsset(asset, timeoutMs = DEFAULT_TIMEOUT_MS, injectedResolver 
     // a close_event automation can finish the raise and close its case; kept
     // below the alerting floor so nobody is paged for good news.
     const names = resolved.filter((l) => l.tier !== 'informational').map((l) => l.name).join(', ');
-    pipeline.ingestEvent({
+    await pipeline.ingestEvent({
       name: 'reputation_cleared', device: asset.target, target: asset.target,
       severity: 20,
       description: `reputation_cleared ${asset.target} delisted from ${names}`.slice(0, 300),
@@ -784,7 +793,7 @@ const lastRun = new Map(); // assetId -> ts
 
 async function tick() {
   const t = now();
-  for (const asset of enabledAssets.all()) {
+  for (const asset of await enabledAssets.all()) {
     const due = (lastRun.get(asset.id) || 0) + asset.interval_s * 1000;
     if (t < due) continue;
     lastRun.set(asset.id, t);

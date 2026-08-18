@@ -21,30 +21,30 @@
  * cancel on close) — one of the two directions has to be deferred, and the
  * cancel path is the one that is already inside a function call.
  */
-const { db } = require('../db');
+const store = require('../db/shim');
 const { now } = require('../util');
 
 const label = (id) => `C-${1000 + id}`;
 const STATUSES = ['open', 'assigned', 'closed'];
 
 const q = {
-  byId: db.prepare('SELECT * FROM cases WHERE id = ? AND org_id = ?'),
-  openForEvent: db.prepare("SELECT * FROM cases WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
-  latestForEvent: db.prepare('SELECT * FROM cases WHERE event_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1'),
-  close: db.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE id = ? AND status != 'closed'"),
+  byId: store.prepare('SELECT * FROM cases WHERE id = ? AND org_id = ?'),
+  openForEvent: store.prepare("SELECT * FROM cases WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
+  latestForEvent: store.prepare('SELECT * FROM cases WHERE event_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1'),
+  close: store.prepare("UPDATE cases SET status = 'closed', closed_at = ? WHERE id = ? AND status != 'closed'"),
   // The newline is BOUND, not spelled: SQLite has `char(10)`, Postgres has
   // `chr(10)`, and neither is needed — a parameter is portable by construction.
   // The append must stay in SQL: this is the repo's only concurrency-safe note
   // append, and read-modify-write in JS would lose whatever another writer added
   // in between. Bound args: (closed_at, '\n', note, id).
-  closeWithNote: db.prepare(`UPDATE cases SET status = 'closed', closed_at = ?,
+  closeWithNote: store.prepare(`UPDATE cases SET status = 'closed', closed_at = ?,
     note = COALESCE(note || ?, '') || ? WHERE id = ? AND status != 'closed'`),
-  note: db.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
-  assign: db.prepare(`UPDATE cases SET assigned_user_id = ?,
+  note: store.prepare("UPDATE cases SET note = ? WHERE event_id = ? AND org_id = ? AND status != 'closed'"),
+  assign: store.prepare(`UPDATE cases SET assigned_user_id = ?,
     status = CASE WHEN status = 'open' THEN 'assigned' ELSE status END
     WHERE event_id = ? AND org_id = ? AND status != 'closed'`),
-  ack: db.prepare('UPDATE cases SET acked_at = ?, acked_by = ? WHERE id = ? AND acked_at IS NULL'),
-  update: db.prepare(`UPDATE cases SET
+  ack: store.prepare('UPDATE cases SET acked_at = ?, acked_by = ? WHERE id = ? AND acked_at IS NULL'),
+  update: store.prepare(`UPDATE cases SET
       status = COALESCE(?, status),
       assigned_user_id = COALESCE(?, assigned_user_id),
       root_cause = COALESCE(?, root_cause),
@@ -55,51 +55,53 @@ const q = {
 
 // The hook every close site shares. Kept private: a caller that wants "close a
 // case" must not be able to choose whether the alerts stop.
-function afterClose(orgId, caseId) {
-  require('../engine/alert-chain').onSubjectClosed(orgId, 'case', caseId, 'case closed');
+async function afterClose(orgId, caseId) {
+  await require('../engine/alert-chain').onSubjectClosed(orgId, 'case', caseId, 'case closed');
 }
 
 /** The open case for an event, or null. */
-function openForEvent(orgId, eventId) { return q.openForEvent.get(eventId, orgId) || null; }
+async function openForEvent(orgId, eventId) { return (await q.openForEvent.get(eventId, orgId)) || null; }
 /** The most recent case for an event whatever its status — what a label lookup wants. */
-function latestForEvent(orgId, eventId) { return q.latestForEvent.get(eventId, orgId) || null; }
-function byId(orgId, id) { return q.byId.get(id, orgId) || null; }
+async function latestForEvent(orgId, eventId) { return (await q.latestForEvent.get(eventId, orgId)) || null; }
+async function byId(orgId, id) { return (await q.byId.get(id, orgId)) || null; }
 
 /**
  * Close one case. Idempotent: an already-closed case is left alone and reports
  * `false`, so a second "finish" cannot re-stamp `closed_at` or re-fire the hook.
  */
-function close(orgId, caseId, { note = null, at = now() } = {}) {
+async function close(orgId, caseId, { note = null, at = now() } = {}) {
   const changed = note
-    ? q.closeWithNote.run(at, '\n', note, caseId).changes
-    : q.close.run(at, caseId).changes;
+    ? (await q.closeWithNote.run(at, '\n', note, caseId)).changes
+    : (await q.close.run(at, caseId)).changes;
   if (!changed) return false;
-  afterClose(orgId, caseId);
+  await afterClose(orgId, caseId);
   return true;
 }
 
 /** Close whatever open case an event has. Returns how many closed (0 or 1). */
-function closeForEvent(orgId, eventId, opts = {}) {
-  const c = openForEvent(orgId, eventId);
+async function closeForEvent(orgId, eventId, opts = {}) {
+  const c = await openForEvent(orgId, eventId);
   if (!c) return 0;
-  return close(orgId, c.id, opts) ? 1 : 0;
+  return (await close(orgId, c.id, opts)) ? 1 : 0;
 }
 
 /** Latest note for the Cases page. The append-only history is the caller's job. */
-function setNoteForEvent(orgId, eventId, note) { return q.note.run(note, eventId, orgId).changes; }
+async function setNoteForEvent(orgId, eventId, note) { return (await q.note.run(note, eventId, orgId)).changes; }
 
-function assignForEvent(orgId, eventId, userId) { return q.assign.run(userId, eventId, orgId).changes; }
+async function assignForEvent(orgId, eventId, userId) {
+  return (await q.assign.run(userId, eventId, orgId)).changes;
+}
 
 /**
  * The generic patch behind `PATCH /api/cases/:id` and the MCP update tool.
  * Fields left `undefined` are untouched; a transition INTO closed runs the hook.
  */
-function update(orgId, caseId, { status, assignedUserId, rootCause, note } = {}) {
-  const before = byId(orgId, caseId);
+async function update(orgId, caseId, { status, assignedUserId, rootCause, note } = {}) {
+  const before = await byId(orgId, caseId);
   if (!before) return null;
-  q.update.run(status || null, assignedUserId || null, rootCause ?? null, note ?? null,
+  await q.update.run(status || null, assignedUserId || null, rootCause ?? null, note ?? null,
     status || null, now(), caseId, orgId);
-  if (status === 'closed' && before.status !== 'closed') afterClose(orgId, caseId);
+  if (status === 'closed' && before.status !== 'closed') await afterClose(orgId, caseId);
   return byId(orgId, caseId);
 }
 
@@ -114,10 +116,10 @@ function update(orgId, caseId, { status, assignedUserId, rootCause, note } = {})
  * Returns false when the case was already acknowledged, which is what lets the
  * endpoint answer 409 instead of pretending the second click did something.
  */
-function acknowledge(orgId, caseId, userId, { at = now() } = {}) {
-  const c = byId(orgId, caseId);
+async function acknowledge(orgId, caseId, userId, { at = now() } = {}) {
+  const c = await byId(orgId, caseId);
   if (!c) return null;
-  if (!q.ack.run(at, userId, caseId).changes) return false;
+  if (!(await q.ack.run(at, userId, caseId)).changes) return false;
   return true;
 }
 

@@ -20,9 +20,9 @@ const router = express.Router();
 function configured() { return !!(config.github.clientId && config.github.clientSecret); }
 function redirectUri() { return `${config.baseUrl}/api/auth/github/callback`; }
 
-router.get('/github', (req, res) => {
+router.get('/github', async (req, res) => {
   if (!configured()) return httpError(res, 404, 'GitHub login is not configured');
-  const state = oauth.beginState('github', req.query.redirect);
+  const state = await oauth.beginState('github', req.query.redirect);
   const params = new URLSearchParams({
     client_id: config.github.clientId,
     redirect_uri: redirectUri(),
@@ -35,7 +35,7 @@ router.get('/github', (req, res) => {
 router.get('/github/callback', async (req, res) => {
   if (!configured()) return httpError(res, 404, 'GitHub login is not configured');
   const { code, state } = req.query;
-  const row = oauth.consumeState(state, 'github');
+  const row = await oauth.consumeState(state, 'github');
   if (!code || !row) return res.redirect('/app/login?error=oauth');
   try {
     const tokenResp = await fetch('https://github.com/login/oauth/access_token', {
@@ -71,7 +71,7 @@ router.get('/github/callback', async (req, res) => {
       const anyVerified = Array.isArray(emails) && emails.find((e) => e.verified);
       email = (primary || anyVerified || {}).email || null;
     }
-    oauth.finishLogin(req, res, row, {
+    await oauth.finishLogin(req, res, row, {
       provider: 'github', email, emailVerified: !!email,
       name: ghUser.name || ghUser.login,
     });

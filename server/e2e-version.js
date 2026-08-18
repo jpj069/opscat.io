@@ -34,6 +34,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { waitForServer } = require('./e2e-lib');
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-version-'));
@@ -78,6 +79,8 @@ async function get(p) {
 }
 
 async function main() {
+  chk('server boots and answers /api/health', await waitForServer(BASE));
+
   // ── the HEALTHCHECK contract ──────────────────────────────────────────────
   const h = await get('/api/health');
   chk('/api/health answers 200 without a session', h.status === 200, `got ${h.status}`);

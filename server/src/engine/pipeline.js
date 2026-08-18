@@ -1,7 +1,12 @@
 'use strict';
 // Log → event pipeline: classify lines, score severity, dedupe into events,
 // auto-open cases, notify the alert engine and SSE stream.
-const { db, getOrgSetting } = require('../db');
+//
+// Storage goes through the async shim. `getOrgSetting` stays on the spine and
+// stays synchronous (docs/POSTGRES-MIGRATION-PLAN.md § the spine), which is what
+// keeps `classify()` — called once per ingested line — a plain function.
+const q = require('../db/shim');
+const { getOrgSetting } = require('../db');
 const { now, DEFAULT_ORG_ID } = require('../util');
 
 // Built-in classifiers, evaluated in order; first match wins.
@@ -100,27 +105,89 @@ function listClassifiers(orgId) {
   };
 }
 
-const insLog = db.prepare(
-  'INSERT INTO logs (org_id, ts, device, line, sev, source, meta) VALUES (?, ?, ?, ?, ?, ?, ?)');
-const findActiveEvent = db.prepare(
-  "SELECT * FROM events WHERE org_id = ? AND dedupe_key = ? AND status = 'active'");
-const insEvent = db.prepare(`INSERT INTO events
+/* The log write is BATCHED — one statement per LOG_BATCH lines, not one per
+ * line. An agent posts up to 500 lines at a time, and awaited singly that is 500
+ * sequential round trips with a write transaction held open across all of them:
+ * cheap on better-sqlite3's in-process call, the dominant cost under
+ * node-postgres. The tuple text is generated, so the statement is built once per
+ * distinct row count and reused; the column list is written ONCE, here, because
+ * a second spelling of it is how the parameter order drifts.
+ */
+const LOG_TUPLE = '(?, ?, ?, ?, ?, ?, ?)';
+const LOG_BATCH = 100;   // 700 bound parameters — well inside both engines' limits
+const sqlCache = new Map();
+function batchSql(kind, n, build) {
+  const key = `${kind}:${n}`;
+  let sql = sqlCache.get(key);
+  if (sql === undefined) { sql = build(n); sqlCache.set(key, sql); }
+  return sql;
+}
+const logInsertSql = (n) => batchSql('log', n, (rows) => (
+  `INSERT INTO logs (org_id, ts, device, line, sev, source, meta) VALUES ${
+    new Array(rows).fill(LOG_TUPLE).join(', ')}`));
+// THE dedupe write. It was SELECT-then-INSERT-or-UPDATE, racing the partial
+// unique index `idx_events_dedupe_active` instead of cooperating with it: under
+// Postgres the loser of that race raises 23505, and the abort takes the whole
+// enclosing transaction with it — a 500-line ingest batch lost because two of
+// its lines happened to share a dedupe key. As one statement the index decides,
+// and both callers get the row back whichever branch ran — so what `emit()`
+// hands the alert engine and the SSE stream is now the row as written, not the
+// hand-patched pre-image that used to carry the PREVIOUS occurrence's
+// description while the database already held the new one.
+//
+// The conflict target repeats the index's `WHERE status = 'active'` because the
+// index is PARTIAL; SQLite and Postgres both need that to match it, and without
+// it a finished event would no longer be re-openable as a fresh row.
+//
+// `severity` is a CASE, not SQLite's two-argument `MAX(severity, ?)` — that one
+// is a hard parse error in Postgres, whose MAX is aggregate-only. `hits` and
+// `severity` are table-qualified: an unqualified `x = x + 1` is ambiguous in
+// Postgres. `description` keeps the stored text when the caller sends none,
+// which is what ingestEvent's `newDesc || ev.description` used to do in JS.
+const upsertEvent = q.prepare(`INSERT INTO events
   (org_id, dedupe_key, name, device, ip, target, description, severity, hits, first_seen, last_seen)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`);
-// `MAX(severity, ?)` was SQLite's TWO-ARGUMENT scalar max. Postgres has no such
-// function — `MAX` there is an aggregate, so this is a hard parse error, on the
-// hottest write path in the product. CASE is the portable spelling and compiles
-// to the same thing; it costs a second bind of the same value.
-const bumpEvent = db.prepare(`UPDATE events SET hits = hits + 1, last_seen = ?,
-  severity = CASE WHEN ? > severity THEN ? ELSE severity END,
-  description = ? WHERE id = ?`);
-const bumpBucket = db.prepare(`INSERT INTO event_buckets (event_id, bucket, count) VALUES (?, ?, 1)
-  ON CONFLICT(event_id, bucket) DO UPDATE SET count = event_buckets.count + 1`);
-const insCase = db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  ON CONFLICT (org_id, dedupe_key) WHERE status = 'active' DO UPDATE SET
+    hits = events.hits + 1,
+    last_seen = excluded.last_seen,
+    severity = CASE WHEN excluded.severity > events.severity
+      THEN excluded.severity ELSE events.severity END,
+    description = COALESCE(NULLIF(excluded.description, ''), events.description)
+  RETURNING *`);
+/* The per-minute rollup, AGGREGATED IN JS to one row per (event, minute) before
+ * anything is written. It used to be one statement per matched line, which a
+ * 500-line batch hammering a single flapping device turns into 500 updates of
+ * one row — and their order is data-dependent, which is the shape two concurrent
+ * batches deadlock on under Postgres. Folding first also makes the multi-row
+ * form legal at all: `ON CONFLICT … DO UPDATE` may not touch the same row twice
+ * within one statement, so the fold is a correctness precondition and not only
+ * an optimisation.
+ *
+ * `excluded.count` rather than the literal `+ 1` the single-row version carried:
+ * the row now brings its own count. `event_buckets.count` stays TABLE-QUALIFIED
+ * — an unqualified `count = count + …` is ambiguous in Postgres.
+ */
+const BUCKET_TUPLE = '(?, ?, ?)';
+const BUCKET_BATCH = 200;
+const bucketInsertSql = (n) => batchSql('bucket', n, (rows) => (
+  `INSERT INTO event_buckets (event_id, bucket, count) VALUES ${
+    new Array(rows).fill(BUCKET_TUPLE).join(', ')}
+  ON CONFLICT(event_id, bucket) DO UPDATE SET count = event_buckets.count + excluded.count`));
+
+/** @param {Array<{id:number, bucket:number, n:number}>} rows one entry per (event, minute) */
+async function writeBuckets(rows) {
+  for (let i = 0; i < rows.length; i += BUCKET_BATCH) {
+    const chunk = rows.slice(i, i + BUCKET_BATCH);
+    const args = [];
+    for (const r of chunk) args.push(r.id, r.bucket, r.n);
+    await q.run(bucketInsertSql(chunk.length), ...args);
+  }
+}
+const insCase = q.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
   VALUES (?, ?, ?, ?, ?, 'open', ?)`);
-const findOpenCaseForEvent = db.prepare(
+const findOpenCaseForEvent = q.prepare(
   "SELECT id FROM cases WHERE event_id = ? AND status != 'closed'");
-const bumpStats = db.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, bytes, events)
+const bumpStats = q.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, bytes, events)
   VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(org_id, bucket) DO UPDATE SET lines = ingest_stats.lines + excluded.lines,
     bytes = ingest_stats.bytes + excluded.bytes, events = ingest_stats.events + excluded.events`);
@@ -128,7 +195,7 @@ const bumpStats = db.prepare(`INSERT INTO ingest_stats (org_id, bucket, lines, b
 // peak: a 30s burst of 5k lines/s shows up as ~42 lines/s once divided over its
 // hour, and that is the number someone would size the ingest on. Pruned to 48h
 // (retention.js) — 1440 rows per org per day.
-const bumpMinutes = db.prepare(`INSERT INTO ingest_minutes (org_id, bucket, lines, bytes)
+const bumpMinutes = q.prepare(`INSERT INTO ingest_minutes (org_id, bucket, lines, bytes)
   VALUES (?, ?, ?, ?)
   ON CONFLICT(org_id, bucket) DO UPDATE SET lines = ingest_minutes.lines + excluded.lines,
     bytes = ingest_minutes.bytes + excluded.bytes`);
@@ -146,61 +213,114 @@ function emit(type, payload) {
 
 /**
  * Ingest a batch of log lines for one organization.
+ *
+ * Two passes, and the split is deliberate. The first touches no storage at all:
+ * it sanitises, classifies (a regex walk that can be slow on a custom rule) and
+ * builds the rows. Only the second opens the transaction — so the write window
+ * is as short as the writes, rather than as long as the request. Under
+ * better-sqlite3 that is tidiness; under node-postgres the transaction pins a
+ * pooled connection for its whole life, and holding one across 500 lines' worth
+ * of regex evaluation is how a pool of ten serves nine.
+ *
  * @param {Array<{ts?:number, device:string, line:string, sev?:number, meta?:object}>} entries
  * @param {string} source label (api key name, 'agent:xyz', 'snmp', 'synthetics')
- * @param {number} orgId owning organization
- * @returns {{accepted:number, events:number}}
+ * @param {string} orgId owning organization
+ * @returns {Promise<{accepted:number, events:number}>}
  */
-function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
+async function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
   const t = now();
-  let accepted = 0;
   let bytes = 0;
+  const logRows = [];        // 7-element parameter tuples, one per accepted line
+  const matches = [];        // one per classified line, in arrival order
   const touchedEvents = [];
   const emittedLogs = [];
 
-  db.transaction(() => {
-    for (const e of entries) {
-      const device = String(e.device || 'unknown').slice(0, 100);
-      const line = String(e.line || '').slice(0, 8192);
-      if (!line) continue;
-      const sev = Number.isInteger(e.sev) ? Math.min(7, Math.max(0, e.sev)) : 6;
-      let ts = Number.isFinite(e.ts) ? e.ts : t;
-      if (ts < 1e12) ts *= 1000; // seconds → ms
-      if (ts > t + 5 * 60 * 1000 || ts < t - 30 * 24 * 3600 * 1000) ts = t; // reject silly timestamps
-      insLog.run(orgId, ts, device, line, sev, source, e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null);
-      accepted++;
-      bytes += Buffer.byteLength(line);
-      const cls = classify(line, sev, orgId);
-      // `matched` lets Scout mine only lines no classifier knows
-      emittedLogs.push({ orgId, ts, device, line, sev, matched: !!cls });
-      if (!cls) continue;
-      const ip = e.meta && typeof e.meta.ip === 'string' ? e.meta.ip.slice(0, 45) : null;
-      const dedupe = `${cls.name}|${device}|${cls.target || ''}`;
-      const desc = (cls.target ? `${cls.name} ${cls.target}` : line).slice(0, 300);
-      let ev = findActiveEvent.get(orgId, dedupe);
-      if (ev) {
-        bumpEvent.run(ts, cls.severity, cls.severity, desc, ev.id);
-        ev = { ...ev, hits: ev.hits + 1, last_seen: ts, severity: Math.max(ev.severity, cls.severity) };
-      } else {
-        const info = insEvent.run(orgId, dedupe, cls.name, device, ip, cls.target, desc, cls.severity, ts, ts);
-        ev = {
-          id: info.lastInsertRowid, org_id: orgId, dedupe_key: dedupe, name: cls.name, device, ip,
-          target: cls.target, description: desc, severity: cls.severity, hits: 1,
-          status: 'active', first_seen: ts, last_seen: ts,
-        };
-        if (cls.severity >= CASE_THRESHOLD) {
-          const existing = findOpenCaseForEvent.get(ev.id);
-          if (!existing) insCase.run(orgId, ev.id, cls.name, device, cls.severity, ts);
-        }
+  for (const e of entries) {
+    const device = String(e.device || 'unknown').slice(0, 100);
+    const line = String(e.line || '').slice(0, 8192);
+    if (!line) continue;
+    const sev = Number.isInteger(e.sev) ? Math.min(7, Math.max(0, e.sev)) : 6;
+    let ts = Number.isFinite(e.ts) ? e.ts : t;
+    if (ts < 1e12) ts *= 1000; // seconds → ms
+    if (ts > t + 5 * 60 * 1000 || ts < t - 30 * 24 * 3600 * 1000) ts = t; // reject silly timestamps
+    logRows.push([orgId, ts, device, line, sev, source,
+      e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null]);
+    bytes += Buffer.byteLength(line);
+    const cls = classify(line, sev, orgId);
+    // `matched` lets Scout mine only lines no classifier knows
+    emittedLogs.push({ orgId, ts, device, line, sev, matched: !!cls });
+    if (!cls) continue;
+    const ip = e.meta && typeof e.meta.ip === 'string' ? e.meta.ip.slice(0, 45) : null;
+    matches.push({
+      ts, device, ip, cls,
+      dedupe: `${cls.name}|${device}|${cls.target || ''}`,
+      desc: (cls.target ? `${cls.name} ${cls.target}` : line).slice(0, 300),
+    });
+  }
+  const accepted = logRows.length;
+
+  if (accepted) {
+    await q.withTx(async () => {
+      for (let i = 0; i < logRows.length; i += LOG_BATCH) {
+        const chunk = logRows.slice(i, i + LOG_BATCH);
+        const args = [];
+        for (const row of chunk) args.push(...row);
+        await q.run(logInsertSql(chunk.length), ...args);
       }
-      bumpBucket.run(ev.id, Math.floor(ts / 60000));
-      touchedEvents.push(ev);
-    }
-    if (accepted) {
-      bumpStats.run(orgId, hourBucket(t), accepted, bytes, touchedEvents.length);
-      bumpMinutes.run(orgId, minuteBucket(t), accepted, bytes);
-    }
-  })();
+      // The rollup is folded here and written once below — see writeBuckets.
+      /* Upserted in DEDUPE-KEY order, not arrival order — this is a lock-ordering
+       * fix, not a tidy-up.
+       *
+       * Each iteration takes a row lock on one `events` row and holds it to the
+       * end of the transaction. In arrival order the sequence is data-dependent,
+       * so two concurrent batches that both mention devices A and B can take
+       * them as (A,B) and (B,A) — a cycle. PostgreSQL breaks it by killing one
+       * transaction, which rolls the whole batch back and answers the sender a
+       * 500. Measured before this line existed: two senders writing about ONE
+       * shared device with two event types managed **153 lines/s with 79% of
+       * batches refused**, against 16,700 lines/s when their devices were
+       * disjoint. Sorting removes the cycle because every transaction now takes
+       * the same rows in the same order.
+       *
+       * This is the same defect that was already fixed one loop below, where
+       * folding `event_buckets` in JS removed ITS data-dependent update order.
+       * That fix was made for the "cannot affect row a second time" error and
+       * happened to fix the ordering too; this loop was left beside it.
+       *
+       * The sort changes no count: every match still upserts, so `hits`,
+       * `touchedEvents.length` and the number of `emit('event')` calls are
+       * exactly what they were. Only the ORDER of the emitted events changes,
+       * within a single batch, which no consumer defines an expectation on.
+       *
+       * `localeCompare` is deliberately NOT used — it is locale-dependent, and a
+       * lock order that varies with the server's locale would reintroduce the
+       * cycle between two instances configured differently.
+       */
+      const ordered = [...matches].sort((a, b) => (a.dedupe < b.dedupe ? -1 : a.dedupe > b.dedupe ? 1 : 0));
+      const buckets = new Map();
+      for (const m of ordered) {
+        const ev = await upsertEvent.get(orgId, m.dedupe, m.cls.name, m.device, m.ip,
+          m.cls.target, m.desc, m.cls.severity, m.ts, m.ts);
+        // `hits === 1` IS the insert branch: hits starts at 1 and the upsert only
+        // ever increments it, so a bumped row can never come back at 1. Opening a
+        // case stays a first-sighting action — an escalation onto an existing
+        // event has never opened one and must not start now.
+        if (ev.hits === 1 && m.cls.severity >= CASE_THRESHOLD) {
+          const existing = await findOpenCaseForEvent.get(ev.id);
+          if (!existing) await insCase.run(orgId, ev.id, m.cls.name, m.device, m.cls.severity, m.ts);
+        }
+        const bucket = Math.floor(m.ts / 60000);
+        const key = `${ev.id}|${bucket}`;
+        const seen = buckets.get(key);
+        if (seen) seen.n++;
+        else buckets.set(key, { id: ev.id, bucket, n: 1 });
+        touchedEvents.push(ev);
+      }
+      await writeBuckets([...buckets.values()]);
+      await bumpStats.run(orgId, hourBucket(t), accepted, bytes, touchedEvents.length);
+      await bumpMinutes.run(orgId, minuteBucket(t), accepted, bytes);
+    });
+  }
 
   for (const l of emittedLogs) emit('log', l);
   for (const ev of touchedEvents) emit('event', ev);
@@ -208,7 +328,8 @@ function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
 }
 
 // Direct event ingestion (webhooks, Sentry, engines) — bypasses log storage optionally.
-function ingestEvent({ name, device, target, description, severity, ip, ts }, source, alsoLog = true, orgId = DEFAULT_ORG_ID) {
+/** @returns {Promise<{accepted:number, events:number}>} */
+async function ingestEvent({ name, device, target, description, severity, ip, ts }, source, alsoLog = true, orgId = DEFAULT_ORG_ID) {
   const entryLine = description || `${name} ${target || ''}`.trim();
   if (alsoLog) {
     return ingestLogs([{
@@ -222,21 +343,16 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
   const sev = Math.min(100, Math.max(0, Math.round(severity ?? 50)));
   const dedupe = `${name}|${device}|${target || ''}`;
   let ev;
-  db.transaction(() => {
-    ev = findActiveEvent.get(orgId, dedupe);
-    if (ev) {
-      bumpEvent.run(t, sev, sev, (description || '').slice(0, 300) || ev.description, ev.id);
-      ev = { ...ev, hits: ev.hits + 1, last_seen: t, severity: Math.max(ev.severity, sev) };
-    } else {
-      const info = insEvent.run(orgId, dedupe, name, device, ip || null, target || null,
-        (description || '').slice(0, 300), sev, t, t);
-      ev = { id: info.lastInsertRowid, org_id: orgId, name, device, ip, target, description, severity: sev,
-        hits: 1, status: 'active', first_seen: t, last_seen: t, dedupe_key: dedupe };
-      if (sev >= CASE_THRESHOLD) insCase.run(orgId, ev.id, name, device, sev, t);
-    }
-    bumpBucket.run(ev.id, Math.floor(t / 60000));
-    bumpStats.run(orgId, hourBucket(t), 0, 0, 1);
-  })();
+  await q.withTx(async () => {
+    // Same Shape B rewrite as ingestLogs above, and the same reason: this path
+    // carries the vendor/synthetic/on-call/reputation engines, which re-raise
+    // one dedupe key over and over.
+    ev = await upsertEvent.get(orgId, dedupe, name, device, ip || null, target || null,
+      (description || '').slice(0, 300), sev, t, t);
+    if (ev.hits === 1 && sev >= CASE_THRESHOLD) await insCase.run(orgId, ev.id, name, device, sev, t);
+    await writeBuckets([{ id: ev.id, bucket: Math.floor(t / 60000), n: 1 }]);
+    await bumpStats.run(orgId, hourBucket(t), 0, 0, 1);
+  });
   emit('event', ev);
   return { accepted: 1, events: 1 };
 }
@@ -263,13 +379,15 @@ function ingestEvent({ name, device, target, description, severity, ip, ts }, so
 const DRYRUN_MAX_LINES = 20000;
 const DRYRUN_BUDGET_MS = 2000;
 
-function backtest({ orgId = DEFAULT_ORG_ID, pattern, flags = 'i', name = 'rule', severity = 50,
+const recentLines = q.prepare(`SELECT ts, device, line, sev FROM logs
+  WHERE org_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`);
+
+async function backtest({ orgId = DEFAULT_ORG_ID, pattern, flags = 'i', name = 'rule', severity = 50,
   targetGroup = null, hours = 24 }) {
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { throw new Error(`invalid pattern: ${e.message}`); }
   const since = now() - Math.min(720, Math.max(1, hours)) * 3600000;
-  const rows = db.prepare(`SELECT ts, device, line, sev FROM logs
-    WHERE org_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`).all(orgId, since, DRYRUN_MAX_LINES);
+  const rows = await recentLines.all(orgId, since, DRYRUN_MAX_LINES);
 
   const out = {
     hours, scanned: 0, matched: 0, shadowed: 0, takeover: 0, fresh: 0,

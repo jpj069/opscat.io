@@ -24,33 +24,74 @@ const FILE = process.env.OPSCAT_SQL_RECORD;
 if (FILE) {
   const fs = require('fs');
   const path = require('path');
-  let Database;
-  try { Database = require('better-sqlite3'); } catch { /* not this process */ }
 
-  if (Database) {
+  {
     const seen = new Set();
     const lines = [];
     const root = path.join(__dirname, '..');
 
     // Where the statement was written, taken from the stack — the same reasoning
     // as in pg-sweep: `require` is cached, so "which file are we loading" lies.
-    const site = () => {
-      const st = new Error().stack.split('\n').slice(3);
-      for (const l of st) {
-        const m = /\((.*?\/src\/[^:]+):(\d+):\d+\)/.exec(l) || /at (.*?\/src\/[^:]+):(\d+):\d+/.exec(l);
-        if (m) return path.relative(root, m[1]) + ':' + m[2];
+    // The rule itself lives in sql-site.js because the sweep needs the identical
+    // one and reports failures by this string.
+    const { callSite } = require('./sql-site');
+
+    /* The shim's statements, hooked when the shim is LOADED — not now.
+     *
+     * Why they need hooking at all: `q.prepare(sql)` is lazy, so nothing
+     * reaches the driver at module load; and when a call finally executes, the
+     * query runs inside a promise callback where the caller's stack frames are
+     * gone, so the call site resolves to null and the statement is dropped.
+     * Measured: four converted route files took the corpus from 448 statements
+     * to 240, and the sweep still printed "all of them PREPARE cleanly".
+     * Coverage halving in the direction of green is the worst failure this tool
+     * has.
+     *
+     * Why it must be lazy: this file is a --require preload, and the shim
+     * CONNECTS a pool when it is required. Requiring it here would open that
+     * pool against whatever DATABASE_URL happens to be set at preload time —
+     * before the runner hands the harness its own — and `require` is cached, so
+     * every harness would then talk to the wrong database.
+     */
+    const Module = require('module');
+    const origLoad = Module._load;
+    let patched = false;
+    Module._load = function (request, parent, isMain) {
+      const exports = origLoad.call(this, request, parent, isMain);
+      if (patched || !exports || typeof exports.prepare !== 'function'
+        || typeof exports.lockOrg !== 'function') return exports;
+      if (!/db\/shim(\.js)?$/.test(request)) return exports;
+      patched = true;
+      const note = (sql) => {
+        if (typeof sql === 'string' && !seen.has(sql)) {
+          seen.add(sql);
+          const where = callSite(3);
+          if (where) lines.push(JSON.stringify({ sql, where }));
+        }
+      };
+      const origPrep = exports.prepare;
+      exports.prepare = function (sql) { note(sql); return origPrep.call(this, sql); };
+      for (const fn of ['get', 'all', 'run']) {
+        const o = exports[fn];
+        exports[fn] = function (sql, ...args) { note(sql); return o.call(this, sql, ...args); };
       }
-      return '(unknown)';
+      return exports;
     };
 
-    const orig = Database.prototype.prepare;
-    Database.prototype.prepare = function (sql) {
-      if (typeof sql === 'string' && !seen.has(sql)) {
-        seen.add(sql);
-        lines.push(JSON.stringify({ sql, where: site() }));
-      }
-      return orig.call(this, sql);
-    };
+    /* There is no second hook any more.
+     *
+     * This file used to intercept `Database.prototype.prepare` as well, to catch
+     * statements issued through the raw better-sqlite3 handle. Nothing reaches a
+     * driver except through the shim now, and there is no driver to reach into:
+     * node-postgres has no prototype-level prepare, because the SQL travels with
+     * the query rather than being compiled first. The shim hook above is the
+     * whole mechanism.
+     *
+     * `note()` drops a statement whose call site resolves to null — that means
+     * no application frame in the stack, i.e. a harness prepared it against its
+     * own scratch table, and recording it would hand the sweep a statement whose
+     * table exists in no schema.
+     */
 
     // Harnesses end with process.exit(), which skips async work — appendFileSync
     // in an 'exit' handler is the one thing that still runs.

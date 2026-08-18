@@ -42,7 +42,13 @@ process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
 require('./src/index.js'); // boots the app on :3117
 
-const { db, addMembership } = require('./src/db');
+const { addMembership } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util');
 const config = require('./src/config');
 const plans = require('./src/plans');
@@ -53,14 +59,14 @@ const PASS = 'e2e-user-password-1';
 
 const decodeJwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString());
 
-function mkUser(email, role, orgId) {
+async function mkUser(email, role, orgId) {
   const { salt, hash } = hashPassword(PASS);
   const uid = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(uid, orgId, role);
+  await addMembership(uid, orgId, role);
   return { id: uid, email };
 }
 
@@ -115,13 +121,13 @@ async function main() {
 
   // ── fixtures ──────────────────────────────────────────────────────────────
   const otherOrgId = newId();
-  db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+  await q.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
     VALUES (?, 'Other Org', 'other', 'enterprise', 'active', ?)`).run(otherOrgId, now());
-  const lead = mkUser('lead@e2e.test', 'lead', DEFAULT_ORG_ID);
-  const member = mkUser('member@e2e.test', 'analyst', DEFAULT_ORG_ID); // analyst = lowest role
-  mkUser('outsider@e2e.test', 'admin', otherOrgId);
-  const incId = Number(db.prepare(`INSERT INTO incidents (org_id, title, severity, status, started_at)
-    VALUES (?, 'Checkout API 500s', 85, 'investigating', ?)`).run(DEFAULT_ORG_ID, now()).lastInsertRowid);
+  const lead = await mkUser('lead@e2e.test', 'lead', DEFAULT_ORG_ID);
+  const member = await mkUser('member@e2e.test', 'analyst', DEFAULT_ORG_ID); // analyst = lowest role
+  await mkUser('outsider@e2e.test', 'admin', otherOrgId);
+  const incId = Number(await q.prepare(`INSERT INTO incidents (org_id, title, severity, status, started_at)
+    VALUES (?, 'Checkout API 500s', 85, 'investigating', ?)`).insert(DEFAULT_ORG_ID, now()));
   const L = await login('lead@e2e.test');
   const M = await login('member@e2e.test');
   const O = await login('outsider@e2e.test');
@@ -163,7 +169,7 @@ async function main() {
   chk('exactly one "opened the Bridge" feed line',
     feed0.j?.items.filter((i) => /opened the Bridge/.test(i.body)).length === 1);
   chk('audit row bridge_open names the incident',
-    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_open'
+    !!await q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_open'
       AND detail LIKE ?`).get(DEFAULT_ORG_ID, lead.id, `%INC-${2000 + incId}%`));
 
   const peek = await call(M, 'GET', `/api/incidents/${incId}/room`);
@@ -213,7 +219,7 @@ async function main() {
   await call(M, 'POST', `/api/room/${roomId}/join`, { groupId: g2.j.group.id });
   const gClose = await call(M, 'PATCH', `/api/room/${roomId}/groups/${g2.j.group.id}`, { closed: true });
   chk('close breakout', gClose.status === 200 && !!gClose.j?.group?.closed_at);
-  const pRow = db.prepare('SELECT group_id FROM bridge_participants WHERE room_id = ? AND user_id = ?')
+  const pRow = await q.prepare('SELECT group_id FROM bridge_participants WHERE room_id = ? AND user_id = ?')
     .get(roomId, member.id);
   chk('closing a breakout drops members to the lobby', pRow && pRow.group_id === null, JSON.stringify(pRow));
   const joinClosed = await call(M, 'POST', `/api/room/${roomId}/join`, { groupId: g2.j.group.id });
@@ -280,7 +286,7 @@ async function main() {
 
   const vLead = await call(L, 'GET', '/api/admin/voice');
   chk('lead is below admin for voice settings', vLead.status === 403, `got ${vLead.status}`);
-  mkUser('orgadmin@e2e.test', 'admin', DEFAULT_ORG_ID);
+  await mkUser('orgadmin@e2e.test', 'admin', DEFAULT_ORG_ID);
   const A = await login('orgadmin@e2e.test');
   const vGet = await call(A, 'GET', '/api/admin/voice');
   chk('admin voice status: config visible, key masked',
@@ -319,7 +325,7 @@ async function main() {
   chk('analyzer writes a critical insight with group attribution',
     !!insight && insight.severity === 'critical' && insight.group_id === g1.j.group.id
     && insight.user_id === null && /root cause/.test(insight.body), JSON.stringify(insight));
-  const ptr = db.prepare('SELECT analyzed_feed_id FROM bridges WHERE id = ?').get(roomId);
+  const ptr = await q.prepare('SELECT analyzed_feed_id FROM bridges WHERE id = ?').get(roomId);
   chk('analyzed_feed_id pointer advanced (window never billed twice)',
     !!ptr && ptr.analyzed_feed_id > 0, JSON.stringify(ptr));
   const nInsights = feed.j.items.filter((i) => i.kind === 'insight').length;
@@ -337,7 +343,7 @@ async function main() {
     participant: { identity: String(member.id) } };
   const wj = await webhook(evJoin);
   chk('signed participant_joined accepted', wj.status === 200 && wj.j?.ok === true, `got ${wj.status}`);
-  let conn = db.prepare('SELECT connected FROM bridge_participants WHERE room_id = ? AND user_id = ?')
+  let conn = await q.prepare('SELECT connected FROM bridge_participants WHERE room_id = ? AND user_id = ?')
     .get(roomId, member.id);
   chk('presence: connected = 1', conn?.connected === 1, JSON.stringify(conn));
   feed = await call(M, 'GET', `/api/room/${roomId}/feed`);
@@ -352,7 +358,7 @@ async function main() {
   const wl = await webhook({ event: 'participant_left', room: { name: `br-${DEFAULT_ORG_ID}-${roomId}` },
     participant: { identity: String(member.id) } });
   chk('participant_left accepted', wl.status === 200);
-  conn = db.prepare('SELECT connected, left_at FROM bridge_participants WHERE room_id = ? AND user_id = ?')
+  conn = await q.prepare('SELECT connected, left_at FROM bridge_participants WHERE room_id = ? AND user_id = ?')
     .get(roomId, member.id);
   chk('presence: connected = 0 with left_at', conn?.connected === 0 && conn?.left_at > 0, JSON.stringify(conn));
 
@@ -386,7 +392,7 @@ async function main() {
   chk('close is idempotent (one feed line)',
     feed.j.items.filter((i) => /closed the Bridge/.test(i.body)).length === 1);
   chk('audit row bridge_close exists',
-    !!db.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_close'`)
+    !!await q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_close'`)
       .get(DEFAULT_ORG_ID, lead.id));
 
   // ── browser-side headers: CSP + Permissions-Policy must carry the Bridge ──

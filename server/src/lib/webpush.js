@@ -21,28 +21,35 @@
  * guesses from a permission prompt that never appears.
  */
 const webpush = require('web-push');
-const { db, getSetting, setSetting } = require('../db');
+const { getSetting, setSetting } = require('../db');
+const q = require('../db/shim');
 const config = require('../config');
 const { now } = require('../util');
 
 let keys = null;
 
-function vapid() {
+/* Async because the FIRST call may have to store a freshly generated pair, and
+ * that store must land before anyone is told the public key. A fire-and-forget
+ * write here would be the worst kind of cheap: the browser subscribes against a
+ * key the next restart has forgotten, and every push to that device fails with
+ * a signature error nobody connects to a boot two weeks earlier. Every call
+ * after the first answers from `keys` without touching the database. */
+async function vapid() {
   if (keys) return keys;
   let pub = getSetting('vapid_public');
   let priv = getSetting('vapid_private');
   if (!pub || !priv) {
     const gen = webpush.generateVAPIDKeys();
     pub = gen.publicKey; priv = gen.privateKey;
-    setSetting('vapid_public', pub);
-    setSetting('vapid_private', priv);
+    await setSetting('vapid_public', pub);
+    await setSetting('vapid_private', priv);
   }
   keys = { publicKey: pub, privateKey: priv };
   return keys;
 }
 
 /** The public key the browser needs to subscribe. Safe to hand out. */
-function publicKey() { return vapid().publicKey; }
+async function publicKey() { return (await vapid()).publicKey; }
 
 /**
  * A push subscription is what the browser hands us: an endpoint URL plus two
@@ -55,7 +62,7 @@ function isSubscription(v) {
     && !!v.keys && typeof v.keys.p256dh === 'string' && typeof v.keys.auth === 'string';
 }
 
-const dropMethod = db.prepare('DELETE FROM contact_methods WHERE id = ?');
+const dropMethod = q.prepare('DELETE FROM contact_methods WHERE id = ?');
 
 /**
  * Deliver one push. `methodId` lets a subscription the push service has
@@ -64,7 +71,7 @@ const dropMethod = db.prepare('DELETE FROM contact_methods WHERE id = ?');
  * a rung on a device that no longer exists.
  */
 async function send(subscription, { title, body, url }, methodId = null) {
-  const k = vapid();
+  const k = await vapid();
   webpush.setVapidDetails(
     // The `mailto:` subject is the contact the push service uses if our sends
     // start misbehaving. It has to be a real address, and the deployment's own
@@ -80,7 +87,7 @@ async function send(subscription, { title, body, url }, methodId = null) {
   } catch (err) {
     const status = err && err.statusCode;
     if (methodId && (status === 404 || status === 410)) {
-      dropMethod.run(methodId);
+      await dropMethod.run(methodId);
       throw new Error('push subscription expired — the browser has been removed');
     }
     throw new Error(`push ${status || ''}: ${String(err && err.body ? err.body : err.message).slice(0, 200)}`);

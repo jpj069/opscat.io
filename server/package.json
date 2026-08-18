@@ -2,21 +2,26 @@
   "name": "opscat-server",
   "version": "2.0.0",
   "private": true,
-  "description": "OpsCat platform server — API, ingest, engines",
+  "description": "OpsCat platform server \u2014 API, ingest, engines",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "seed": "node src/engine/seed.js",
-    "test": "node run-e2e.js"
+    "test": "node run-e2e.js",
+    "check:server": "node scripts/check-types.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.2.0",
     "express": "^5.2.1",
     "livekit-server-sdk": "^2.17.0",
     "net-snmp": "^3.20.0",
     "nodemailer": "^7.0.13",
+    "pg": "^8.23.0",
     "web-push": "^3.6.7",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
   }
 }

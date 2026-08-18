@@ -46,18 +46,18 @@ function statusFor(orgId) {
   };
 }
 
-function saveOrgConfig(orgId, { baseUrl, model, apiKey }) {
-  if (baseUrl !== undefined) setOrgSetting(orgId, KEYS.base, String(baseUrl).trim());
-  if (model !== undefined) setOrgSetting(orgId, KEYS.model, String(model).trim());
+async function saveOrgConfig(orgId, { baseUrl, model, apiKey }) {
+  if (baseUrl !== undefined) await setOrgSetting(orgId, KEYS.base, String(baseUrl).trim());
+  if (model !== undefined) await setOrgSetting(orgId, KEYS.model, String(model).trim());
   if (apiKey !== undefined) {
-    setOrgSetting(orgId, KEYS.key, apiKey ? encrypt(apiKey, config.secret) : '');
+    await setOrgSetting(orgId, KEYS.key, apiKey ? encrypt(apiKey, config.secret) : '');
   }
 }
 
-function savePlatformConfig({ baseUrl, model, apiKey }) {
-  if (baseUrl !== undefined) setSetting(KEYS.base, String(baseUrl).trim());
-  if (model !== undefined) setSetting(KEYS.model, String(model).trim());
-  if (apiKey !== undefined) setSetting(KEYS.key, apiKey ? encrypt(apiKey, config.secret) : '');
+async function savePlatformConfig({ baseUrl, model, apiKey }) {
+  if (baseUrl !== undefined) await setSetting(KEYS.base, String(baseUrl).trim());
+  if (model !== undefined) await setSetting(KEYS.model, String(model).trim());
+  if (apiKey !== undefined) await setSetting(KEYS.key, apiKey ? encrypt(apiKey, config.secret) : '');
 }
 
 function platformStatus() {

@@ -8,7 +8,9 @@
 // at most one chat call per room per interval, and only once enough new
 // speech accumulated; the analyzed_feed_id pointer on the room makes
 // restarts idempotent — a window is never billed twice.
-const { db } = require('../db');
+// The async storage shim (docs/POSTGRES-MIGRATION-PLAN.md § Phase 4). Imported as
+// `store` because `q` is already this file's statement table.
+const store = require('../db/shim');
 const llm = require('../llm');
 const alerts = require('./alerts');
 const config = require('../config');
@@ -20,20 +22,20 @@ const MAX_INSIGHTS_PER_RUN = 3;
 const PUSH_COOLDOWN_MS = 5 * 60 * 1000; // critical fan-out at most every 5 min/room
 
 const q = {
-  openRooms: db.prepare(`SELECT b.*, i.title AS incident_title, i.severity AS incident_severity,
+  openRooms: store.prepare(`SELECT b.*, i.title AS incident_title, i.severity AS incident_severity,
       i.status AS incident_status FROM bridges b JOIN incidents i ON i.id = b.incident_id
     WHERE b.status = 'open' AND b.transcription = 1`),
-  newItems: db.prepare(`SELECT f.*, u.name AS user_name, u.email AS user_email
+  newItems: store.prepare(`SELECT f.*, u.name AS user_name, u.email AS user_email
       FROM bridge_feed f LEFT JOIN users u ON u.id = f.user_id
     WHERE f.room_id = ? AND f.id > ? AND f.kind != 'insight' ORDER BY f.id LIMIT 120`),
-  priorInsights: db.prepare(`SELECT body FROM bridge_feed
+  priorInsights: store.prepare(`SELECT body FROM bridge_feed
     WHERE room_id = ? AND kind = 'insight' ORDER BY id DESC LIMIT 12`),
-  groups: db.prepare('SELECT id, name FROM bridge_groups WHERE room_id = ? AND closed_at IS NULL ORDER BY sort, id'),
-  setAnalyzed: db.prepare('UPDATE bridges SET analyzed_feed_id = ? WHERE id = ?'),
-  insFeed: db.prepare(`INSERT INTO bridge_feed (room_id, group_id, user_id, kind, severity, body, meta, created_at)
+  groups: store.prepare('SELECT id, name FROM bridge_groups WHERE room_id = ? AND closed_at IS NULL ORDER BY sort, id'),
+  setAnalyzed: store.prepare('UPDATE bridges SET analyzed_feed_id = ? WHERE id = ?'),
+  insFeed: store.prepare(`INSERT INTO bridge_feed (room_id, group_id, user_id, kind, severity, body, meta, created_at)
     VALUES (?, ?, NULL, 'insight', ?, ?, '{}', ?)`),
-  rules: db.prepare('SELECT * FROM alert_rules WHERE org_id = ? AND enabled = 1'),
-  insNotif: db.prepare(`INSERT INTO notifications
+  rules: store.prepare('SELECT * FROM alert_rules WHERE org_id = ? AND enabled = 1'),
+  insNotif: store.prepare(`INSERT INTO notifications
     (org_id, ts, rule_id, rule_name, event_id, case_label, channel, ok, error)
     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)`),
 };
@@ -61,14 +63,14 @@ const SYSTEM_PROMPT = 'You are the silent analyst in an incident war room. Teams
 async function analyzeRoom(room) {
   const cfg = llm.resolveConfig(room.org_id);
   if (!cfg) return { skipped: 'no-llm' };
-  const items = q.newItems.all(room.id, room.analyzed_feed_id);
+  const items = await q.newItems.all(room.id, room.analyzed_feed_id);
   const transcripts = items.filter((i) => i.kind === 'transcript');
   if (transcripts.length < MIN_NEW_TRANSCRIPTS) return { skipped: 'quiet' };
 
-  const groups = q.groups.all(room.id);
+  const groups = await q.groups.all(room.id);
   const gname = (gid) => (gid == null ? 'Lobby'
     : (groups.find((g) => g.id === gid) || {}).name || `group ${gid}`);
-  const prior = q.priorInsights.all(room.id).reverse();
+  const prior = (await q.priorInsights.all(room.id)).reverse();
   const elapsedM = Math.round((now() - room.created_at) / 60000);
   const user = [
     `INCIDENT: INC-${2000 + room.incident_id} "${room.incident_title}" — severity `
@@ -105,16 +107,16 @@ async function analyzeRoom(room) {
   const ts = now();
   const { hub } = require('../routes/ops'); // module cache — no load-time cycle
   for (const ins of valid) {
-    const r = q.insFeed.run(room.id, ins.groupId, ins.severity, ins.body, ts);
+    const id = await q.insFeed.insert(room.id, ins.groupId, ins.severity, ins.body, ts);
     hub.broadcast('bridge.feed', { roomId: room.id, item: {
-      id: Number(r.lastInsertRowid), room_id: room.id, group_id: ins.groupId, user_id: null,
+      id: Number(id), room_id: room.id, group_id: ins.groupId, user_id: null,
       kind: 'insight', severity: ins.severity, body: ins.body, meta: {}, created_at: ts,
     } }, room.org_id);
   }
-  q.setAnalyzed.run(maxId, room.id);
+  await q.setAnalyzed.run(maxId, room.id);
 
   const critical = valid.find((x) => x.severity === 'critical');
-  if (critical) pushCritical(room, critical);
+  if (critical) await pushCritical(room, critical);
   return { inserted: valid.length };
 }
 
@@ -122,7 +124,7 @@ async function analyzeRoom(room) {
 // a real event: enabled rules whose severity_min allows 85 and whose trigger
 // is empty or exactly 'bridge_insight'. Throttled per room so a hot analyzer
 // can never storm the channels.
-function pushCritical(room, insight) {
+async function pushCritical(room, insight) {
   const t = now();
   if (t - (lastPush.get(room.id) || 0) < PUSH_COOLDOWN_MS) return;
   lastPush.set(room.id, t);
@@ -132,9 +134,13 @@ function pushCritical(room, insight) {
     description: `${insight.body}\n\nBridge: ${config.baseUrl}/app/bridge`,
     last_seen: t,
   };
-  for (const rule of q.rules.all(room.org_id)) {
+  for (const rule of await q.rules.all(room.org_id)) {
     if (ev.severity < rule.severity_min) continue;
     if (rule.trigger_name && rule.trigger_name !== 'bridge_insight') continue;
+    // Deliberately not awaited (as before): the fan-out is fire-and-forget so a
+    // slow channel cannot stall the analyzer. The `.run()` is returned INTO the
+    // chain, which is what awaits it — a bare `await` here would serialise the
+    // rules and change when this function returns.
     alerts.dispatch(rule, ev)
       .then(() => q.insNotif.run(room.org_id, now(), rule.id,
         `${rule.name} (bridge insight)`, rule.channel, 1, null))
@@ -145,7 +151,7 @@ function pushCritical(room, insight) {
 
 async function runOnce() {
   if (!config.livekit.url) return; // Bridge not configured — nothing to analyze
-  for (const room of q.openRooms.all()) {
+  for (const room of await q.openRooms.all()) {
     try { await analyzeRoom(room); }
     catch (e) { console.error(`[bridge-insights] room ${room.id}:`, e.message); }
   }

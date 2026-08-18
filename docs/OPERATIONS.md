@@ -47,17 +47,47 @@ Log in at `https://<your-domain>/app`, then change the password.
 
 ## Data & backups
 
-All state lives in one SQLite database (WAL mode) inside the `opscat_data`
-volume. Back it up with:
+All state lives in PostgreSQL, in the `opscat_pgdata` volume. There is one
+engine and no switch: `DATABASE_URL` is required and the app refuses to start
+without it.
+
+If you are coming from a build that ran on SQLite, note that the file-copy
+backup is gone with the file. `pg_dump` in a cron is more to set up than
+copying `opscat.db` was — that was the acknowledged cost of having one engine
+instead of two SQL dialects. What it gives back is a dump that is consistent
+without stopping the app.
+
+### Backing up
+
+The user and database below are the compose defaults; if you set
+`POSTGRES_USER` / `POSTGRES_DB` in your `.env`, substitute those — `pg_dump`
+against a user that does not exist fails loudly, but against the WRONG
+database it succeeds and gives you an empty dump.
 
 ```bash
-docker compose exec app sh -c \
-  "sqlite3 /data/opscat.db '.backup /data/backup.db'" \
-  && docker cp "$(docker compose ps -q app)":/data/backup.db ./opscat-backup.db
+docker compose exec -T db pg_dump -U opscat -Fc opscat > opscat-$(date +%F).dump
 ```
 
-(or snapshot the volume). Restore = stop the stack, replace `/data/opscat.db`,
-start again.
+### Restoring
+
+Restore into an EMPTY database — `pg_restore` does not clear what is already
+there, and restoring over a running instance leaves you with a mix of both:
+
+```bash
+docker compose stop app
+docker compose exec -T db dropdb   -U opscat --if-exists opscat
+docker compose exec -T db createdb -U opscat opscat
+docker compose exec -T db pg_restore -U opscat -d opscat < opscat-2026-08-18.dump
+docker compose start app
+```
+
+Verify a backup by restoring it somewhere, not by checking that the file is
+non-empty. `pg_dump` exits 0 on an unreachable table it was never asked for.
+
+**Snapshotting the volume works for either engine only while the stack is
+stopped.** A filesystem snapshot of a running database is a crash image; both
+engines recover from one, but that is a property you should test rather than
+assume on the day you need it.
 
 ## Upgrades
 

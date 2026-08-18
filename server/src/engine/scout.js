@@ -13,7 +13,7 @@
 //
 // Hot-path cost: masking regexes only run for UNMATCHED lines, counts are
 // buffered in memory and flushed to scout_templates every few seconds.
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
 
@@ -113,21 +113,32 @@ function templateFilter(template) {
 
 const MAX_TEMPLATES_PER_ORG = 500;
 const FLUSH_MS = 5000;
-const buffer = new Map(); // orgId -> Map<maskedLine, {count, sample, lastSeen}>
+let buffer = new Map(); // orgId -> Map<maskedLine, {count, sample, lastSeen}>
 let flushTimer = null;
 
-const findByTemplate = db.prepare('SELECT id, count FROM scout_templates WHERE org_id = ? AND template = ?');
-const findCandidates = db.prepare(`SELECT id, template FROM scout_templates
+const findByTemplate = q.prepare('SELECT id, count FROM scout_templates WHERE org_id = ? AND template = ?');
+const findCandidates = q.prepare(`SELECT id, template FROM scout_templates
   WHERE org_id = ? AND status = 'pending' ORDER BY count DESC LIMIT 500`);
-const insTemplate = db.prepare(`INSERT INTO scout_templates
-  (org_id, template, count, sample, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)`);
-const bumpTemplate = db.prepare(
+// `findByTemplate` above still decides whether to look for a MERGE candidate —
+// that is a behavioural choice, not a uniqueness gate. The uniqueness gate is
+// `UNIQUE (org_id, template)`, and this used to race it: async, two flushes miss
+// the same template and the second INSERT raises 23505 under Postgres, aborting
+// the whole org's flush transaction and losing every count in it. Cooperating
+// with the constraint folds the second one onto the first row instead, which is
+// exactly what the read-then-bump branch would have done.
+const insTemplate = q.prepare(`INSERT INTO scout_templates
+  (org_id, template, count, sample, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT (org_id, template) DO UPDATE SET
+    count = scout_templates.count + excluded.count,
+    last_seen = excluded.last_seen
+  RETURNING id`);
+const bumpTemplate = q.prepare(
   'UPDATE scout_templates SET count = count + ?, last_seen = ? WHERE id = ?');
-const renameTemplate = db.prepare(
+const renameTemplate = q.prepare(
   'UPDATE scout_templates SET template = ?, count = count + ?, last_seen = ? WHERE id = ?');
-const orgTemplateCount = db.prepare(
+const orgTemplateCount = q.prepare(
   "SELECT COUNT(*) c FROM scout_templates WHERE org_id = ? AND status = 'pending'");
-const evictSmallest = db.prepare(`DELETE FROM scout_templates WHERE id IN (
+const evictSmallest = q.prepare(`DELETE FROM scout_templates WHERE id IN (
   SELECT id FROM scout_templates WHERE org_id = ? AND status = 'pending'
   ORDER BY count ASC, last_seen ASC LIMIT ?)`);
 
@@ -142,14 +153,26 @@ function onLog(l) {
   else if (orgBuf.size < 5000) orgBuf.set(masked, { count: 1, sample: l.line.slice(0, 400), lastSeen: l.ts });
 }
 
-function flush() {
-  for (const [orgId, orgBuf] of buffer) {
-    db.transaction(() => {
+async function flush() {
+  // Swap the buffer out BEFORE the first statement runs, never clear it after.
+  // Phase 4 puts awaits inside the loop below, and `buffer.clear()` at the end
+  // would then throw away every line onLog() counted while the flush was
+  // suspended — silently: no error, no counter, and the templates simply look
+  // rarer than they are, which is the number the Scout tab ranks by.
+  const batch = buffer;
+  buffer = new Map();
+  for (const [orgId, orgBuf] of batch) {
+    // `q.withTx`, never `db.transaction`: better-sqlite3 COMMITs when the callback
+    // RETURNS, so an async callback returns a pending promise, COMMIT fires at once
+    // and every awaited write below lands OUTSIDE the transaction — no error, and a
+    // rollback that covers nothing. db.js throws on a thenable now.
+    // eslint-disable-next-line no-await-in-loop
+    await q.withTx(async () => {
       let candidates = null; // lazy: only load when an exact match misses
       for (const [masked, e] of orgBuf) {
-        const exact = findByTemplate.get(orgId, masked);
-        if (exact) { bumpTemplate.run(e.count, e.lastSeen, exact.id); continue; }
-        if (candidates === null) candidates = findCandidates.all(orgId);
+        const exact = await findByTemplate.get(orgId, masked);
+        if (exact) { await bumpTemplate.run(e.count, e.lastSeen, exact.id); continue; }
+        if (candidates === null) candidates = await findCandidates.all(orgId);
         const tokens = masked.split(' ');
         let merged = false;
         for (const c of candidates) {
@@ -157,35 +180,37 @@ function flush() {
           if (!mergedTemplate) continue;
           if (mergedTemplate !== c.template) {
             // merged shape may collide with a third row: fold into it instead
-            const clash = findByTemplate.get(orgId, mergedTemplate);
+            const clash = await findByTemplate.get(orgId, mergedTemplate);
             if (clash && clash.id !== c.id) {
-              bumpTemplate.run(e.count, e.lastSeen, clash.id);
+              await bumpTemplate.run(e.count, e.lastSeen, clash.id);
             } else {
-              renameTemplate.run(mergedTemplate, e.count, e.lastSeen, c.id);
+              await renameTemplate.run(mergedTemplate, e.count, e.lastSeen, c.id);
               c.template = mergedTemplate;
             }
           } else {
-            bumpTemplate.run(e.count, e.lastSeen, c.id);
+            await bumpTemplate.run(e.count, e.lastSeen, c.id);
           }
           merged = true;
           break;
         }
         if (!merged) {
-          const info = insTemplate.run(orgId, masked, e.count, e.sample, e.lastSeen, e.lastSeen);
-          candidates.push({ id: info.lastInsertRowid, template: masked });
+          const row = await insTemplate.get(orgId, masked, e.count, e.sample, e.lastSeen, e.lastSeen);
+          candidates.push({ id: row.id, template: masked });
         }
       }
-      const over = orgTemplateCount.get(orgId).c - MAX_TEMPLATES_PER_ORG;
-      if (over > 0) evictSmallest.run(orgId, over);
-    })();
+      const over = (await orgTemplateCount.get(orgId)).c - MAX_TEMPLATES_PER_ORG;
+      if (over > 0) await evictSmallest.run(orgId, over);
+    });
   }
-  buffer.clear();
 }
 
 function start() {
   pipeline.on('log', onLog);
   flushTimer = setInterval(() => {
-    try { flush(); } catch (e) { console.error('scout flush error:', e.message); }
+    // flush() is async now, so a throw inside it is a rejection: a try/catch around
+    // the call would catch nothing and the failure would become an
+    // unhandledRejection (non-zero exit under NODE_ENV=test) instead of this line.
+    flush().catch((e) => console.error('scout flush error:', e.message));
   }, FLUSH_MS);
   flushTimer.unref();
 }

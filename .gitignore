@@ -154,3 +154,9 @@ scripts/shots/
 # build identity written into the image at build time (see Dockerfile); a local
 # copy is a test artefact, never a repo file
 server/build-info.json
+
+# Agent worktrees. Temporary, auto-cleaned, and never part of a change — but an
+# untracked directory in the repo root is exactly what a `git add -A` sweeps up,
+# which is how a test mutation reached main once already (see CLAUDE.md
+# § Mutation testing).
+.claude/worktrees/

@@ -19,10 +19,18 @@ services:
     expose:
       - "3000"
     environment:
-      # Unused until Phase 5 wires the adapter. Listed now because compose passes
-      # ONLY whitelisted variables — the precedent is OPSCAT_GRID_PUBLISHED,
-      # which worked under `npm start` and was silently unset in Docker.
-      - DATABASE_URL=${DATABASE_URL:-}
+      # Listed because compose passes ONLY whitelisted variables — the precedent
+      # is OPSCAT_GRID_PUBLISHED, which worked under `npm start` and was
+      # silently unset in Docker.
+      #
+      # PostgreSQL is THE engine (decision D6) — the community edition moves with
+      # the cloud one rather than keeping a second SQL dialect alive forever. So
+      # `db` is part of the stack, not a profile, and `app` waits for it.
+      #
+      # DATABASE_URL is REQUIRED: there is no engine switch and no fallback —
+      # the app refuses to start without it. Backups are `pg_dump`, not a file
+      # copy; see OPERATIONS.md § Data & backups.
+      - DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-opscat}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opscat}}
       - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
       - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
       - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
@@ -69,6 +77,14 @@ services:
       - OPSCAT_LIVEKIT_API_SECRET=${OPSCAT_LIVEKIT_API_SECRET:-}
     volumes:
       - opscat_data:/data
+    # The app cannot boot before the database accepts connections, and
+    # `service_healthy` (not just `service_started`) is the difference: Postgres
+    # runs its own init on first start, so the container is up for several
+    # seconds before it listens. Without this, `restart: always` turns that
+    # window into a crash-loop that reads as a slow start.
+    depends_on:
+      db:
+        condition: service_healthy
     restart: always
 
   # PostgreSQL — the target of docs/POSTGRES-MIGRATION-PLAN.md.
@@ -83,20 +99,16 @@ services:
   # plan § 0a), so an unbounded Postgres and an OOM-killed app are the same event.
   db:
     image: postgres:16-alpine
-    # OPT-IN, and that is the safety property. A profiled service is not started
-    # by a plain `docker compose up`, so the production deploy — which runs
-    # exactly that over SSH — is untouched by this file existing. Start it with
-    #   docker compose --profile postgres up -d db
-    profiles: [postgres]
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-opscat}
       - POSTGRES_USER=${POSTGRES_USER:-opscat}
-      # Empty default ON PURPOSE, and it is subtle: compose interpolates the
-      # entire file even for a service it will not start, so `${VAR:?...}` here
-      # would abort `docker compose up` in production over a container nobody
-      # asked for. Left empty, postgres itself refuses to start — the honest
-      # failure, and only for whoever opted into the profile.
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      # REQUIRED now, and the reasoning inverted with the profile. It used to be
+      # empty on purpose: compose interpolates the whole file even for a service
+      # it will not start, so `${VAR:?}` would have aborted an ordinary `up` over
+      # a container nobody asked for. `db` is part of the stack now, so an empty
+      # password is not an honest failure — it is an install that comes up
+      # without a database and reports it as a crash-loop.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — e.g. openssl rand -hex 24}
     volumes:
       - opscat_pgdata:/var/lib/postgresql/data
     # `pg_isready` is what `depends_on: service_healthy` waits for. Without it

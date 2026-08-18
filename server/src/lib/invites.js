@@ -17,12 +17,22 @@
 // `must_change_password` stays set and the forced dialog stays hard — the point
 // was never to remove that guard, it was to stop creating the secret it guards.
 const crypto = require('crypto');
-const { db, getSetting } = require('../db');
+const q = require('../db/shim');
+const { getSetting } = require('../db');
 const config = require('../config');
 const { now, sha256 } = require('../util');
 const mailer = require('../mailer');
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// A re-invite supersedes the first link, and expired rows of every purpose are
+// swept while we are here.
+const delPending = q.prepare(`DELETE FROM login_tokens
+  WHERE (user_id = ? AND purpose = 'invite') OR expires_at < ?`);
+const insInvite = q.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
+  VALUES (?, ?, ?, ?, 'invite')`);
+const clearPass = q.prepare(`UPDATE users SET pass_salt = '', pass_hash = '', must_change_password = 0
+  WHERE id = ?`);
 
 const mailConfigured = () => mailer.mailConfigured();
 
@@ -36,12 +46,8 @@ const mailConfigured = () => mailer.mailConfigured();
 async function sendInviteLink(user, { kind = 'invite', orgName = '', invitedBy = '' } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const t = now();
-  // Replace any pending activation for this user (a re-invite supersedes the
-  // first link) and sweep expired rows of every purpose while we are here.
-  db.prepare(`DELETE FROM login_tokens
-    WHERE (user_id = ? AND purpose = 'invite') OR expires_at < ?`).run(user.id, t);
-  db.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
-    VALUES (?, ?, ?, ?, 'invite')`).run(sha256(token), user.id, t, t + INVITE_TTL_MS);
+  await delPending.run(user.id, t);
+  await insInvite.run(sha256(token), user.id, t, t + INVITE_TTL_MS);
 
   const url = `${config.baseUrl}/app/login?token=${token}`;
   const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
@@ -68,8 +74,7 @@ async function sendInviteLink(user, { kind = 'invite', orgName = '', invitedBy =
 
 /** Clear a user's password entirely — the account becomes link-only until they set one. */
 function clearPassword(userId) {
-  db.prepare(`UPDATE users SET pass_salt = '', pass_hash = '', must_change_password = 0
-    WHERE id = ?`).run(userId);
+  return clearPass.run(userId);
 }
 
 module.exports = { sendInviteLink, clearPassword, mailConfigured, INVITE_TTL_MS };

@@ -100,6 +100,26 @@ function harness() {
   // For the `main().catch(...)` tail: a harness that throws has not proven
   // anything, so it must exit non-zero even though no check said FAIL.
   const die = (e) => {
+    /* Print what was already established BEFORE the throw.
+     *
+     * `chk` collects into R and only `report()` prints it, so a harness that
+     * crashed mid-run used to show a bare stack trace and nothing else — every
+     * PASS and, far worse, every FAIL recorded before the crash was discarded.
+     * That inverts what a harness is for: the checks that had already failed are
+     * usually the DIAGNOSIS of the crash, and throwing them away leaves the
+     * reader with a TypeError twenty lines downstream of the real problem.
+     *
+     * Found while mutation-testing the probe-location fix: reintroducing the
+     * literal org id made two named checks fail and then a fixture insert throw,
+     * and the output showed only the throw. The mutation was caught either way —
+     * a crash is a non-zero exit — but "caught" and "diagnosed" are not the same
+     * thing, and the difference is paid by whoever reads the CI log.
+     */
+    if (R.length) {
+      const fails = R.filter((l) => l.startsWith('FAIL'));
+      console.log(R.join('\n'));
+      console.log(`\n${R.length - fails.length}/${R.length} checks passed before the error below`);
+    }
     console.error('harness error:', e);
     runCleanups();
     process.exit(1);
@@ -108,4 +128,26 @@ function harness() {
   return { chk, until, report, onExit, die };
 }
 
-module.exports = { harness, isThenable };
+/* Wait for the app to answer /api/health.
+ *
+ * `require('./src/index.js')` starts `boot()` and returns immediately: since the
+ * spine conversion, boot awaits db.init() and seed() and calls `app.listen`
+ * LAST, so the port is not open when the require returns. Most harnesses already
+ * had a private copy of this loop; three did not and were relying on their first
+ * `await` happening to give boot enough turns of the event loop — which held
+ * only because better-sqlite3 resolves in microtasks, i.e. for exactly as long
+ * as SQLite is the driver.
+ *
+ * A poll on /api/health is now a STRICTER gate than it used to be, not a weaker
+ * one: an answer means the database is migrated, the settings are loaded and the
+ * seed has run, where before it meant only that the port was open.
+ */
+async function waitForServer(base, tries = 50) {
+  for (let i = 0; i < tries; i++) {
+    try { if ((await fetch(`${base}/api/health`)).ok) return true; } catch { /* not up yet */ }
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return false;
+}
+
+module.exports = { harness, isThenable, waitForServer };

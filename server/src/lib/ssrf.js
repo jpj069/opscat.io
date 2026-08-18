@@ -2,8 +2,8 @@
 // The ONE guard for outbound HTTP the product makes on a user's behalf.
 //
 // The rule: a URL a user can type must never be able to reach the host's own
-// network. Cloud metadata (169.254.169.254), the compose sidecars, the SQLite
-// host, a neighbouring tenant's internal service — all of it sits behind
+// network. Cloud metadata (169.254.169.254), the compose sidecars, the database
+// container, a neighbouring tenant's internal service — all of it sits behind
 // addresses that a `fetch()` will happily connect to unless something refuses
 // first. On a multi-tenant instance that is a tenant-boundary crossing; on a
 // self-hosted one it is still the difference between "posts to my endpoint" and

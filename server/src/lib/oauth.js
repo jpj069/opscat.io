@@ -13,7 +13,7 @@
 // revoked membership takes effect at once rather than living on in the token.
 
 const crypto = require('crypto');
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now, sha256, randHex } = require('../util');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -25,25 +25,25 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // family, so per-family scopes would be noise (see docs/MCP-PLAN.md).
 const AVAILABLE_SCOPES = ['read', 'write'];
 
-const insClient = db.prepare(
+const insClient = q.prepare(
   'INSERT INTO oauth_clients (client_id, name, redirect_uris, scopes, created_at) VALUES (?,?,?,?,?)');
-const getClientStmt = db.prepare('SELECT * FROM oauth_clients WHERE client_id = ?');
+const getClientStmt = q.prepare('SELECT * FROM oauth_clients WHERE client_id = ?');
 
-const insCode = db.prepare(`INSERT INTO oauth_codes
+const insCode = q.prepare(`INSERT INTO oauth_codes
   (code_hash, client_id, user_id, org_id, redirect_uri, code_challenge, scopes, resource, expires_at, created_at)
   VALUES (?,?,?,?,?,?,?,?,?,?)`);
-const getCode = db.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?');
-const delCode = db.prepare('DELETE FROM oauth_codes WHERE code_hash = ?');
+const getCode = q.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?');
+const delCode = q.prepare('DELETE FROM oauth_codes WHERE code_hash = ?');
 
-const insToken = db.prepare(`INSERT INTO oauth_tokens
+const insToken = q.prepare(`INSERT INTO oauth_tokens
   (token_hash, kind, client_id, user_id, org_id, scopes, resource, expires_at, created_at)
   VALUES (?,?,?,?,?,?,?,?,?)`);
-const getToken = db.prepare("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = ?");
-const delToken = db.prepare('DELETE FROM oauth_tokens WHERE token_hash = ?');
-const touchToken = db.prepare('UPDATE oauth_tokens SET last_used_at = ? WHERE id = ?');
-const delTokensForClientUser = db.prepare(
+const getToken = q.prepare("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = ?");
+const delToken = q.prepare('DELETE FROM oauth_tokens WHERE token_hash = ?');
+const touchToken = q.prepare('UPDATE oauth_tokens SET last_used_at = ? WHERE id = ?');
+const delTokensForClientUser = q.prepare(
   'DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ? AND org_id = ?');
-const listTokensForUser = db.prepare(`SELECT client_id, org_id, scopes, MAX(created_at) created_at,
+const listTokensForUser = q.prepare(`SELECT client_id, org_id, scopes, MAX(created_at) created_at,
   MAX(last_used_at) last_used_at, COUNT(*) n
   FROM oauth_tokens WHERE user_id = ? AND kind = 'access' AND expires_at > ?
   GROUP BY client_id, org_id, scopes`);
@@ -62,41 +62,57 @@ function validRedirectUri(uri) {
   return /^[a-z][a-z0-9+.-]*:$/.test(u.protocol); // custom scheme
 }
 
-function registerClient({ name, redirectUris, scopes }) {
+async function registerClient({ name, redirectUris, scopes }) {
   const uris = Array.isArray(redirectUris) ? redirectUris.filter((u) => typeof u === 'string') : [];
   if (!uris.length) throw new Error('redirect_uris required');
   for (const u of uris) if (!validRedirectUri(u)) throw new Error(`invalid redirect_uri: ${u}`);
   const granted = (Array.isArray(scopes) ? scopes : String(scopes || '').split(/\s+/))
     .filter((s) => AVAILABLE_SCOPES.includes(s));
   const clientId = `ocm_${randHex(16)}`;
-  insClient.run(clientId, String(name || 'MCP client').slice(0, 120), JSON.stringify(uris),
+  await insClient.run(clientId, String(name || 'MCP client').slice(0, 120), JSON.stringify(uris),
     (granted.length ? granted : AVAILABLE_SCOPES).join(','), now());
   return getClient(clientId);
 }
 
-function getClient(clientId) {
-  const row = getClientStmt.get(String(clientId || ''));
+async function getClient(clientId) {
+  const row = await getClientStmt.get(String(clientId || ''));
   if (!row) return null;
   return { ...row, redirect_uris: JSON.parse(row.redirect_uris), scopes: row.scopes.split(',') };
 }
 
 // ── authorization codes ────────────────────────────────────────────────────
 
-function issueCode({ clientId, userId, orgId, redirectUri, codeChallenge, scopes, resource }) {
+async function issueCode({ clientId, userId, orgId, redirectUri, codeChallenge, scopes, resource }) {
   const code = randHex(32);
   const t = now();
-  insCode.run(sha256(code), clientId, userId, orgId, redirectUri, codeChallenge,
+  await insCode.run(sha256(code), clientId, userId, orgId, redirectUri, codeChallenge,
     scopes.join(','), resource || null, t + CODE_TTL_MS, t);
   return code;
 }
 
 // Single-use: the row is deleted whether or not verification succeeds, so a
 // leaked code cannot be retried against a different verifier.
-function consumeCode(code, { clientId, redirectUri, codeVerifier }) {
+async function consumeCode(code, { clientId, redirectUri, codeVerifier }) {
   const hash = sha256(String(code || ''));
-  const row = getCode.get(hash);
+  const row = await getCode.get(hash);
   if (!row) return { error: 'invalid_grant' };
-  delCode.run(hash);
+  // The DELETE is the gate, not the SELECT above. With an await between the two,
+  // two redemptions of one code both read the row and both reach the token issue
+  // below — one authorization mints two independently-revocable token pairs.
+  //
+  // Be precise about what that costs, because the obvious claim is wrong: this
+  // does NOT defeat PKCE. The S256 comparison further down is a pure function of
+  // the verifier the caller presents, so an attacker who intercepted the code
+  // and does not have the verifier gains nothing by racing. What is lost is the
+  // single-use guarantee RFC 6749 §4.1.2 requires — and with it the only signal
+  // that a code was used twice. If the code AND the verifier both leak (a
+  // malicious app on the same device, a proxy, a log line), the legitimate
+  // exchange today fails with `invalid_grant` and surfaces the theft; under the
+  // race both succeed and nothing anywhere reports it.
+  //
+  // Exactly one caller gets `changes === 1`; the other is told invalid_grant,
+  // the same answer a stale code already gets.
+  if ((await delCode.run(hash)).changes !== 1) return { error: 'invalid_grant' };
   if (row.expires_at < now()) return { error: 'invalid_grant' };
   if (row.client_id !== clientId) return { error: 'invalid_grant' };
   if (row.redirect_uri !== redirectUri) return { error: 'invalid_grant' };
@@ -108,13 +124,13 @@ function consumeCode(code, { clientId, redirectUri, codeVerifier }) {
 
 // ── tokens ─────────────────────────────────────────────────────────────────
 
-function issueTokens({ clientId, userId, orgId, scopes, resource }) {
+async function issueTokens({ clientId, userId, orgId, scopes, resource }) {
   const access = `ocm_at_${randHex(32)}`;
   const refresh = `ocm_rt_${randHex(32)}`;
   const t = now();
   const s = Array.isArray(scopes) ? scopes.join(',') : String(scopes);
-  insToken.run(sha256(access), 'access', clientId, userId, orgId, s, resource || null, t + ACCESS_TTL_MS, t);
-  insToken.run(sha256(refresh), 'refresh', clientId, userId, orgId, s, resource || null, t + REFRESH_TTL_MS, t);
+  await insToken.run(sha256(access), 'access', clientId, userId, orgId, s, resource || null, t + ACCESS_TTL_MS, t);
+  await insToken.run(sha256(refresh), 'refresh', clientId, userId, orgId, s, resource || null, t + REFRESH_TTL_MS, t);
   return {
     access_token: access,
     refresh_token: refresh,
@@ -125,57 +141,67 @@ function issueTokens({ clientId, userId, orgId, scopes, resource }) {
 }
 
 // Rotation: the presented refresh token is consumed and a fresh pair issued.
-function consumeRefresh(token, clientId) {
+async function consumeRefresh(token, clientId) {
   const hash = sha256(String(token || ''));
-  const row = getToken.get(hash, 'refresh');
+  const row = await getToken.get(hash, 'refresh');
   if (!row) return { error: 'invalid_grant' };
-  delToken.run(hash);
+  // Same gate as consumeCode, and rotation is the whole point of it: two holders
+  // of one refresh token would otherwise both be handed a fresh pair, so the
+  // stolen copy keeps working and its use is never observed by anybody. The
+  // DELETE names the one caller that rotated it.
+  if ((await delToken.run(hash)).changes !== 1) return { error: 'invalid_grant' };
   if (row.expires_at < now() || row.client_id !== clientId) return { error: 'invalid_grant' };
   return { row };
 }
 
 // Resolve a Bearer access token. Returns null for unknown/expired — the caller
 // turns that into a 401 challenge.
-function verifyAccessToken(token) {
-  const row = getToken.get(sha256(String(token || '')), 'access');
+async function verifyAccessToken(token) {
+  const row = await getToken.get(sha256(String(token || '')), 'access');
   if (!row) return null;
-  if (row.expires_at < now()) { delToken.run(row.token_hash); return null; }
-  touchToken.run(now(), row.id);
+  if (row.expires_at < now()) { await delToken.run(row.token_hash); return null; }
+  await touchToken.run(now(), row.id);
   return row;
 }
 
-function revokeToken(token) {
+async function revokeToken(token) {
   const hash = sha256(String(token || ''));
-  const row = db.prepare('SELECT client_id, user_id, org_id FROM oauth_tokens WHERE token_hash = ?').get(hash);
+  const row = await q.prepare('SELECT client_id, user_id, org_id FROM oauth_tokens WHERE token_hash = ?').get(hash);
   if (!row) return false;
   // RFC 7009: revoking one token of a grant revokes the grant. Drop every token
   // this client holds for this (user, org) so a stale refresh can't resurrect it.
-  delTokensForClientUser.run(row.client_id, row.user_id, row.org_id);
+  await delTokensForClientUser.run(row.client_id, row.user_id, row.org_id);
   return true;
 }
 
-function revokeGrant(clientId, userId, orgId) {
-  const info = delTokensForClientUser.run(clientId, userId, orgId);
+async function revokeGrant(clientId, userId, orgId) {
+  const info = await delTokensForClientUser.run(clientId, userId, orgId);
   return info.changes > 0;
 }
 
-function listGrants(userId) {
-  return listTokensForUser.all(userId, now()).map((r) => ({
-    clientId: r.client_id,
-    orgId: r.org_id,
-    scopes: r.scopes.split(','),
-    createdAt: r.created_at,
-    lastUsedAt: r.last_used_at,
-    client: getClient(r.client_id),
-  }));
+async function listGrants(userId) {
+  const rows = await listTokensForUser.all(userId, now());
+  const out = [];
+  for (const r of rows) {
+    out.push({
+      clientId: r.client_id,
+      orgId: r.org_id,
+      scopes: r.scopes.split(','),
+      createdAt: r.created_at,
+      lastUsedAt: r.last_used_at,
+      // eslint-disable-next-line no-await-in-loop
+      client: await getClient(r.client_id),
+    });
+  }
+  return out;
 }
 
 // Housekeeping: expired rows are dead weight and a refresh token that outlived
 // its window must not linger in a table someone might query loosely.
-function purgeExpired() {
+async function purgeExpired() {
   const t = now();
-  db.prepare('DELETE FROM oauth_tokens WHERE expires_at < ?').run(t);
-  db.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(t);
+  await q.prepare('DELETE FROM oauth_tokens WHERE expires_at < ?').run(t);
+  await q.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(t);
 }
 
 module.exports = {

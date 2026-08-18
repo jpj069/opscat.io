@@ -17,7 +17,7 @@
 // role the equivalent UI action requires, neither more nor less.
 
 const { z } = require('zod');
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now, isStr, clampInt } = require('../util');
 const sec = require('../security');
 const incidents = require('../lib/incidents');
@@ -66,6 +66,15 @@ const eventShape = {
   firstSeen: z.number(), lastSeen: z.number(), description: z.string().nullable(),
 };
 
+/* `'text'` is pinned to the literal type rather than left to widen to `string`.
+ * Every handler is async since the shim conversion, so what these two return is
+ * what `server.registerTool`'s callback returns — and the SDK types that as a
+ * union of content kinds discriminated on `type`. Widened to `string` the whole
+ * `Promise<…>` fails to assign, which the type gate reports as a MISSED AWAIT
+ * (its rule is "any error mentioning a Promise"). Nothing is wrong at runtime;
+ * the annotation is what keeps the gate's one signal from being a false alarm.
+ * @returns {{ content: { type: 'text', text: string }[], structuredContent: any }}
+ */
 function ok(structured) {
   return {
     content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
@@ -73,6 +82,7 @@ function ok(structured) {
   };
 }
 
+/** @returns {{ content: { type: 'text', text: string }[], isError: true }} */
 function fail(message) {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
@@ -98,14 +108,14 @@ const TOOLS = [
     },
     outputSchema: { events: z.array(z.object(eventShape)), count: z.number() },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       const status = a.status || 'active';
       const limit = Math.min(a.limit || 50, 200);
       const minSev = a.minSeverity || 0;
       const rows = status === 'all'
-        ? db.prepare(`SELECT * FROM events WHERE org_id = ? AND severity >= ?
+        ? await q.prepare(`SELECT * FROM events WHERE org_id = ? AND severity >= ?
              ORDER BY severity DESC, last_seen DESC LIMIT ?`).all(p.orgId, minSev, limit)
-        : db.prepare(`SELECT * FROM events WHERE org_id = ? AND status = ? AND severity >= ?
+        : await q.prepare(`SELECT * FROM events WHERE org_id = ? AND status = ? AND severity >= ?
              ORDER BY severity DESC, last_seen DESC LIMIT ?`).all(p.orgId, status, minSev, limit);
       const events = rows.map((e) => ({
         id: e.id, name: e.name, device: e.device, severity: e.severity, hits: e.hits,
@@ -127,12 +137,12 @@ const TOOLS = [
       case: z.object({ id: z.number(), label: z.string(), status: z.string() }).nullable(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
-      const e = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
+    handler: async (a, p) => {
+      const e = await q.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!e) return fail(`No event ${a.id} in this organization.`);
-      const recentLogs = db.prepare(`SELECT ts, device, line, sev FROM logs
+      const recentLogs = await q.prepare(`SELECT ts, device, line, sev FROM logs
         WHERE org_id = ? AND device = ? ORDER BY ts DESC LIMIT 20`).all(p.orgId, e.device);
-      const c = db.prepare(`SELECT id, status FROM cases WHERE org_id = ? AND event_id = ?
+      const c = await q.prepare(`SELECT id, status FROM cases WHERE org_id = ? AND event_id = ?
         ORDER BY id DESC LIMIT 1`).get(p.orgId, e.id);
       return ok({
         event: {
@@ -162,11 +172,11 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       const limit = Math.min(a.limit || 50, 200);
       const rows = (!a.status || a.status === 'all')
-        ? db.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY opened_at DESC LIMIT ?').all(p.orgId, limit)
-        : db.prepare('SELECT * FROM cases WHERE org_id = ? AND status = ? ORDER BY opened_at DESC LIMIT ?')
+        ? await q.prepare('SELECT * FROM cases WHERE org_id = ? ORDER BY opened_at DESC LIMIT ?').all(p.orgId, limit)
+        : await q.prepare('SELECT * FROM cases WHERE org_id = ? AND status = ? ORDER BY opened_at DESC LIMIT ?')
             .all(p.orgId, a.status, limit);
       const out = rows.map((c) => ({
         id: c.id, label: cases.label(c.id), name: c.name, device: c.device,
@@ -195,14 +205,14 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       const since = now() - (a.sinceMinutes || 60) * 60000;
       const limit = Math.min(a.limit || 50, 200);
       const where = ['org_id = ?', 'ts >= ?'];
       const args = [p.orgId, since];
       if (a.device) { where.push('device = ?'); args.push(a.device); }
       if (a.query) { where.push('lower(line) LIKE lower(?)'); args.push(`%${a.query}%`); }
-      const logs = db.prepare(`SELECT ts, device, line, sev, source FROM logs
+      const logs = await q.prepare(`SELECT ts, device, line, sev, source FROM logs
         WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
       return ok({ logs, count: logs.length });
     },
@@ -227,9 +237,9 @@ const TOOLS = [
       gaps: z.array(z.string()),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       const at = now();
-      const rows = require('../engine/oncall').onCallNow(p.orgId, at).map((r) => ({
+      const rows = (await require('../engine/oncall').onCallNow(p.orgId, at)).map((r) => ({
         scheduleId: r.scheduleId, name: r.name, timezone: r.timezone,
         user: r.user ? { id: r.user.id, name: r.user.name, email: r.user.email } : null,
         via: r.via, configured: r.configured,
@@ -260,13 +270,13 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       const filter = a.status || 'live';
       const limit = Math.min(a.limit || 50, 200);
-      const rows = db.prepare(`SELECT * FROM alerts WHERE org_id = ?
+      const rows = await q.prepare(`SELECT * FROM alerts WHERE org_id = ?
         AND (? = 'all' OR (? = 'live' AND status IN ('active','acked')) OR status = ?)
         ORDER BY created_at DESC LIMIT ?`).all(p.orgId, filter, filter, filter, limit);
-      const out = rows.map((r) => chain.view(r)).map((v) => ({
+      const out = (await Promise.all(rows.map((r) => chain.view(r)))).map((v) => ({
         id: v.id, status: v.status, urgency: v.urgency,
         subject: v.subjectLabel, policy: v.policyName,
         step: v.step, round: v.round, createdAt: v.createdAt,
@@ -285,8 +295,8 @@ const TOOLS = [
     inputSchema: { id: z.number().describe('Alert id.') },
     outputSchema: { id: z.number(), status: z.string(), acked: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
-      const r = chain.ack(p.orgId, a.id, p.user.id, `mcp:${p.clientId}`);
+    handler: async (a, p) => {
+      const r = await chain.ack(p.orgId, a.id, p.user.id, `mcp:${p.clientId}`);
       // An alert that is already acknowledged is not an error to hide: the agent
       // is told the state so it can say "somebody got there first".
       if (r.error) return fail(`${r.error}.`);
@@ -309,22 +319,22 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       // Reputation assets are excluded here for the same reason they are excluded
       // from GET /api/synthetics/checks: they are their own feature (blocklist
       // state, not reachability) and `lastOk:false` on one means "listed", not
       // "down" — an agent reading this list would report an outage that is not one.
-      const rows = db.prepare(
+      const rows = await q.prepare(
         'SELECT * FROM synthetic_checks WHERE org_id = ? ORDER BY id').all(p.orgId);
-      const last = db.prepare(`SELECT ok, latency_ms, ts FROM synthetic_results
+      const last = q.prepare(`SELECT ok, latency_ms, ts FROM synthetic_results
         WHERE check_id = ? ORDER BY ts DESC LIMIT 1`);
-      let checks = rows.map((c) => {
-        const r = last.get(c.id);
+      let checks = await Promise.all(rows.map(async (c) => {
+        const r = await last.get(c.id);
         return {
           id: c.id, type: c.type, target: c.target, enabled: c.enabled, intervalSeconds: c.interval_s,
           lastOk: r ? !!r.ok : null, lastLatencyMs: r ? r.latency_ms : null, lastCheckedAt: r ? r.ts : null,
         };
-      });
+      }));
       if (a.onlyFailing) checks = checks.filter((c) => c.lastOk === false);
       return ok({ checks, count: checks.length });
     },
@@ -344,8 +354,8 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
-      const rows = db.prepare('SELECT * FROM incidents WHERE org_id = ? ORDER BY started_at DESC LIMIT ?')
+    handler: async (a, p) => {
+      const rows = await q.prepare('SELECT * FROM incidents WHERE org_id = ? ORDER BY started_at DESC LIMIT ?')
         .all(p.orgId, Math.min(a.limit || 25, 100));
       const incidents = rows.map((i) => ({
         id: i.id, label: `INC-${1000 + i.id}`, title: i.title, severity: i.severity,
@@ -367,15 +377,15 @@ const TOOLS = [
       heartbeats: z.array(z.object({ id: z.number(), name: z.string(), enabled: z.number(), intervalSeconds: z.number(), lastPingAt: z.number().nullable() })),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (_a, p) => ok({
-      agents: db.prepare(`SELECT id, name, hostname, platform, version, active, last_seen_at
-        FROM agents WHERE org_id = ? ORDER BY name`).all(p.orgId)
+    handler: async (_a, p) => ok({
+      agents: (await q.prepare(`SELECT id, name, hostname, platform, version, active, last_seen_at
+        FROM agents WHERE org_id = ? ORDER BY name`).all(p.orgId))
         .map((r) => ({ id: r.id, name: r.name, hostname: r.hostname, platform: r.platform, version: r.version, active: r.active, lastSeenAt: r.last_seen_at })),
-      snmpTargets: db.prepare(`SELECT id, name, host, enabled, last_status, last_seen_at
-        FROM snmp_targets WHERE org_id = ? ORDER BY name`).all(p.orgId)
+      snmpTargets: (await q.prepare(`SELECT id, name, host, enabled, last_status, last_seen_at
+        FROM snmp_targets WHERE org_id = ? ORDER BY name`).all(p.orgId))
         .map((r) => ({ id: r.id, name: r.name, host: r.host, enabled: r.enabled, lastStatus: r.last_status, lastSeenAt: r.last_seen_at })),
-      heartbeats: db.prepare(`SELECT id, name, enabled, interval_s, last_ping_at
-        FROM heartbeats WHERE org_id = ? ORDER BY name`).all(p.orgId)
+      heartbeats: (await q.prepare(`SELECT id, name, enabled, interval_s, last_ping_at
+        FROM heartbeats WHERE org_id = ? ORDER BY name`).all(p.orgId))
         .map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, intervalSeconds: r.interval_s, lastPingAt: r.last_ping_at })),
     }),
   },
@@ -393,23 +403,30 @@ const TOOLS = [
       maintenanceActive: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (_a, p) => {
-      const one = (sql, ...args) => db.prepare(sql).get(p.orgId, ...args).c;
+    handler: async (_a, p) => {
+      const one = async (sql, ...args) => (await q.prepare(sql).get(p.orgId, ...args)).c;
       const t = now();
-      const failing = db.prepare('SELECT c.id FROM synthetic_checks c WHERE c.org_id = ? AND c.enabled = 1')
-        .all(p.orgId)
-        .filter((c) => {
-          const r = db.prepare('SELECT ok FROM synthetic_results WHERE check_id = ? ORDER BY ts DESC LIMIT 1').get(c.id);
-          return r && !r.ok;
-        }).length;
+      // Counted in a LOOP, not with `.filter()`. The predicate here asks a
+      // second question of the database per row, and an async predicate returns
+      // a Promise — which is truthy, so every enabled check would be counted as
+      // failing, with nothing thrown, nothing logged and the type gate green
+      // (CLAUDE.md § the async conversion: truthiness is the one hole no proxy
+      // can close). The dashboard is the first call an agent makes, so this is
+      // exactly the number it would report an outage from.
+      let failing = 0;
+      for (const c of await q.prepare('SELECT c.id FROM synthetic_checks c WHERE c.org_id = ? AND c.enabled = 1')
+        .all(p.orgId)) {
+        const r = await q.prepare('SELECT ok FROM synthetic_results WHERE check_id = ? ORDER BY ts DESC LIMIT 1').get(c.id);
+        if (r && !r.ok) failing++;
+      }
       return ok({
         organization: p.org.name,
-        activeEvents: one("SELECT COUNT(*) c FROM events WHERE org_id = ? AND status = 'active'"),
-        criticalEvents: one("SELECT COUNT(*) c FROM events WHERE org_id = ? AND status = 'active' AND severity >= 80"),
-        openCases: one("SELECT COUNT(*) c FROM cases WHERE org_id = ? AND status != 'closed'"),
+        activeEvents: await one("SELECT COUNT(*) c FROM events WHERE org_id = ? AND status = 'active'"),
+        criticalEvents: await one("SELECT COUNT(*) c FROM events WHERE org_id = ? AND status = 'active' AND severity >= 80"),
+        openCases: await one("SELECT COUNT(*) c FROM cases WHERE org_id = ? AND status != 'closed'"),
         failingChecks: failing,
-        openIncidents: one("SELECT COUNT(*) c FROM incidents WHERE org_id = ? AND resolved_at IS NULL"),
-        maintenanceActive: one('SELECT COUNT(*) c FROM maintenance_windows WHERE org_id = ? AND starts_at <= ? AND ends_at >= ?', t, t),
+        openIncidents: await one("SELECT COUNT(*) c FROM incidents WHERE org_id = ? AND resolved_at IS NULL"),
+        maintenanceActive: await one('SELECT COUNT(*) c FROM maintenance_windows WHERE org_id = ? AND starts_at <= ? AND ends_at >= ?', t, t),
       });
     },
   },
@@ -427,8 +444,8 @@ const TOOLS = [
       count: z.number(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
-      let rows = db.prepare(`SELECT id, name, status, enabled, page_url, last_checked_at
+    handler: async (a, p) => {
+      let rows = await q.prepare(`SELECT id, name, status, enabled, page_url, last_checked_at
         FROM vendors WHERE org_id = ? ORDER BY name`).all(p.orgId);
       if (a.onlyDisrupted) rows = rows.filter((v) => v.status && v.status !== 'operational');
       const vendors = rows.map((v) => ({
@@ -458,11 +475,11 @@ const TOOLS = [
     },
     outputSchema: { id: z.number(), status: z.string(), updated: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       // lib/cases is the one mutation path (docs/ONCALL-V1.md §5): closing here
       // has to stop the alert chain exactly as closing in the UI does, or an
       // agent tidying up leaves somebody's phone ringing.
-      const after = cases.update(p.orgId, a.id, {
+      const after = await cases.update(p.orgId, a.id, {
         status: a.status, rootCause: a.rootCause, note: a.note,
       });
       if (!after) return fail(`No case ${a.id} in this organization.`);
@@ -483,36 +500,52 @@ const TOOLS = [
     },
     outputSchema: { id: z.number(), status: z.string(), severity: z.number() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    handler: (a, p) => {
-      const e = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
+    handler: async (a, p) => {
+      const e = await q.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!e) return fail(`No event ${a.id} in this organization.`);
       const t = now();
       // Same three writes as POST /events/:id/action, and the same timeline entry:
       // an event's history must not have a hole where an agent acted. The client id
       // rides along in the detail, so the panel says a tool did this, not a person
       // at a keyboard.
+      // The two state changes carry their condition in the UPDATE's own WHERE and
+      // record history only when `changes` says something actually moved. The
+      // tool's ANSWER is unchanged — it reports the state after the call, so a
+      // repeated finish still succeeds — but a repeat no longer puts a second
+      // "finish" in the event's history for one state change, and an agent
+      // retrying a call cannot record a 25-point downgrade twice.
       const via = ` [via ${p.clientId}]`;
       if (a.action === 'finish') {
-        db.prepare("UPDATE events SET status = 'finished', finished_at = ?, finished_by = ? WHERE id = ? AND org_id = ?")
-          .run(t, p.user.id, e.id, p.orgId);
-        cases.closeForEvent(p.orgId, e.id, { at: t });
-        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'finish', via.trim());
+        const w = await q.prepare(`UPDATE events SET status = 'finished', finished_at = ?, finished_by = ?
+          WHERE id = ? AND org_id = ? AND status != 'finished'`).run(t, p.user.id, e.id, p.orgId);
+        await cases.closeForEvent(p.orgId, e.id, { at: t });
+        if (w.changes) await opsBus().recordEvent(p.orgId, e.id, p.user.id, 'finish', via.trim());
       } else if (a.action === 'downgrade') {
         const newSev = Math.max(10, e.severity - 25);
-        db.prepare('UPDATE events SET severity = ? WHERE id = ? AND org_id = ?')
-          .run(newSev, e.id, p.orgId);
-        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'downgrade', `${e.severity} → ${newSev}${via}`);
+        // compare-and-swap on the severity we read: the history entry names a
+        // before and an after, so it may only be written when that exact pair
+        // is the transition the database performed.
+        const w = await q.prepare('UPDATE events SET severity = ? WHERE id = ? AND org_id = ? AND severity = ?')
+          .run(newSev, e.id, p.orgId, e.severity);
+        if (w.changes) await opsBus().recordEvent(p.orgId, e.id, p.user.id, 'downgrade', `${e.severity} → ${newSev}${via}`);
       } else {
         if (!isStr(a.note, 2000)) return fail('action "note" requires a note.');
-        cases.setNoteForEvent(p.orgId, e.id, a.note);
-        opsBus().recordEvent(p.orgId, e.id, p.user.id, 'note', `${a.note}${via}`);
+        // Appends in SQL rather than SET note = ? — an agent tidying up a case
+        // must not silently delete the sentence the on-call engineer typed into
+        // it thirty seconds earlier. Shared with the UI path so there is one
+        // implementation of "add a note", not two that drift.
+        await opsBus().appendCaseNote(p.orgId, e.id, a.note);
+        await opsBus().recordEvent(p.orgId, e.id, p.user.id, 'note', `${a.note}${via}`);
       }
       auditTool(p, `event_${a.action}`, `event ${e.id} ${e.name}@${e.device}`);
-      const after = db.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(e.id, p.orgId);
+      const after = await q.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(e.id, p.orgId);
       // Push the same SSE frame the UI already listens for, so a change made by
-      // an agent shows up live rather than on the next refresh.
+      // an agent shows up live rather than on the next refresh. `publicEvent`
+      // reads the assignee row, so it is resolved in the argument expression —
+      // `hub.broadcast` writes the frame synchronously and JSON.stringify of a
+      // pending query would put "{}" on every subscribed browser.
       const bus = opsBus();
-      bus.hub.broadcast('event', bus.publicEvent(after), p.orgId);
+      bus.hub.broadcast('event', await bus.publicEvent(after), p.orgId);
       return ok({ id: after.id, status: after.status, severity: after.severity });
     },
   },
@@ -529,11 +562,11 @@ const TOOLS = [
     },
     outputSchema: { id: z.number(), label: z.string(), title: z.string(), status: z.string(), published: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       if (!isStr(a.title, 200)) return fail('title required.');
       // through lib/incidents so the synthetic lifecycle events fire and the
       // audit/view stays identical to the REST path (docs/INCIDENTS-V2.md §3.2)
-      const row = incidents.create(p.orgId, p.user.id, {
+      const row = await incidents.create(p.orgId, p.user.id, {
         title: a.title, severity: clampInt(a.severity, 0, 100, 50),
         message: isStr(a.message, 2000) ? a.message : undefined,
       });
@@ -557,8 +590,8 @@ const TOOLS = [
     },
     outputSchema: { id: z.number(), status: z.string(), published: z.boolean(), resolvedAt: z.number().nullable() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    handler: (a, p) => {
-      const after = incidents.setStatus(p.orgId, p.user.id, a.id, a.status,
+    handler: async (a, p) => {
+      const after = await incidents.setStatus(p.orgId, p.user.id, a.id, a.status,
         isStr(a.message, 2000) ? a.message : undefined);
       if (!after) return fail(`No incident ${a.id} in this organization.`);
       auditTool(p, 'incident_status', `${incidents.label(after.id)} → ${a.status}`);
@@ -583,7 +616,7 @@ const TOOLS = [
     outputSchema: { id: z.number(), title: z.string(), published: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     handler: async (a, p, ctx) => {
-      const i = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
+      const i = await q.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!i) return fail(`No incident ${a.id} in this organization.`);
       // Publishing is the one externally-visible act here: it puts text in front
       // of the org's customers. Everything else stays internal.
@@ -592,16 +625,16 @@ const TOOLS = [
           `Publish incident "${i.title}" to the PUBLIC status page? This is visible to everyone.`);
         if (!c.ok) return fail(c.reason);
       }
-      db.prepare(`UPDATE incidents SET
+      await q.prepare(`UPDATE incidents SET
           title = COALESCE(?, title), severity = COALESCE(?, severity),
           rca_summary = COALESCE(?, rca_summary), rca_resolution = COALESCE(?, rca_resolution)
         WHERE id = ? AND org_id = ?`)
         .run(a.title ?? null, Number.isFinite(a.severity) ? a.severity : null,
           a.rcaSummary ?? null, a.rcaResolution ?? null, i.id, p.orgId);
       // through the verb: first-publish notifies the status-page subscribers
-      if (a.published !== undefined) incidents.setPublished(p.orgId, p.user.id, i.id, a.published);
+      if (a.published !== undefined) await incidents.setPublished(p.orgId, p.user.id, i.id, a.published);
       auditTool(p, 'incident_update', `${incidents.label(i.id)}${a.published === true ? ' published' : ''}`);
-      const after = db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, p.orgId);
+      const after = await q.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?').get(i.id, p.orgId);
       return ok({ id: after.id, title: after.title, published: !!after.published });
     },
   },
@@ -618,16 +651,16 @@ const TOOLS = [
     },
     outputSchema: { id: z.number(), name: z.string(), startsAt: z.number(), endsAt: z.number() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    handler: (a, p) => {
+    handler: async (a, p) => {
       if (!isStr(a.name, 100)) return fail('name required.');
       if (!Number.isFinite(a.startsAt) || !Number.isFinite(a.endsAt) || a.endsAt <= a.startsAt) {
         return fail('startsAt/endsAt required in epoch milliseconds, with endsAt after startsAt.');
       }
       if (a.endsAt - a.startsAt > 30 * 86400000) return fail('Window longer than 30 days.');
-      const info = db.prepare(`INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at)
-        VALUES (?,?,?,?,?)`).run(p.orgId, a.name, a.startsAt, a.endsAt, now());
+      const id = await q.prepare(`INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at)
+        VALUES (?,?,?,?,?)`).insert(p.orgId, a.name, a.startsAt, a.endsAt, now());
       auditTool(p, 'maintenance_create', a.name);
-      return ok({ id: Number(info.lastInsertRowid), name: a.name, startsAt: a.startsAt, endsAt: a.endsAt });
+      return ok({ id: Number(id), name: a.name, startsAt: a.startsAt, endsAt: a.endsAt });
     },
   },
 
@@ -643,12 +676,12 @@ const TOOLS = [
     outputSchema: { id: z.number(), deleted: z.boolean() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     handler: async (a, p, ctx) => {
-      const w = db.prepare('SELECT * FROM maintenance_windows WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
+      const w = await q.prepare('SELECT * FROM maintenance_windows WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!w) return fail(`No maintenance window ${a.id} in this organization.`);
       const c = await confirmDestructive(ctx, a,
         `Delete maintenance window "${w.name}"? Alerting resumes immediately and this cannot be undone.`);
       if (!c.ok) return fail(c.reason);
-      db.prepare('DELETE FROM maintenance_windows WHERE id = ? AND org_id = ?').run(w.id, p.orgId);
+      await q.prepare('DELETE FROM maintenance_windows WHERE id = ? AND org_id = ?').run(w.id, p.orgId);
       auditTool(p, 'maintenance_delete', `window ${w.id} ${w.name}`);
       return ok({ id: w.id, deleted: true });
     },

@@ -6,42 +6,59 @@ const { execFile } = require('child_process');
 const dns = require('dns');
 const net = require('net');
 const tls = require('tls');
-const { db } = require('../db');
+const q = require('../db/shim');
 const config = require('../config');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const pipeline = require('./pipeline');
 const { assertPublicHost } = require('../lib/ssrf');
 
-const insResult = db.prepare(`INSERT INTO synthetic_results
+const insResult = q.prepare(`INSERT INTO synthetic_results
   (check_id, location_id, ts, ok, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?)`);
-const getChecks = db.prepare('SELECT * FROM synthetic_checks WHERE enabled = 1');
+const getChecks = q.prepare('SELECT * FROM synthetic_checks WHERE enabled = 1');
 // check→location assignment: no rows = run everywhere (incl. this local probe)
-const assignedLocs = db.prepare('SELECT location_id FROM check_locations WHERE check_id = ?');
-function runsOnLocation(checkId, locationId) {
-  const rows = assignedLocs.all(checkId);
+const assignedLocs = q.prepare('SELECT location_id FROM check_locations WHERE check_id = ?');
+async function runsOnLocation(checkId, locationId) {
+  const rows = await assignedLocs.all(checkId);
   return rows.length === 0 || rows.some((r) => r.location_id === locationId);
 }
-const getCheck = db.prepare('SELECT * FROM synthetic_checks WHERE id = ?');
-const lastFails = db.prepare(`SELECT ok FROM synthetic_results
+const getCheck = q.prepare('SELECT * FROM synthetic_checks WHERE id = ?');
+const lastFails = q.prepare(`SELECT ok FROM synthetic_results
   WHERE check_id = ? AND location_id = ? ORDER BY ts DESC LIMIT 3`);
 
 // One local probe location per org — results always link to a location the
 // owning org can actually see (tenant isolation).
-const localLocByOrg = new Map();
+const findLocalLoc = q.prepare("SELECT id FROM synthetic_locations WHERE kind = 'local' AND org_id = ?");
+const insLocalLoc = q.prepare(`INSERT INTO synthetic_locations (org_id, city, cc, kind, active, created_at)
+  VALUES (?, ?, ?, 'local', 1, ?)`);
+const touchLoc = q.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?');
+
+async function findOrCreateLocalLocation(orgId) {
+  const row = await findLocalLoc.get(orgId);
+  if (row) return row.id;
+  // `.insert()`, not `run().lastInsertRowid` — the shim refuses that one, and
+  // `undefined` in `synthetic_results.location_id` is a NULL nobody notices
+  // until the uptime chart comes back empty.
+  return insLocalLoc.insert(orgId, config.localProbe.city, config.localProbe.cc, now());
+}
+
+const localLocByOrg = new Map();   // orgId -> Promise<locationId>
 function ensureLocalLocation(orgId = DEFAULT_ORG_ID) {
-  let id = localLocByOrg.get(orgId);
-  if (!id) {
-    const row = db.prepare("SELECT id FROM synthetic_locations WHERE kind = 'local' AND org_id = ?").get(orgId);
-    if (row) { id = row.id; }
-    else {
-      const info = db.prepare(`INSERT INTO synthetic_locations (org_id, city, cc, kind, active, created_at)
-        VALUES (?, ?, ?, 'local', 1, ?)`).run(orgId, config.localProbe.city, config.localProbe.cc, now());
-      id = info.lastInsertRowid;
-    }
-    localLocByOrg.set(orgId, id);
+  let pending = localLocByOrg.get(orgId);
+  if (!pending) {
+    /* The map holds the PROMISE, not the id, and that is the whole difference
+     * the conversion makes here. Synchronously this function could not overlap
+     * with itself; awaited it can — `tick()` and `runAllNow()` both call it, and
+     * two racing cache misses would each find no row and each INSERT one, giving
+     * an org two "local" probe locations and splitting its own history across
+     * them. Caching the in-flight promise restores the single-insert property
+     * the synchronous version had for free. A FAILURE is not cached, or one
+     * transient error would make the probe locationless for the process's life.
+     */
+    pending = findOrCreateLocalLocation(orgId);
+    pending.catch(() => localLocByOrg.delete(orgId));
+    localLocByOrg.set(orgId, pending);
   }
-  db.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?').run(now(), id);
-  return id;
+  return pending.then(async (id) => { await touchLoc.run(now(), id); return id; });
 }
 
 // ---- runners ----------------------------------------------------------------
@@ -224,14 +241,16 @@ const RUNNERS = { http: checkHttp, icmp: checkIcmp, dns: checkDns, tcp: checkTcp
 
 // ---- recording + failure events --------------------------------------------
 
-function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
-  insResult.run(checkId, locationId, ts, ok ? 1 : 0, latency, meta ? JSON.stringify(meta).slice(0, 4000) : null);
+const getLocCity = q.prepare('SELECT city FROM synthetic_locations WHERE id = ?');
+
+async function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
+  await insResult.run(checkId, locationId, ts, ok ? 1 : 0, latency, meta ? JSON.stringify(meta).slice(0, 4000) : null);
   // certificate expiry is an event of its own — the site may still be up
   if (meta && Number.isFinite(meta.certDaysLeft) && meta.certDaysLeft <= 14) {
-    const check = getCheck.get(checkId);
+    const check = await getCheck.get(checkId);
     if (check) {
       const days = meta.certDaysLeft;
-      pipeline.ingestEvent({
+      await pipeline.ingestEvent({
         name: 'tls_cert_expiring', device: check.target.replace(/^https?:\/\//, '').split('/')[0],
         target: check.target, severity: days <= 3 ? 85 : days <= 7 ? 75 : 60,
         description: `tls_cert_expiring ${check.target} — certificate expires in ${days} day(s)`,
@@ -240,13 +259,13 @@ function recordResult(checkId, locationId, { ok, latency, meta }, ts = now()) {
   }
   if (!ok) {
     // only raise an event after 2 consecutive failures to avoid flapping
-    const recent = lastFails.all(checkId, locationId);
+    const recent = await lastFails.all(checkId, locationId);
     const consecutiveFails = recent.length >= 2 && recent[0].ok === 0 && recent[1].ok === 0;
     if (consecutiveFails) {
-      const check = getCheck.get(checkId);
-      const loc = db.prepare('SELECT city FROM synthetic_locations WHERE id = ?').get(locationId);
+      const check = await getCheck.get(checkId);
+      const loc = await getLocCity.get(locationId);
       if (check) {
-        pipeline.ingestEvent({
+        await pipeline.ingestEvent({
           name: 'synthetic_check_failed', device: `probe-${loc ? loc.city : locationId}`,
           target: check.target, severity: 70,
           description: `synthetic_check_failed ${check.type} ${check.target} from ${loc ? loc.city : 'probe'}`,
@@ -266,17 +285,23 @@ async function tick() {
   running = true;
   try {
     const t = now();
-    for (const check of getChecks.all()) {
+    for (const check of await getChecks.all()) {
       const last = lastRun.get(check.id) || 0;
       if (t - last < check.interval_s * 1000) continue;
       lastRun.set(check.id, t);
       const runner = RUNNERS[check.type];
       if (!runner) continue;
-      const locId = ensureLocalLocation(check.org_id);
-      if (!runsOnLocation(check.id, locId)) continue; // assigned to other agents only
+      const locId = await ensureLocalLocation(check.org_id);
+      // Parenthesised on purpose: `!await f()` reads as `!Promise` if the await
+      // is ever lost, which is always false — the guard would stop existing and
+      // nothing in the type gate can see it.
+      if (!(await runsOnLocation(check.id, locId))) continue; // assigned to other agents only
       runner(check)
         .then((res) => recordResult(check.id, locId, res))
-        .catch((e) => recordResult(check.id, locId, { ok: false, latency: null, meta: { error: String(e.message).slice(0, 100) } }));
+        .catch((e) => recordResult(check.id, locId, { ok: false, latency: null, meta: { error: String(e.message).slice(0, 100) } }))
+        // recordResult is awaited now, so its own failure would land here as an
+        // unhandled rejection (which NODE_ENV=test turns into a non-zero exit).
+        .catch((e) => console.error('synthetics record error', e && e.message));
     }
   } finally { running = false; }
 }
@@ -284,19 +309,19 @@ async function tick() {
 // Run every enabled check for one org now (or all orgs if orgId omitted).
 async function runAllNow(orgId = null) {
   const results = [];
-  const checks = getChecks.all().filter((c) => orgId == null || c.org_id === orgId);
+  const checks = (await getChecks.all()).filter((c) => orgId == null || c.org_id === orgId);
   for (const check of checks) {
     lastRun.set(check.id, now());
     const runner = RUNNERS[check.type];
     if (!runner) continue;
-    const locId = ensureLocalLocation(check.org_id);
-    if (!runsOnLocation(check.id, locId)) continue;
+    const locId = await ensureLocalLocation(check.org_id);
+    if (!(await runsOnLocation(check.id, locId))) continue;
     try {
       const res = await runner(check);
-      recordResult(check.id, locId, res);
+      await recordResult(check.id, locId, res);
       results.push({ check_id: check.id, ...res });
     } catch (e) {
-      recordResult(check.id, locId, { ok: false, latency: null, meta: { error: e.message } });
+      await recordResult(check.id, locId, { ok: false, latency: null, meta: { error: e.message } });
       results.push({ check_id: check.id, ok: false });
     }
   }
@@ -304,8 +329,20 @@ async function runAllNow(orgId = null) {
 }
 
 function start() {
-  ensureLocalLocation(1);
-  const iv = setInterval(tick, 5000);
+  // Both are promises now, and an unhandled rejection is a non-zero exit under
+  // NODE_ENV=test and a silently dead scheduler in production. Same shape as
+  // engine/heartbeats.js.
+  /* No argument: the default IS `DEFAULT_ORG_ID` (see the signature above). The
+   * literal `1` that used to be here is the bug CLAUDE.md § Identity keys
+   * describes — since organisations became uuids it matches no row, so this
+   * created a `synthetic_locations` row belonging to NO organisation on every
+   * boot. Invisible on SQLite, which stores whatever it is given; on Postgres it
+   * is a hard `invalid input syntax for type uuid: "1"` and the scheduler never
+   * starts. */
+  ensureLocalLocation().catch((e) => console.error('synthetics local location', e && e.message));
+  const iv = setInterval(() => {
+    tick().catch((e) => console.error('synthetics tick error', e && e.message));
+  }, 5000);
   iv.unref();
 }
 

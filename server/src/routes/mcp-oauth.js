@@ -17,7 +17,14 @@
 const crypto = require('crypto');
 const { Router } = require('express');
 const config = require('../config');
-const { db, getMembership, listMemberships } = require('../db');
+const { getMembership, listMemberships } = require('../db');
+// Statements go through the shim (Phase 4). getMembership/listMemberships stay
+// synchronous — they are spine helpers with callers everywhere, and a sync
+// function called from an async one is fine; only the reverse breaks.
+// Named `store`, not `q`: this file already uses `q` for req.query inside the
+// authorize handler, and a module-scope `q` shadowed by a local one is how a
+// statement lookup silently becomes a query-parameter lookup.
+const store = require('../db/shim');
 const sec = require('../security');
 const oauth = require('../lib/oauth');
 const { now, httpError, RateLimiter, isOrgId } = require('../util');
@@ -29,20 +36,20 @@ const registerLimiter = new RateLimiter({ perMinute: 5, burst: 10 });
 const authorizeLimiter = new RateLimiter({ perMinute: 20, burst: 30 });
 const tokenLimiter = new RateLimiter({ perMinute: 60, burst: 60 });
 
-const getSessionRow = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const getUserRow = db.prepare('SELECT id, org_id, email, name, active FROM users WHERE id = ?');
+const getSessionRow = store.prepare('SELECT * FROM sessions WHERE id = ?');
+const getUserRow = store.prepare('SELECT id, org_id, email, name, active FROM users WHERE id = ?');
 
 // Resolve the browser session WITHOUT answering the request — the authorize
 // endpoint has to redirect an anonymous visitor to the login page, not hand a
 // browser the JSON 401 that sec.requireSession correctly returns for the API.
-function softSession(req) {
+async function softSession(req) {
   const sid = sec.parseCookies(req).opscat_sid;
   if (!sid) return null;
-  const sess = getSessionRow.get(sid);
+  const sess = await getSessionRow.get(sid);
   if (!sess) return null;
   const t = now();
   if (t - sess.last_used_at > config.sessionIdleMs || t - sess.created_at > config.sessionMaxMs) return null;
-  const user = getUserRow.get(sess.user_id);
+  const user = await getUserRow.get(sess.user_id);
   if (!user || !user.active) return null;
   return { sid, sess, user };
 }
@@ -118,11 +125,11 @@ router.get(protectedResourceMetadataPaths(MCP_RESOURCE), (_req, res) => {
 
 // ── RFC 7591: dynamic client registration ──────────────────────────────────
 
-router.post('/oauth/register', (req, res) => {
+router.post('/oauth/register', async (req, res) => {
   if (!registerLimiter.allow(sec.clientIp(req))) return httpError(res, 429, 'rate limit exceeded');
   const b = req.body || {};
   try {
-    const client = oauth.registerClient({
+    const client = await oauth.registerClient({
       name: b.client_name,
       redirectUris: b.redirect_uris,
       scopes: b.scope,
@@ -183,10 +190,10 @@ const SCOPE_COPY = {
   write: 'Acknowledge cases, publish incidents and run checks on your behalf',
 };
 
-router.get('/oauth/authorize', (req, res) => {
+router.get('/oauth/authorize', async (req, res) => {
   if (!authorizeLimiter.allow(sec.clientIp(req))) return httpError(res, 429, 'rate limit exceeded');
   const q = req.query || {};
-  const client = oauth.getClient(q.client_id);
+  const client = await oauth.getClient(q.client_id);
 
   // Errors that cannot be safely redirected (unknown client, unregistered
   // redirect_uri) are shown to the user — never bounced to an unverified URI.
@@ -220,10 +227,10 @@ router.get('/oauth/authorize', (req, res) => {
   if (!scopes.length) return bounce('invalid_scope', 'No grantable scope requested');
 
   // Not logged in → through the app's own login, then back here.
-  const ctx = softSession(req);
+  const ctx = await softSession(req);
   if (!ctx) return res.redirect(302, `/app/?next=${encodeURIComponent(req.originalUrl)}`);
 
-  const memberships = listMemberships(ctx.user.id);
+  const memberships = await listMemberships(ctx.user.id);
   if (!memberships.length) {
     return renderPage(res, 403, 'No organization',
       '<h1>No organization</h1><p class="err">Your account is not a member of any organization, so there is nothing to connect.</p>');
@@ -261,14 +268,14 @@ router.get('/oauth/authorize', (req, res) => {
     </form>`);
 });
 
-router.post('/oauth/authorize/consent', (req, res) => {
+router.post('/oauth/authorize/consent', async (req, res) => {
   const b = req.body || {};
   const t = verifyTicket(b.ticket);
   if (!t) {
     return renderPage(res, 400, 'Expired',
       '<h1>Request expired</h1><p class="err">This authorization request is no longer valid. Start the connection again from your client.</p>');
   }
-  const ctx = softSession(req);
+  const ctx = await softSession(req);
   if (!ctx || ctx.sid !== t.sid) {
     return renderPage(res, 403, 'Session mismatch',
       '<h1>Session mismatch</h1><p class="err">Sign in again and restart the connection from your client.</p>');
@@ -285,13 +292,13 @@ router.post('/oauth/authorize/consent', (req, res) => {
   // Membership is re-checked here rather than trusted from the ticket: it may
   // have been revoked between rendering the consent screen and submitting it.
   const orgId = String(b.org_id || '').trim();
-  const membership = isOrgId(orgId) ? getMembership(ctx.user.id, orgId) : null;
+  const membership = isOrgId(orgId) ? await getMembership(ctx.user.id, orgId) : null;
   if (!membership) {
     return renderPage(res, 403, 'Not a member',
       '<h1>Not a member</h1><p class="err">You are not a member of the selected organization.</p>');
   }
 
-  const code = oauth.issueCode({
+  const code = await oauth.issueCode({
     clientId: t.c, userId: ctx.user.id, orgId, redirectUri: t.r,
     codeChallenge: t.ch, scopes: t.s, resource: t.res,
   });
@@ -302,32 +309,35 @@ router.post('/oauth/authorize/consent', (req, res) => {
 
 // ── token ──────────────────────────────────────────────────────────────────
 
-router.post('/oauth/token', (req, res) => {
+router.post('/oauth/token', async (req, res) => {
   if (!tokenLimiter.allow(sec.clientIp(req))) return httpError(res, 429, 'rate limit exceeded');
   const b = req.body || {};
   const clientId = String(b.client_id || '');
-  if (!oauth.getClient(clientId)) return res.status(401).json({ error: 'invalid_client' });
+  if (!(await oauth.getClient(clientId))) return res.status(401).json({ error: 'invalid_client' });
 
   if (b.grant_type === 'authorization_code') {
-    const out = oauth.consumeCode(b.code, {
+    const out = await oauth.consumeCode(b.code, {
       clientId, redirectUri: String(b.redirect_uri || ''), codeVerifier: b.code_verifier,
     });
     if (out.error) return res.status(400).json({ error: out.error });
-    return res.json(oauth.issueTokens({
+    return res.json(await oauth.issueTokens({
       clientId, userId: out.row.user_id, orgId: out.row.org_id,
       scopes: out.row.scopes, resource: out.row.resource,
     }));
   }
 
   if (b.grant_type === 'refresh_token') {
-    const out = oauth.consumeRefresh(b.refresh_token, clientId);
+    const out = await oauth.consumeRefresh(b.refresh_token, clientId);
     if (out.error) return res.status(400).json({ error: out.error });
-    // A membership revoked since the last refresh ends the grant.
-    if (!getMembership(out.row.user_id, out.row.org_id)) {
-      oauth.revokeGrant(clientId, out.row.user_id, out.row.org_id);
+    // A membership revoked since the last refresh ends the grant. Parenthesised:
+    // `!Promise` is `false`, so a lost await here would keep refreshing tokens
+    // for somebody who was removed from the organization — and would do it
+    // silently, with a 200 (db.js § memberships).
+    if (!(await getMembership(out.row.user_id, out.row.org_id))) {
+      await oauth.revokeGrant(clientId, out.row.user_id, out.row.org_id);
       return res.status(400).json({ error: 'invalid_grant', error_description: 'Membership revoked' });
     }
-    return res.json(oauth.issueTokens({
+    return res.json(await oauth.issueTokens({
       clientId, userId: out.row.user_id, orgId: out.row.org_id,
       scopes: out.row.scopes, resource: out.row.resource,
     }));
@@ -337,8 +347,8 @@ router.post('/oauth/token', (req, res) => {
 });
 
 // RFC 7009 — always 200, so probing reveals nothing about token validity.
-router.post('/oauth/revoke', (req, res) => {
-  oauth.revokeToken((req.body || {}).token);
+router.post('/oauth/revoke', async (req, res) => {
+  await oauth.revokeToken((req.body || {}).token);
   res.status(200).json({ ok: true });
 });
 

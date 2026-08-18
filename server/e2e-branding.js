@@ -76,11 +76,17 @@ require('./src/index.js');
 
 const { hashPassword, now, newId, DEFAULT_ORG_ID } = require('./src/util'); // boots the app on :3129
 
-const { db } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
+const { schemaVersion } = require('./src/db');
 const branding = require('./src/lib/status-branding');
 const statusDomains = require('./src/lib/status-domains');
 const statusPages = require('./src/lib/status-pages');
-const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);
+const defaultPage = () => statusPages.defaultPage(DEFAULT_ORG_ID);   // async since Phase 4
 
 const BASE = 'http://127.0.0.1:3129';
 
@@ -169,12 +175,12 @@ async function waitForServer() {
   }
   return false;
 }
-const setPlan = (p) => db.prepare('UPDATE organizations SET plan = ? WHERE id = ?').run(p, DEFAULT_ORG_ID);
+const setPlan = (p) => q.prepare('UPDATE organizations SET plan = ? WHERE id = ?').run(p, DEFAULT_ORG_ID);
 const upload = (sess, pageId, kind, buf) =>
   call(sess, 'PUT', `/api/admin/status-pages/${pageId}/asset/${kind}`, { data: buf.toString('base64') });
 const patchPage = (sess, pageId, body) => call(sess, 'PATCH', `/api/admin/status-pages/${pageId}`, body);
 const listPages = async (sess) => (await call(sess, 'GET', '/api/admin/status-pages')).j;
-const reload = (id) => statusPages.pageById(id);
+const reload = (id) => statusPages.pageById(id);   // async since Phase 4
 
 // A DNS resolver that answers from a table, so domain verification is
 // deterministic and the box never makes a real query about a customer's domain.
@@ -189,18 +195,26 @@ function stubResolver(table) {
 }
 
 
+/* The migration checks below ask the SCHEMA, and the question has two spellings.
+ * The shape is read from information_schema; the VERSION goes through db.js's
+ * single accessor, which reads the `schema_migrations` row.
+ */
+const columnsOf = async (table) =>
+  (await q.all('SELECT column_name FROM information_schema.columns WHERE table_name = ?', table))
+    .map((c) => c.column_name);
+
 async function main() {
   chk('server boots and answers /api/health', await waitForServer());
-  chk('user_version is at least 18', db.pragma('user_version', { simple: true }) >= 18);
-  chk('status_pages table exists', db.pragma('table_info(status_pages)').length === 19,
-    String(db.pragma('table_info(status_pages)').length));
-  chk('status_assets is keyed by page', db.pragma('table_info(status_assets)').some((c) => c.name === 'page_id'));
+  chk('user_version is at least 18', await schemaVersion() >= 18, String(await schemaVersion()));
+  chk('status_pages table exists', (await columnsOf('status_pages')).length === 19,
+    String((await columnsOf('status_pages')).length));
+  chk('status_assets is keyed by page', (await columnsOf('status_assets')).includes('page_id'));
   chk('status_subscribers is keyed by page',
-    db.pragma('table_info(status_subscribers)').some((c) => c.name === 'page_id'));
+    (await columnsOf('status_subscribers')).includes('page_id'));
 
   const admin = await login('seed-admin@e2e.test', 'seed-admin-password-1');
   chk('seeded admin can sign in', admin.status === 200, String(admin.status));
-  setPlan('enterprise'); // start at the top; each gate is walked DOWN individually
+  await setPlan('enterprise'); // start at the top; each gate is walked DOWN individually
 
   const list0 = await listPages(admin);
   chk('the org has exactly one page, the default one',
@@ -253,7 +267,8 @@ async function main() {
     (await call(admin, 'PUT', `/api/admin/status-pages/${MAIN}/asset/logo`,
       { data: `data:image/png;base64,${bigB64}` })).status === 200);
   chk('the sniffed type is stored, not the claimed one',
-    db.prepare('SELECT mime FROM status_assets WHERE page_id = ? AND kind = ?').get(MAIN, 'logo').mime === 'image/png');
+    (await q.prepare('SELECT mime FROM status_assets WHERE page_id = ? AND kind = ?')
+      .get(MAIN, 'logo')).mime === 'image/png');
 
   // ── serving ───────────────────────────────────────────────────────────────
   const logo = await raw('/status/logo');
@@ -269,7 +284,7 @@ async function main() {
   chk('the favicon falls back to the logo', (await raw('/status/favicon')).status === 200);
   await upload(admin, MAIN, 'favicon', makePng(8));
   chk('an uploaded favicon takes over',
-    !!db.prepare('SELECT 1 FROM status_assets WHERE page_id = ? AND kind = ?').get(MAIN, 'favicon'));
+    !!await q.prepare('SELECT 1 FROM status_assets WHERE page_id = ? AND kind = ?').get(MAIN, 'favicon'));
 
   // ── the page renders it ───────────────────────────────────────────────────
   await patchPage(admin, MAIN, {
@@ -316,15 +331,15 @@ async function main() {
   chk('…and Caddy is told NOT to mint a certificate for it',
     (await raw('/api/public/tls-check?domain=status.acme.example')).status === 404);
 
-  const token = reload(MAIN).domain_token;
-  const wrong = await statusDomains.verifyDomain(reload(MAIN), stubResolver({
+  const token = (await reload(MAIN)).domain_token;
+  const wrong = await statusDomains.verifyDomain(await reload(MAIN), stubResolver({
     '_opscat-challenge.status.acme.example': [['some-other-value']],
   }));
   chk('a TXT record with the wrong value does not verify', wrong.ok === false, JSON.stringify(wrong));
-  const missing = await statusDomains.verifyDomain(reload(MAIN), stubResolver({}));
+  const missing = await statusDomains.verifyDomain(await reload(MAIN), stubResolver({}));
   chk('a missing TXT record says so in plain words', missing.ok === false && /no TXT record/.test(missing.error));
   // a real resolver splits long TXT values into 255-byte chunks
-  const good = await statusDomains.verifyDomain(reload(MAIN), stubResolver({
+  const good = await statusDomains.verifyDomain(await reload(MAIN), stubResolver({
     '_opscat-challenge.status.acme.example': [[token.slice(0, 10), token.slice(10)]],
   }));
   chk('a chunked TXT record verifies (records split at 255 bytes)', good.ok === true, JSON.stringify(good));
@@ -379,7 +394,7 @@ async function main() {
   // It was frozen when it was invisible (seeded from the org slug, only ever
   // reached via /status). The status host puts it in the public URL, so an org
   // stuck at its seed value would be stuck at a name it never chose.
-  const beforeSlug = reload(MAIN).slug;
+  const beforeSlug = (await reload(MAIN)).slug;
   chk('the default page can be renamed', (await patchPage(admin, MAIN, { slug: 'main-page' })).status === 200);
   chk('…and answers on the new slug', (await onHost(H, '/main-page')).status === 200);
   chk('…while /status keeps resolving it, whatever the slug', (await raw('/status')).status === 200);
@@ -441,7 +456,7 @@ async function main() {
   chk('…and the old one stops working', (await raw(`/status/partners?k=${secret}`)).status === 404);
 
   // component subset
-  const comps = db.prepare('SELECT id, name FROM components WHERE org_id = ? ORDER BY id').all(DEFAULT_ORG_ID);
+  const comps = await q.prepare('SELECT id, name FROM components WHERE org_id = ? ORDER BY id').all(DEFAULT_ORG_ID);
   chk('the org has components to choose from', comps.length >= 2, String(comps.length));
   await patchPage(admin, PARTNER, { componentIds: [comps[0].id] });
   const partnerPg = await raw(`/status/partners?k=${rotated.j.accessToken}`);
@@ -451,26 +466,26 @@ async function main() {
     (await raw('/status')).text.includes(comps[1].name));
 
   // ── plan gates, walked DOWN one tier at a time ────────────────────────────
-  setPlan('business');
+  await setPlan('business');
   chk('business keeps custom CSS', (await patchPage(admin, MAIN, { customCss: '.x{}' })).status === 200);
   chk('…and whitelabel', (await patchPage(admin, MAIN, { hidePowered: true })).status === 200);
   chk('…and the footer drops the attribution', !(await raw('/status')).text.includes('Powered by OpsCat'));
   chk('…but no longer additional pages',
     (await call(admin, 'POST', '/api/admin/status-pages', { name: 'Y', slug: 'ypage' })).status === 403);
 
-  setPlan('pro');
+  await setPlan('pro');
   chk('pro loses custom CSS on write', (await patchPage(admin, MAIN, { customCss: '.y{}' })).status === 403);
   chk('…and the CSS stops being rendered', !(await raw('/status')).text.includes('.x{}'));
   chk('…and the footer comes back', (await raw('/status')).text.includes('Powered by OpsCat'));
   chk('…but the domain still serves', (await raw('/api/public/tls-check?domain=status.acme.example')).status === 404,
     're-claimed above, so unverified — verify again for the pro check');
-  const reverify = await statusDomains.verifyDomain(reload(MAIN), stubResolver({
-    '_opscat-challenge.status.acme.example': [[reload(MAIN).domain_token]],
+  const reverify = await statusDomains.verifyDomain(await reload(MAIN), stubResolver({
+    '_opscat-challenge.status.acme.example': [[(await reload(MAIN)).domain_token]],
   }));
   chk('…once re-verified', reverify.ok === true);
   chk('…pro serves the custom domain', (await raw('/api/public/tls-check?domain=status.acme.example')).status === 200);
 
-  setPlan('free');
+  await setPlan('free');
   chk('free may not claim a domain',
     (await call(admin, 'POST', `/api/admin/status-pages/${MAIN}/domain`, { domain: 'x.acme.example' })).status === 403);
   chk('…the existing domain stops resolving',
@@ -478,7 +493,7 @@ async function main() {
   chk('…and stops serving the page',
     !(await onHost('status.acme.example', '/')).text.includes('Systems Operational'));
   chk('…but the configuration survives the downgrade',
-    reload(MAIN).domain === 'status.acme.example' && !!reload(MAIN).domain_verified_at);
+    (await reload(MAIN)).domain === 'status.acme.example' && !!(await reload(MAIN)).domain_verified_at);
   chk('…and identity itself stays free', (await raw('/status')).text.includes('--accent:#e2571e'));
   chk('…including the logo', (await raw('/status/logo')).status === 200);
   chk('…and uploading a new one', (await upload(admin, MAIN, 'logo', makePng(6))).status === 200);
@@ -487,7 +502,7 @@ async function main() {
     freeLimits.canWhitelabel === false && freeLimits.canCustomCss === false
     && freeLimits.canCustomDomain === false && freeLimits.canMultiPage === false);
 
-  setPlan('enterprise');
+  await setPlan('enterprise');
   chk('re-upgrading restores the domain without re-typing it',
     (await raw('/api/public/tls-check?domain=status.acme.example')).status === 200);
   chk('…and the whitelabel choice', !(await raw('/status')).text.includes('Powered by OpsCat'));
@@ -507,11 +522,11 @@ async function main() {
   const { addMembership } = require('./src/db');
   const { salt, hash } = hashPassword('lead-password-1');
   const leadId = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, 'lead@e2e.test', 'lead', 'lead', 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(leadId, DEFAULT_ORG_ID, salt, hash, now());
-  addMembership(leadId, DEFAULT_ORG_ID, 'lead');
+  await addMembership(leadId, DEFAULT_ORG_ID, 'lead');
   const leadSess = await login('lead@e2e.test', 'lead-password-1');
   chk('a lead may READ the pages (they are public anyway)',
     (await call(leadSess, 'GET', '/api/admin/status-pages')).status === 200);
@@ -533,36 +548,37 @@ async function main() {
     && (await raw('/status/favicon')).status === 404);
   chk('deleting a page takes its subscribers with it',
     (await call(admin, 'DELETE', `/api/admin/status-pages/${PARTNER}`)).status === 200
-    && !db.prepare('SELECT 1 FROM status_subscribers WHERE page_id = ?').get(PARTNER));
+    && !await q.prepare('SELECT 1 FROM status_subscribers WHERE page_id = ?').get(PARTNER));
 
   // ── the subscriber allowance ──────────────────────────────────────────────
   // Free is 50 confirmed. Fill it, then prove a NEW address is turned away while
   // an already-pending one can still complete.
   const subs = require('./src/lib/subscribers');
-  setPlan('free');
+  await setPlan('free');
   await call(admin, 'PATCH', '/api/admin/settings', { status_subscribers_enabled: '1' });
-  await subs.subscribe(defaultPage(), 'pending-before-full@e2e.test');
+  await subs.subscribe(await defaultPage(), 'pending-before-full@e2e.test');
   chk('a pending subscriber exists before the limit is hit',
-    !!db.prepare('SELECT * FROM status_subscribers WHERE email = ?').get('pending-before-full@e2e.test'));
+    !!await q.prepare('SELECT * FROM status_subscribers WHERE email = ?').get('pending-before-full@e2e.test'));
 
-  const ins = db.prepare(`INSERT INTO status_subscribers (org_id, page_id, email, token_hash, confirmed_at, created_at)
+  const ins = q.prepare(`INSERT INTO status_subscribers (org_id, page_id, email, token_hash, confirmed_at, created_at)
     VALUES (?, ?, ?, ?, ?, ?)`);
-  for (let i = 0; i < 50; i++) ins.run(DEFAULT_ORG_ID, MAIN, `filler${i}@e2e.test`, `hash${i}`, now(), now());
+  // eslint-disable-next-line no-await-in-loop
+  for (let i = 0; i < 50; i++) await ins.run(DEFAULT_ORG_ID, MAIN, `filler${i}@e2e.test`, `hash${i}`, now(), now());
   chk('the org now sits at its free allowance',
-    db.prepare('SELECT COUNT(*) c FROM status_subscribers WHERE org_id = ? AND confirmed_at IS NOT NULL')
-      .get(DEFAULT_ORG_ID).c >= 50);
-  await subs.subscribe(defaultPage(), 'too-late@e2e.test');
+    (await q.prepare('SELECT COUNT(*) c FROM status_subscribers WHERE org_id = ? AND confirmed_at IS NOT NULL')
+      .get(DEFAULT_ORG_ID)).c >= 50);
+  await subs.subscribe(await defaultPage(), 'too-late@e2e.test');
   chk('a NEW address is turned away once the plan is full',
-    !db.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('too-late@e2e.test'));
+    !await q.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('too-late@e2e.test'));
   chk('…and the public answer stays uniform (no enumeration signal)',
     (await (await fetch(`${BASE}/api/status/subscribe`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'also-too-late@e2e.test' }),
     })).json()).ok === true);
-  setPlan('business');
-  await subs.subscribe(defaultPage(), 'after-upgrade@e2e.test');
+  await setPlan('business');
+  await subs.subscribe(await defaultPage(), 'after-upgrade@e2e.test');
   chk('upgrading opens sign-ups again',
-    !!db.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('after-upgrade@e2e.test'));
+    !!await q.prepare('SELECT 1 FROM status_subscribers WHERE email = ?').get('after-upgrade@e2e.test'));
 
   // ── the OTHER server-rendered public pages still render ───────────────────
   // Added after a real production 500: pulling the status page out of
@@ -571,12 +587,12 @@ async function main() {
   // request to radar.opscat.io. Nothing else in this repo renders that page, so
   // these two lines are the whole safety net for it.
   const { setSetting } = require('./src/db');
-  setSetting('vendor_grid_published', '1');
+  await setSetting('vendor_grid_published', '1');
   // A vendor ROW is what makes the check real: the grid's per-vendor template is
   // where esc() is called, so an empty grid renders fine with esc undefined and
   // the check passes while testing nothing. (Verified by breaking esc on
   // purpose: empty grid = green, seeded grid = 500.)
-  db.prepare(`INSERT INTO vendors (org_id, slug, name, feed_type, feed_url, page_url, status, enabled, created_at)
+  await q.prepare(`INSERT INTO vendors (org_id, slug, name, feed_type, feed_url, page_url, status, enabled, created_at)
     VALUES (?, 'github', 'GitHub', 'statuspage', 'https://x.example/api/v2/summary.json',
             'https://x.example', 'operational', 1, ?)`).run(DEFAULT_ORG_ID, now());
   const grid = await raw('/vendor-grid');
@@ -585,7 +601,7 @@ async function main() {
   chk('…and actually produced HTML, not an error body',
     grid.text.includes('</html>'), grid.text.slice(0, 120));
   chk('the grid JSON renders too', (await raw('/api/public/vendor-grid')).status === 200);
-  setSetting('vendor_grid_published', '0');
+  await setSetting('vendor_grid_published', '0');
 
   // ── wrap up ───────────────────────────────────────────────────────────────
   report();

@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const config = require('./config');
-require('./db'); // opens DB, applies schema/migrations, resolves app secret
+const db = require('./db'); // opens the connection; db.init() below finishes the job
 const edition = require('./edition'); // sets plan enforcement (community vs cloud)
 const { securityHeaders } = require('./security');
 const { seed } = require('./engine/seed');
@@ -125,25 +125,52 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal error' });
 });
 
-// bootstrap + engines
-seed();
-require('./engine/alerts').start();
-require('./engine/automations').start();
-require('./engine/scout').start();
-require('./engine/synthetics').start();
-require('./engine/reputation').start();
-require('./engine/snmp').start();
-require('./engine/heartbeats').start();
-require('./engine/vendors').start();
-require('./engine/reports').start();
-require('./engine/retention').start();
-require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
-require('./engine/oncall').start();        // on-call gap watch (docs/ONCALL-V1.md)
-require('./engine/alert-chain').start();   // escalation clock — sweeps timers due while we were down
-require('./engine/bridge-insights').start(); // Bridge AI analyzer (docs/BRIDGE.md phase 3)
+/* ── bootstrap + engines ────────────────────────────────────────────────────
+ *
+ * The storage layer is async, so none of this can happen at require time any
+ * more. The order is the point, and `app.listen` is LAST on purpose:
+ *
+ *   1. db.init()  — schema.sql (idempotent) plus any migration this database
+ *                   has not seen, then the settings preload and the app secret.
+ *                   Everything after this reads settings from a warm cache.
+ *   2. seed()     — the default org, the first super-admin, defaults.
+ *   3. engines    — timers, which are free to be late.
+ *   4. listen     — only once the above has finished, so the first request
+ *                   cannot arrive at a half-built database.
+ *
+ * That also makes `waitForServer()` in the harnesses a stricter gate than it
+ * used to be: /api/health answering now means the app is fully booted, where
+ * before it meant the port was open and seeding might still be running.
+ *
+ * A failure here must not leave a process running that answers nothing — it
+ * exits non-zero, which is what the container's restart policy is for.
+ */
+async function boot() {
+  await db.init();
+  await seed();
+  require('./engine/alerts').start();
+  require('./engine/automations').start();
+  require('./engine/scout').start();
+  require('./engine/synthetics').start();
+  require('./engine/reputation').start();
+  require('./engine/snmp').start();
+  require('./engine/heartbeats').start();
+  require('./engine/vendors').start();
+  require('./engine/reports').start();
+  require('./engine/retention').start();
+  require('./engine/reconcile').start(); // orphan sweeper for provisioned sensor nodes
+  require('./engine/oncall').start();        // on-call gap watch (docs/ONCALL-V1.md)
+  require('./engine/alert-chain').start();   // escalation clock — sweeps timers due while we were down
+  require('./engine/bridge-insights').start(); // Bridge AI analyzer (docs/BRIDGE.md phase 3)
 
-app.listen(config.port, () => {
-  console.log(`OpsCat server listening on :${config.port}`);
+  app.listen(config.port, () => {
+    console.log(`OpsCat server listening on :${config.port}`);
+  });
+}
+
+boot().catch((e) => {
+  console.error('boot failed:', e);
+  process.exit(1);
 });
 
 /* In production a rejected promise must not take the server down: one failed

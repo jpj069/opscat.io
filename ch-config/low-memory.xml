@@ -1,0 +1,32 @@
+<clickhouse>
+  <!-- ClickHouse's DEFAULTS do not fit a small host: mark_cache 5 GiB and
+       uncompressed_cache 8 GiB each exceed the whole 3.8 GB production machine.
+       These four are the ones that matter, and they are all about MEMORY. -->
+  <max_server_memory_usage>805306368</max_server_memory_usage>   <!-- 768 MiB, under the 1g container cap -->
+  <mark_cache_size>134217728</mark_cache_size>                    <!-- 128 MiB (default 5 GiB) -->
+  <uncompressed_cache_size>0</uncompressed_cache_size>            <!-- off (default 8 GiB) -->
+  <max_concurrent_queries>4</max_concurrent_queries>
+
+  <profiles><default>
+    <max_threads>2</max_threads>                                  <!-- 2 vCPU -->
+    <max_memory_usage>536870912</max_memory_usage>                <!-- 512 MiB per query -->
+  </default></profiles>
+
+  <!-- DELIBERATELY NOT SET. Both were tried and both broke the server, in
+       opposite and instructive ways:
+
+       * `max_thread_pool_size` at 32 makes the server HANG during startup —
+         silently. No error, no OOM kill, no restart, 0.02% CPU, and the log
+         simply stops after "Initialized background executor". The background
+         executors alone ask for more than 32 (4+8+16+8).
+
+       * `background_pool_size` at 4 or 8 makes it REFUSE to start with
+         BAD_ARGUMENTS. It is a CONCURRENCY knob, not a memory one, and it
+         carries at least three dependent thresholds — mutation (20),
+         optimize_entire_partition (25), lower_max_size_of_merge — each of which
+         must stay below pool x concurrency_ratio. Shrinking it buys no memory
+         and costs three invariants.
+
+       Both defaults are ceilings, not allocations, which is why leaving them
+       alone is correct on a small host rather than merely convenient. -->
+</clickhouse>

@@ -51,9 +51,9 @@ function page(res, status, title, body, extra = '') {
 const subjectLine = (info) => (info.subject
   ? `<p><span class="sub">${esc(info.subject.label)}</span> — ${esc(info.subject.title)}</p>` : '');
 
-router.get('/a/:token', (req, res) => {
+router.get('/a/:token', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return page(res, 429, 'Too many requests', '<p>Try again in a moment.</p>');
-  const info = chain.tokenInfo(req.params.token);
+  const info = await chain.tokenInfo(req.params.token);
   // One answer for "wrong", "expired" and "already used": the token is a
   // credential, and telling a stranger which of the three it is tells them the
   // shape of a valid one.
@@ -70,9 +70,9 @@ router.get('/a/:token', (req, res) => {
     + `<form method="post" action="/a/${esc(req.params.token)}"><button type="submit">Acknowledge</button></form>`);
 });
 
-router.post('/a/:token', (req, res) => {
+router.post('/a/:token', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return page(res, 429, 'Too many requests', '<p>Try again in a moment.</p>');
-  const r = chain.ackByToken(req.params.token);
+  const r = await chain.ackByToken(req.params.token);
   if (!r) {
     return page(res, 404, 'Link no longer valid',
       '<p>This acknowledgement link has expired or has already been used.</p>');

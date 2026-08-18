@@ -18,7 +18,7 @@
 //     must yield NOBODY outside its window rather than its participant anyway.
 //     That is what makes "business hours over a 24/7 base layer" work.
 //  3. A gap is an EVENT, not a null. See tick() at the bottom.
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now } = require('../util');
 const pipeline = require('./pipeline');
 
@@ -92,39 +92,39 @@ function shiftIndex(layer, at, tz) {
 }
 
 // ---- queries ---------------------------------------------------------------
-const qSchedule = db.prepare('SELECT * FROM schedules WHERE id = ? AND org_id = ?');
-const qSchedulesOfOrg = db.prepare('SELECT * FROM schedules WHERE org_id = ? ORDER BY name');
-const qAllSchedules = db.prepare('SELECT * FROM schedules');
-const qScheduleAny = db.prepare('SELECT * FROM schedules WHERE id = ?');
-const qLayers = db.prepare('SELECT * FROM schedule_layers WHERE schedule_id = ? ORDER BY position DESC');
-const qParticipants = db.prepare(`SELECT sp.user_id, u.name, u.email, u.color
+const qSchedule = q.prepare('SELECT * FROM schedules WHERE id = ? AND org_id = ?');
+const qSchedulesOfOrg = q.prepare('SELECT * FROM schedules WHERE org_id = ? ORDER BY name');
+const qAllSchedules = q.prepare('SELECT * FROM schedules');
+const qScheduleAny = q.prepare('SELECT * FROM schedules WHERE id = ?');
+const qLayers = q.prepare('SELECT * FROM schedule_layers WHERE schedule_id = ? ORDER BY position DESC');
+const qParticipants = q.prepare(`SELECT sp.user_id, u.name, u.email, u.color
   FROM schedule_participants sp JOIN users u ON u.id = sp.user_id
   WHERE sp.layer_id = ? AND u.active = 1 ORDER BY sp.position`);
-const qOverrides = db.prepare(`SELECT o.*, u.name, u.email, u.color FROM schedule_overrides o
+const qOverrides = q.prepare(`SELECT o.*, u.name, u.email, u.color FROM schedule_overrides o
   JOIN users u ON u.id = o.user_id
   WHERE o.schedule_id = ? AND o.starts_at <= ? AND o.ends_at > ?
   ORDER BY o.created_at DESC, o.id DESC LIMIT 1`);
-const qCountParticipants = db.prepare(`SELECT COUNT(*) c FROM schedule_participants sp
+const qCountParticipants = q.prepare(`SELECT COUNT(*) c FROM schedule_participants sp
   JOIN schedule_layers l ON l.id = sp.layer_id WHERE l.schedule_id = ?`);
-const qCountOverrides = db.prepare('SELECT COUNT(*) c FROM schedule_overrides WHERE schedule_id = ?');
-const setGapAlerted = db.prepare('UPDATE schedules SET gap_alerted_at = ? WHERE id = ?');
+const qCountOverrides = q.prepare('SELECT COUNT(*) c FROM schedule_overrides WHERE schedule_id = ?');
+const setGapAlerted = q.prepare('UPDATE schedules SET gap_alerted_at = ? WHERE id = ?');
 
 /**
  * Who is on call on `schedule` at instant `at`?
  * Returns { user: {id,name,email,color}|null, via } — `via` is 'override',
  * 'layer:<position>' or null. Pure: no writes, no side effects.
  */
-function resolve(schedule, at = now()) {
+async function resolve(schedule, at = now()) {
   const tz = schedule.timezone || 'UTC';
   // 1. Overrides first. A human correcting the machine outranks everything.
-  const ovr = qOverrides.get(schedule.id, at, at);
+  const ovr = await qOverrides.get(schedule.id, at, at);
   if (ovr) {
     return { user: { id: ovr.user_id, name: ovr.name, email: ovr.email, color: ovr.color }, via: 'override' };
   }
   // 2. Then layers, highest position downward.
-  for (const layer of qLayers.all(schedule.id)) {
+  for (const layer of await qLayers.all(schedule.id)) {
     if (!restrictionCovers(parseRestrict(layer.restrict_json), at, tz)) continue;
-    const people = qParticipants.all(layer.id);
+    const people = await qParticipants.all(layer.id);
     if (!people.length) continue;
     const n = people.length;
     const idx = ((shiftIndex(layer, at, tz) % n) + n) % n;
@@ -141,22 +141,25 @@ function parseRestrict(json) {
 }
 
 // `resolve` by id, org-scoped. Returns null when the schedule is not the org's.
-function whoIsOnCall(orgId, scheduleId, at = now()) {
-  const s = qSchedule.get(scheduleId, orgId);
-  return s ? { schedule: s, ...resolve(s, at) } : null;
+async function whoIsOnCall(orgId, scheduleId, at = now()) {
+  const s = await qSchedule.get(scheduleId, orgId);
+  return s ? { schedule: s, ...(await resolve(s, at)) } : null;
 }
 
 // Every schedule of an org, resolved for the same instant — the Dashboard strip,
 // the API and the MCP tool all read this.
-function onCallNow(orgId, at = now()) {
-  return qSchedulesOfOrg.all(orgId).map((s) => {
-    const r = resolve(s, at);
-    return {
+async function onCallNow(orgId, at = now()) {
+  const out = [];
+  for (const s of await qSchedulesOfOrg.all(orgId)) {
+    const r = await resolve(s, at);
+    out.push({
       scheduleId: s.id, name: s.name, timezone: s.timezone, teamId: s.team_id,
       user: r.user, via: r.via,
-      configured: qCountParticipants.get(s.id).c > 0 || qCountOverrides.get(s.id).c > 0,
-    };
-  });
+      configured: (await qCountParticipants.get(s.id)).c > 0
+        || (await qCountOverrides.get(s.id)).c > 0,
+    });
+  }
+  return out;
 }
 
 /**
@@ -168,10 +171,10 @@ function onCallNow(orgId, at = now()) {
  * first. Sampling keeps one source of truth; 30 minutes is the finest a
  * restriction can express, so nothing is missed.
  */
-function timeline(schedule, fromMs, toMs, stepMs = 30 * 60 * 1000) {
+async function timeline(schedule, fromMs, toMs, stepMs = 30 * 60 * 1000) {
   const out = [];
   for (let t = fromMs; t < toMs; t += stepMs) {
-    const r = resolve(schedule, t);
+    const r = await resolve(schedule, t);
     const id = r.user ? r.user.id : null;
     const last = out[out.length - 1];
     if (last && last.userId === id && last.via === r.via) { last.endsAt = t + stepMs; continue; }
@@ -200,33 +203,39 @@ function timeline(schedule, fromMs, toMs, stepMs = 30 * 60 * 1000) {
  * share the `gap_alerted_at` guard: two callers with two guards is two events
  * for one hole, and the second one trains the team to ignore both.
  */
-function raiseGap(schedule, at = now()) {
-  const s = qScheduleAny.get(schedule.id) || schedule;
+async function raiseGap(schedule, at = now()) {
+  const s = (await qScheduleAny.get(schedule.id)) || schedule;
   if (s.gap_alerted_at) return false;
-  setGapAlerted.run(at, s.id);
-  pipeline.ingestEvent({
+  await setGapAlerted.run(at, s.id);
+  await pipeline.ingestEvent({
     name: 'oncall_gap', device: s.name, target: null, severity: 70,
     description: `oncall_gap ${s.name} — nobody is on call (${s.timezone})`,
   }, 'oncall', false, s.org_id);
   return true;
 }
 
-function tick() {
+async function tick() {
   const t = now();
-  for (const s of qAllSchedules.all()) {
-    const configured = qCountParticipants.get(s.id).c > 0 || qCountOverrides.get(s.id).c > 0;
+  for (const s of await qAllSchedules.all()) {
+    const configured = (await qCountParticipants.get(s.id)).c > 0
+      || (await qCountOverrides.get(s.id)).c > 0;
     if (!configured) continue;
-    const covered = !!resolve(s, t).user;
+    const covered = !!(await resolve(s, t)).user;
     if (covered) {
-      if (s.gap_alerted_at) setGapAlerted.run(null, s.id);
+      if (s.gap_alerted_at) await setGapAlerted.run(null, s.id);
       continue;
     }
-    raiseGap(s, t);
+    await raiseGap(s, t);
   }
 }
 
 function start() {
-  const iv = setInterval(tick, 60000);
+  // tick() is async now, so a throw inside it is a rejected promise rather than
+  // an exception the timer would surface. Handled here, or NODE_ENV=test exits
+  // non-zero on the unhandled rejection and production loses the gap watch.
+  const iv = setInterval(() => {
+    tick().catch((e) => console.error('oncall gap watch error', e.message));
+  }, 60000);
   iv.unref();
 }
 

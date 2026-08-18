@@ -17,6 +17,23 @@ const path = require('path');
 
 const { chk, report, onExit, die } = require('./e2e-lib').harness();
 
+/* `until` (e2e-lib.js) throws on a thenable by design — a Promise is truthy, so
+ * `while (!fn())` would be satisfied on the first poll and the wait would be no
+ * wait at all. That guard also means it cannot take an async predicate, and the
+ * effect waited for below is a database row. This variant AWAITS its predicate,
+ * so the value is resolved before it is tested and can never be mistaken for
+ * `true`. Returns the value, or null once the deadline passes — a timeout must
+ * fail the check that asked, not throw past it. */
+const untilAsync = async (fn, ms = 4000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - t0 > ms) return null;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
+
 // Environment BEFORE any src/ require — config.js and db.js are singletons, so
 // the first require freezes the data directory for the whole process.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-mcp-'));
@@ -31,7 +48,12 @@ process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 require('./src/index.js'); // boots the app on :3133
 
 const config = require('./src/config');
-const { db } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { DEFAULT_ORG_ID } = require('./src/util');
 
 const B = 'http://127.0.0.1:3133';
@@ -55,7 +77,7 @@ async function main() {
   // than one of either, /oauth/authorize bounces to login and the harness fails 40
   // checks that have nothing wrong with them. Join through memberships instead, and
   // prefer the platform org so the pair is the seeded admin wherever one exists.
-  const seat = db.prepare(`SELECT u.id AS user_id, u.email, o.id AS org_id, o.name
+  const seat = await q.prepare(`SELECT u.id AS user_id, u.email, o.id AS org_id, o.name
     FROM memberships m JOIN users u ON u.id = m.user_id JOIN organizations o ON o.id = m.org_id
     WHERE u.active = 1 AND u.pass_hash != ''
     ORDER BY (o.id = ?) DESC, u.created_at LIMIT 1`).get(DEFAULT_ORG_ID);
@@ -64,7 +86,7 @@ async function main() {
   const org = { id: seat.org_id, name: seat.name };
   const sid = crypto.randomBytes(32).toString('hex');
   const t = Date.now();
-  db.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
+  await q.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
     VALUES (?,?,?,?,?,?,?,?)`).run(sid, user.id, org.id, crypto.randomBytes(16).toString('hex'), t, t, '127.0.0.1', 'e2e');
   const cookie = `opscat_sid=${sid}`;
 
@@ -177,7 +199,57 @@ async function main() {
   const reuse = await tokenReq({ grant_type: 'refresh_token', client_id: client.client_id, refresh_token: tokens.refresh_token });
   chk('a rotated refresh token cannot be reused', reuse.status === 400, `got ${reuse.status}`);
 
-  const AT = rt.access_token;
+  /* A membership revoked since the last refresh ends the grant.
+   *
+   * The token deliberately carries no role — it is read from `memberships` on
+   * every request — but a REFRESH is the one moment where the membership is the
+   * only thing standing between a removed colleague and another hour of access.
+   * The guard is `if (!(await getMembership(...)))`, and that shape is the one
+   * nothing else can see: unawaited it is `!Promise`, i.e. `false`, so a person
+   * removed from the organization keeps minting fresh tokens indefinitely, with
+   * a 200 and no log line. Measured: the whole suite stayed green at 1593/1593
+   * with the await dropped, which is why this check exists.
+   */
+  const kept = await q.prepare('SELECT role FROM memberships WHERE user_id = ? AND org_id = ?')
+    .get(user.id, org.id);
+  await q.prepare('DELETE FROM memberships WHERE user_id = ? AND org_id = ?').run(user.id, org.id);
+  const orphanRefresh = await tokenReq({
+    grant_type: 'refresh_token', client_id: client.client_id, refresh_token: rt.refresh_token,
+  });
+  const orphanBody = await orphanRefresh.json();
+  chk('a refresh after the membership is revoked is refused',
+    orphanRefresh.status === 400, `got ${orphanRefresh.status}`);
+  chk('…as invalid_grant, naming the revocation', orphanBody.error === 'invalid_grant'
+    && /Membership revoked/.test(String(orphanBody.error_description)), JSON.stringify(orphanBody));
+  await q.prepare(`INSERT INTO memberships (user_id, org_id, role, created_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, org_id) DO UPDATE SET role = excluded.role`)
+    .run(user.id, org.id, kept.role, Date.now());
+  // …and the grant really is gone: RFC 7009 semantics, the whole (client, user,
+  // org) grant is dropped, so restoring the membership must NOT resurrect it.
+  const afterRestore = await tokenReq({
+    grant_type: 'refresh_token', client_id: client.client_id, refresh_token: rt.refresh_token,
+  });
+  chk('…and restoring the membership does not resurrect the dropped grant',
+    afterRestore.status === 400, `got ${afterRestore.status}`);
+
+  // Re-authorize for the rest of the file: the grant above was deliberately
+  // destroyed, so a fresh code exchange is what supplies the access token below.
+  const page3 = await fetch(authUrl(), { headers: { cookie } });
+  const ticket3 = /name="ticket" value="([^"]+)"/.exec(await page3.text())?.[1];
+  const consent3 = await fetch(`${B}/oauth/authorize/consent`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ ticket: ticket3, org_id: String(org.id), decision: 'allow' }), redirect: 'manual',
+  });
+  const code3 = new URL(consent3.headers.get('location')).searchParams.get('code');
+  const tok3 = await tokenReq({
+    grant_type: 'authorization_code', client_id: client.client_id, code: code3,
+    redirect_uri: 'http://127.0.0.1:9999/cb', code_verifier: verifier,
+  });
+  const rt3 = await tok3.json();
+  chk('a fresh authorization still works after the grant was dropped',
+    tok3.status === 200 && !!rt3.access_token, JSON.stringify(rt3).slice(0, 120));
+
+  const AT = rt3.access_token;
 
   // ── 5. MCP transport ─────────────────────────────────────────────────────
   const H = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
@@ -248,32 +320,43 @@ async function main() {
     tools.find((t) => t.name === 'opscat_run_checks')?.annotations?.openWorldHint === true, 'missing');
 
   // a real case to act on
-  const anyCase = db.prepare('SELECT id FROM cases WHERE org_id = ? LIMIT 1').get(org.id)
-    || (() => {
-      db.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
-        VALUES (?,?,?,?,?,'open',?)`).run(org.id, null, 'e2e case', 'e2e-host', 50, Date.now());
-      return db.prepare('SELECT id FROM cases WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(org.id);
-    })();
+  const anyCase = await q.prepare('SELECT id FROM cases WHERE org_id = ? LIMIT 1').get(org.id)
+    || { id: await q.prepare(`INSERT INTO cases (org_id, event_id, name, device, severity, status, opened_at)
+        VALUES (?,?,?,?,?,'open',?)`).insert(org.id, null, 'e2e case', 'e2e-host', 50, Date.now()) };
   const upd = await parse(await mcp({
     jsonrpc: '2.0', method: 'tools/call', id: 10,
     params: { name: 'opscat_update_case', arguments: { id: anyCase.id, note: 'set by e2e', status: 'assigned' } },
   }, S));
   chk('opscat_update_case writes', upd.result?.structuredContent?.status === 'assigned',
     JSON.stringify(upd).slice(0, 200));
-  const noteRow = db.prepare('SELECT note, status FROM cases WHERE id = ?').get(anyCase.id);
+  const noteRow = await q.prepare('SELECT note, status FROM cases WHERE id = ?').get(anyCase.id);
   chk('the write actually landed in the database', noteRow.note === 'set by e2e', JSON.stringify(noteRow));
 
-  const auditRow = db.prepare(`SELECT user_id, action, detail FROM audit_log
-    WHERE org_id = ? AND action = 'case_update' ORDER BY id DESC LIMIT 1`).get(org.id);
+  /* Condition-WAITED, not read straight after the call.
+   *
+   * `audit()` deliberately keeps a synchronous call shape with an internal
+   * `.catch` — the write it describes has already happened, so failing the
+   * request because the audit row failed would report an error for work that
+   * succeeded. That means the write is NOT awaited by the handler.
+   *
+   * On better-sqlite3 that was invisible: the insert completed in the same
+   * microtask drain, so a read on the next line always saw it. Under
+   * node-postgres it is a network round trip, and the response can reach the
+   * client first — which made this check fail intermittently on Postgres and
+   * pass on a rerun. The row still lands; the harness was simply asking too
+   * early, and asserting "not yet" as "never".
+   */
+  const auditRow = await untilAsync(async () => q.prepare(`SELECT user_id, action, detail FROM audit_log
+    WHERE org_id = ? AND action = 'case_update' ORDER BY id DESC LIMIT 1`).get(org.id));
   chk('the mutation is audited against the authorizing human',
     auditRow && auditRow.user_id === user.id, JSON.stringify(auditRow));
   chk('the audit entry names the MCP client',
     auditRow && auditRow.detail.includes('mcp client='), auditRow && auditRow.detail);
 
   // destructive tool must not act without confirmation
-  db.prepare('INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)')
-    .run(org.id, 'e2e window', Date.now(), Date.now() + 3600000, Date.now());
-  const win = db.prepare('SELECT id FROM maintenance_windows WHERE org_id = ? ORDER BY id DESC LIMIT 1').get(org.id);
+  const win = { id: await q.prepare(
+    'INSERT INTO maintenance_windows (org_id, name, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)')
+    .insert(org.id, 'e2e window', Date.now(), Date.now() + 3600000, Date.now()) };
   const noConfirm = await parse(await mcp({
     jsonrpc: '2.0', method: 'tools/call', id: 11,
     params: { name: 'opscat_delete_maintenance', arguments: { id: win.id } },
@@ -281,14 +364,15 @@ async function main() {
   chk('destructive tool refuses without confirmation', noConfirm.result?.isError === true,
     JSON.stringify(noConfirm).slice(0, 200));
   chk('maintenance window still exists after the refusal',
-    !!db.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'row was deleted anyway');
+    !!await q.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'row was deleted anyway');
   const confirmed = await parse(await mcp({
     jsonrpc: '2.0', method: 'tools/call', id: 12,
     params: { name: 'opscat_delete_maintenance', arguments: { id: win.id, confirm: true } },
   }, S));
   chk('destructive tool proceeds with confirm:true', confirmed.result?.structuredContent?.deleted === true,
     JSON.stringify(confirmed).slice(0, 200));
-  chk('maintenance window is gone', !db.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'still there');
+  chk('maintenance window is gone',
+    !await q.prepare('SELECT id FROM maintenance_windows WHERE id = ?').get(win.id), 'still there');
 
   // ── 5c. M4 resources + icons ─────────────────────────────────────────────
   const resList = await parse(await mcp({ jsonrpc: '2.0', method: 'resources/list', id: 13 }, S));
@@ -363,21 +447,21 @@ async function main() {
   chk('admin routes stay session-only (token → 401)', adminViaToken.status === 401, `got ${adminViaToken.status}`);
 
   // API key with / without the `api` scope
-  const mkKey = (scopes, role) => {
+  const mkKey = async (scopes, role) => {
     const raw = `ock_${crypto.randomBytes(24).toString('hex')}`;
-    db.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
+    await q.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
       VALUES (?,?,?,?,?,?,1,?,?)`).run(org.id, `e2e ${scopes}`, raw.slice(0, 12),
       crypto.createHash('sha256').update(raw).digest('hex'), scopes, role, user.id, Date.now());
     return raw;
   };
-  const apiKey = mkKey('ingest,api', 'lead');
-  const ingestOnly = mkKey('ingest', 'analyst');
+  const apiKey = await mkKey('ingest,api', 'lead');
+  const ingestOnly = await mkKey('ingest', 'analyst');
   const keyRead = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${apiKey}` } });
   chk('REST /api/events with an `api`-scoped key → 200', keyRead.status === 200, `got ${keyRead.status}`);
   const keyNoScope = await fetch(`${B}/api/events`, { headers: { authorization: `Bearer ${ingestOnly}` } });
   chk('an ingest-only key cannot drive the REST API → 403', keyNoScope.status === 403, `got ${keyNoScope.status}`);
   const keyRoleGate = await fetch(`${B}/api/rules`, {
-    method: 'POST', headers: { authorization: `Bearer ${mkKey('api', 'analyst')}`, 'content-type': 'application/json' },
+    method: 'POST', headers: { authorization: `Bearer ${await mkKey('api', 'analyst')}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'nope', channel: 'email' }),
   });
   chk("an analyst-role key is refused a lead-only route → 403", keyRoleGate.status === 403, `got ${keyRoleGate.status}`);

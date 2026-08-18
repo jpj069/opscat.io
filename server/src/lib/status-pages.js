@@ -14,30 +14,31 @@
 // destroy a customer's configuration on a billing event and silently fail to
 // restore it on the way back up.
 const crypto = require('crypto');
-const { db } = require('../db');
+const store = require('../db/shim');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const config = require('../config');
 const plans = require('../plans');
 
 const q = {
-  byId: db.prepare('SELECT * FROM status_pages WHERE id = ?'),
-  byIdOrg: db.prepare('SELECT * FROM status_pages WHERE id = ? AND org_id = ?'),
-  bySlug: db.prepare('SELECT * FROM status_pages WHERE slug = ?'),
-  byDomain: db.prepare('SELECT * FROM status_pages WHERE domain = ? AND domain_verified_at IS NOT NULL'),
-  defaultOf: db.prepare('SELECT * FROM status_pages WHERE org_id = ? AND is_default = 1'),
-  listOf: db.prepare('SELECT * FROM status_pages WHERE org_id = ? ORDER BY is_default DESC, name, id'),
-  countOf: db.prepare('SELECT COUNT(*) c FROM status_pages WHERE org_id = ?'),
-  compsOf: db.prepare('SELECT component_id FROM status_page_components WHERE page_id = ?'),
-  orgPlan: db.prepare('SELECT plan FROM organizations WHERE id = ?'),
-  pagesForComponents: db.prepare('SELECT DISTINCT page_id FROM status_page_components WHERE component_id = ?'),
+  byId: store.prepare('SELECT * FROM status_pages WHERE id = ?'),
+  byIdOrg: store.prepare('SELECT * FROM status_pages WHERE id = ? AND org_id = ?'),
+  bySlug: store.prepare('SELECT * FROM status_pages WHERE slug = ?'),
+  byDomain: store.prepare('SELECT * FROM status_pages WHERE domain = ? AND domain_verified_at IS NOT NULL'),
+  defaultOf: store.prepare('SELECT * FROM status_pages WHERE org_id = ? AND is_default = 1'),
+  listOf: store.prepare('SELECT * FROM status_pages WHERE org_id = ? ORDER BY is_default DESC, name, id'),
+  countOf: store.prepare('SELECT COUNT(*) c FROM status_pages WHERE org_id = ?'),
+  compsOf: store.prepare('SELECT component_id FROM status_page_components WHERE page_id = ?'),
+  orgPlan: store.prepare('SELECT plan FROM organizations WHERE id = ?'),
+  pagesForComponents: store.prepare('SELECT DISTINCT page_id FROM status_page_components WHERE component_id = ?'),
 };
 
-const planOf = (orgId) => (q.orgPlan.get(orgId) || {}).plan || 'free';
-const hasFeature = (orgId, f) => plans.hasFeature(planOf(orgId), f);
+const planOf = async (orgId) => ((await q.orgPlan.get(orgId)) || {}).plan || 'free';
+const hasFeature = async (orgId, f) => plans.hasFeature(await planOf(orgId), f);
 
 // ---- resolution --------------------------------------------------------------
 
-const pageById = (id, orgId) => (orgId === undefined ? q.byId.get(id) : q.byIdOrg.get(id, orgId)) || null;
+const pageById = async (id, orgId) => (orgId === undefined
+  ? await q.byId.get(id) : await q.byIdOrg.get(id, orgId)) || null;
 
 /**
  * The org's default page, created on first ask if it is missing.
@@ -49,26 +50,26 @@ const pageById = (id, orgId) => (orgId === undefined ? q.byId.get(id) : q.byIdOr
  * — a failure mode nothing in the code would point at. Doing it here means the
  * invariant "an org has a default page" holds by construction.
  */
-function defaultPage(orgId) {
-  const found = q.defaultOf.get(orgId);
+async function defaultPage(orgId) {
+  const found = await q.defaultOf.get(orgId);
   if (found) return found;
-  const org = db.prepare('SELECT id, slug FROM organizations WHERE id = ?').get(orgId);
+  const org = await store.prepare('SELECT id, slug FROM organizations WHERE id = ?').get(orgId);
   if (!org) return null;
-  const name = db.prepare("SELECT value FROM org_settings WHERE org_id = ? AND key = 'org_name'").get(orgId);
-  const published = db.prepare("SELECT value FROM org_settings WHERE org_id = ? AND key = 'status_published'").get(orgId);
-  const ins = db.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published, created_at)
+  const name = await store.prepare("SELECT value FROM org_settings WHERE org_id = ? AND key = 'org_name'").get(orgId);
+  const published = await store.prepare("SELECT value FROM org_settings WHERE org_id = ? AND key = 'status_published'").get(orgId);
+  const ins = store.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published, created_at)
     VALUES (?, ?, ?, 1, ?, ?)`);
   // The org's slug is the natural one, but it is only UNIQUE among orgs — a
   // custom page could have claimed it. Falling back keeps the page reachable
   // instead of throwing on a name collision nobody can see coming.
   const wanted = org.slug || `org-${orgId}`;
   const pub = !published || published.value === '1' ? 1 : 0;
-  try { ins.run(orgId, wanted, name ? name.value : 'Status', pub, now()); }
-  catch { ins.run(orgId, `${wanted}-${orgId}`, name ? name.value : 'Status', pub, now()); }
-  return q.defaultOf.get(orgId);
+  try { await ins.run(orgId, wanted, name ? name.value : 'Status', pub, now()); }
+  catch { await ins.run(orgId, `${wanted}-${orgId}`, name ? name.value : 'Status', pub, now()); }
+  return await q.defaultOf.get(orgId);
 }
-const listPages = (orgId) => q.listOf.all(orgId);
-const pageCount = (orgId) => q.countOf.get(orgId).c;
+const listPages = async (orgId) => q.listOf.all(orgId);
+const pageCount = async (orgId) => (await q.countOf.get(orgId)).c;
 
 // The Host header, minus any port, lowercased. Express gives us req.hostname
 // already stripped, but this is also called with raw values (Caddy's TLS ask
@@ -81,15 +82,15 @@ function normalizeHost(raw) {
 // downgrade the domain stays configured and simply stops answering — which is
 // the honest behaviour: we cannot keep serving a paid hostname for free, and
 // deleting it would make the upgrade path a re-setup.
-function pageByDomain(host) {
+async function pageByDomain(host) {
   const h = normalizeHost(host);
   if (!h) return null;
-  const p = q.byDomain.get(h);
+  const p = await q.byDomain.get(h);
   if (!p) return null;
-  return hasFeature(p.org_id, 'status_domain') ? p : null;
+  return (await hasFeature(p.org_id, 'status_domain')) ? p : null;
 }
 
-const pageBySlug = (slug) => q.bySlug.get(String(slug || '').toLowerCase()) || null;
+const pageBySlug = async (slug) => (await q.bySlug.get(String(slug || '').toLowerCase())) || null;
 
 // True when the request arrived on the configured status host (status.<domain>).
 const onStatusHost = (req) =>
@@ -97,11 +98,11 @@ const onStatusHost = (req) =>
 
 // The page a request is for, or null. `slug` is the :slug segment when the route
 // had one. A request arriving on a custom domain wins over everything else.
-function resolvePage(req, slug) {
-  const byDomain = pageByDomain(req.hostname || req.headers.host);
+async function resolvePage(req, slug) {
+  const byDomain = await pageByDomain(req.hostname || req.headers.host);
   if (byDomain) return byDomain;
   if (slug) return pageBySlug(slug);
-  const org = db.prepare('SELECT id FROM organizations WHERE id = ?').get(DEFAULT_ORG_ID);
+  const org = await store.prepare('SELECT id FROM organizations WHERE id = ?').get(DEFAULT_ORG_ID);
   return org ? defaultPage(org.id) : null;
 }
 
@@ -125,8 +126,8 @@ function basePath(req, page) {
 
 // Absolute URL, for mails and feeds — those leave the request context, so they
 // prefer the custom domain whenever there is a usable one.
-function absoluteUrl(page) {
-  if (page.domain && page.domain_verified_at && hasFeature(page.org_id, 'status_domain')) {
+async function absoluteUrl(page) {
+  if (page.domain && page.domain_verified_at && await hasFeature(page.org_id, 'status_domain')) {
     return `https://${page.domain}`;
   }
   if (config.statusHost) {
@@ -185,16 +186,16 @@ const newAccessToken = () => crypto.randomBytes(24).toString('base64url');
 // The component ids a page shows, or null for "all of the org's". No rows means
 // all: the default page never has to be backfilled when a component is added,
 // which is also why a subset page stores its selection positively.
-function componentIdsFor(page) {
-  const rows = q.compsOf.all(page.id);
+async function componentIdsFor(page) {
+  const rows = await q.compsOf.all(page.id);
   return rows.length ? rows.map((r) => r.component_id) : null;
 }
 
 // Every page of an org that shows at least one of these components — the pages
 // whose subscribers an incident concerns. An incident with NO components is an
 // org-wide announcement and goes to every page.
-function pagesForIncidentComponents(orgId, componentIds) {
-  const all = listPages(orgId);
+async function pagesForIncidentComponents(orgId, componentIds) {
+  const all = await listPages(orgId);
   if (!componentIds || !componentIds.length) return all;
   const wanted = new Set(componentIds);
   // componentIdsFor() is a QUERY, and it used to run inside this predicate. That
@@ -203,7 +204,9 @@ function pagesForIncidentComponents(orgId, componentIds) {
   // incident scoped to one component MAILS EVERY SUBSCRIBER OF EVERY PAGE in the
   // org. Unrecallable, and nothing would have reported it.
   // Resolved up front instead — same number of queries, no query in a predicate.
-  const idsByPage = new Map(all.map((p) => [p.id, componentIdsFor(p)]));
+  // AWAITED up front: the map holds component id ARRAYS, never pending queries.
+  const idsByPage = new Map();
+  for (const p of all) idsByPage.set(p.id, await componentIdsFor(p));
   return all.filter((p) => {
     const ids = idsByPage.get(p.id);
     return ids === null || ids.some((id) => wanted.has(id));
@@ -213,8 +216,8 @@ function pagesForIncidentComponents(orgId, componentIds) {
 // ---- gated settings ----------------------------------------------------------
 
 // Both resolved at RENDER time, never by clearing the column on downgrade.
-const whitelabel = (page) => page.hide_powered === 1 && hasFeature(page.org_id, 'status_whitelabel');
-const customCss = (page) => (hasFeature(page.org_id, 'status_css') ? page.custom_css || '' : '');
+const whitelabel = async (page) => page.hide_powered === 1 && await hasFeature(page.org_id, 'status_whitelabel');
+const customCss = async (page) => ((await hasFeature(page.org_id, 'status_css')) ? page.custom_css || '' : '');
 
 module.exports = {
   q,

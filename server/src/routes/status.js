@@ -9,7 +9,11 @@
 // The page ships no JavaScript. Every interactive bit is a plain form POST, so
 // the CSP stays strict and the page renders in anything.
 const express = require('express');
-const { db, getOrgSetting } = require('../db');
+// The shim is imported as `store`, not as the usual `q`: handleUnsubscribeForm
+// already binds `q` to req.query, and a shadowed storage handle is the one
+// rename this conversion must not make somebody read twice.
+const store = require('../db/shim');
+const { getOrgSetting } = require('../db');
 const { now, sha256, RateLimiter, escapeHtml: esc } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
@@ -29,17 +33,17 @@ const DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341
 
 // ---- the payload -------------------------------------------------------------
 
-function statusData(page) {
+async function statusData(page) {
   const orgId = page.org_id;
-  const only = pages.componentIdsFor(page); // null = every component of the org
+  const only = await pages.componentIdsFor(page); // null = every component of the org
   const onlySet = only ? new Set(only) : null;
-  const comps = db.prepare('SELECT * FROM components WHERE org_id = ? ORDER BY sort, id').all(orgId)
+  const comps = (await store.prepare('SELECT * FROM components WHERE org_id = ? ORDER BY sort, id').all(orgId))
     .filter((c) => !onlySet || onlySet.has(c.id));
   const since = new Date(now() - 45 * 86400000).toISOString().slice(0, 10);
   const ids = comps.map((c) => c.id);
   const days = ids.length
-    ? db.prepare(`SELECT * FROM component_days WHERE day >= ? AND component_id IN (${ids.map(() => '?').join(',')})`)
-        .all(since, ...ids)
+    ? await store.prepare(`SELECT * FROM component_days WHERE day >= ? AND component_id IN (${ids.map(() => '?').join(',')})`)
+      .all(since, ...ids)
     : [];
   const byComp = new Map();
   for (const d of days) {
@@ -66,17 +70,17 @@ function statusData(page) {
   // predicate. Left inside, an async storage layer makes the callback return a
   // truthy Promise and the page publishes every incident it was configured to
   // hide. One query for all 25 rows, then a pure predicate.
-  const recent = db.prepare(`SELECT * FROM incidents WHERE org_id = ? AND published = 1
+  const recent = await store.prepare(`SELECT * FROM incidents WHERE org_id = ? AND published = 1
     ORDER BY started_at DESC LIMIT 25`).all(orgId);
   const linkedByIncident = new Map();
   if (onlySet && recent.length) {
-    for (const r of db.prepare(`SELECT incident_id, component_id FROM incident_components
-      WHERE incident_id IN (${recent.map(() => '?').join(',')})`).all(...recent.map((i) => i.id))) {
+    for (const r of (await store.prepare(`SELECT incident_id, component_id FROM incident_components
+      WHERE incident_id IN (${recent.map(() => '?').join(',')})`).all(...recent.map((i) => i.id)))) {
       if (!linkedByIncident.has(r.incident_id)) linkedByIncident.set(r.incident_id, []);
       linkedByIncident.get(r.incident_id).push(r.component_id);
     }
   }
-  const incidents = recent
+  const incidents = await Promise.all(recent
     .filter((i) => {
       if (!onlySet) return true;
       const linked = linkedByIncident.get(i.id) || [];
@@ -84,12 +88,12 @@ function statusData(page) {
       return linked.length === 0 || linked.some((id) => onlySet.has(id));
     })
     .slice(0, 10)
-    .map((i) => ({
+    .map(async (i) => ({
       id: i.id, label: `INC-${2000 + i.id}`, title: i.title, status: i.status,
       startedAt: i.started_at, resolvedAt: i.resolved_at,
-      updates: db.prepare(`SELECT ts, status, message FROM incident_updates
+      updates: await store.prepare(`SELECT ts, status, message FROM incident_updates
         WHERE incident_id = ? ORDER BY ts DESC LIMIT 10`).all(i.id),
-    }));
+    })));
 
   const data = {
     overall: worst, overallLabel: STATUS_LABEL[worst], components, incidents,
@@ -100,8 +104,8 @@ function statusData(page) {
   };
   data.components.forEach((c, i) => { c.id = comps[i].id; });
   if (getOrgSetting(orgId, 'status_reports_public', '0') === '1') {
-    data.reports60m = db.prepare(
-      'SELECT COUNT(*) c FROM status_reports WHERE org_id = ? AND ts >= ?').get(orgId, now() - 3600000).c;
+    data.reports60m = (await store.prepare(
+      'SELECT COUNT(*) c FROM status_reports WHERE org_id = ? AND ts >= ?').get(orgId, now() - 3600000)).c;
   }
   return data;
 }
@@ -118,15 +122,15 @@ function servable(req, page) {
 // ---- reports (Downdetector-style) --------------------------------------------
 
 const reportLimiter = new RateLimiter({ perMinute: 3, burst: 3 });
-const insReport = db.prepare(
+const insReport = store.prepare(
   'INSERT INTO status_reports (org_id, ts, component_id, message, ip_hash) VALUES (?, ?, ?, ?, ?)');
-const lastReportFrom = db.prepare(
+const lastReportFrom = store.prepare(
   'SELECT MAX(ts) t FROM status_reports WHERE org_id = ? AND ip_hash = ?');
 
 // Accepts the status-page form (urlencoded) or JSON. The `website` field is a
 // honeypot — humans never see it, bots fill it. Success and silent drops both
 // answer alike so probing reveals nothing.
-function handleReport(req, res, page, redirectTo) {
+async function handleReport(req, res, page, redirectTo) {
   const done = () => (redirectTo
     ? res.redirect(303, `${redirectTo || '/status'}?reported=1`)
     : res.json({ ok: true }));
@@ -141,17 +145,18 @@ function handleReport(req, res, page, redirectTo) {
   if (!reportLimiter.allow(`${page.org_id}|${ip}`)) return done();
   const ipHash = sha256(`${page.org_id}|${ip}`);
   const t = now();
-  const last = lastReportFrom.get(page.org_id, ipHash).t;
+  const last = (await lastReportFrom.get(page.org_id, ipHash)).t;
   if (last && t - last < 10 * 60 * 1000) return done(); // one report per visitor per 10 min
   let componentId = null;
   const cid = parseInt(b.componentId, 10);
   if (Number.isFinite(cid)) {
-    const comp = db.prepare('SELECT id FROM components WHERE id = ? AND org_id = ?').get(cid, page.org_id);
-    const only = pages.componentIdsFor(page);
+    const comp = await store.prepare('SELECT id FROM components WHERE id = ? AND org_id = ?')
+      .get(cid, page.org_id);
+    const only = await pages.componentIdsFor(page);
     if (comp && (!only || only.includes(comp.id))) componentId = comp.id;
   }
   const message = typeof b.message === 'string' ? b.message.trim().slice(0, 500) : null;
-  insReport.run(page.org_id, t, componentId, message || null, ipHash);
+  await insReport.run(page.org_id, t, componentId, message || null, ipHash);
   return done();
 }
 
@@ -162,7 +167,7 @@ const subLimiter = new RateLimiter({ perMinute: 3, burst: 3 });
 // Same posture as the report form: honeypot, rate limit, and a UNIFORM answer —
 // new, pending, already-confirmed and silently-dropped all look identical, so
 // the form cannot be used to probe an address book.
-function handleSubscribe(req, res, page, redirectTo) {
+async function handleSubscribe(req, res, page, redirectTo) {
   const done = () => (redirectTo !== null
     ? res.redirect(303, `${redirectTo || '/status'}?subscribed=1`)
     : res.json({ ok: true }));
@@ -174,7 +179,7 @@ function handleSubscribe(req, res, page, redirectTo) {
   const b = req.body || {};
   if (typeof b.website === 'string' && b.website.trim() !== '') return done(); // honeypot hit
   if (!subLimiter.allow(`${page.org_id}|${clientIp(req)}`)) return done();
-  subscribers.subscribe(page, b.email);
+  await subscribers.subscribe(page, b.email);
   return done();
 }
 
@@ -185,8 +190,8 @@ function handleSubscribe(req, res, page, redirectTo) {
 // a black OpsCat box has left the brand mid-flow — which is exactly what a
 // status page is bought to avoid. The page is resolved from the token, so both
 // halves of the flow can find it.
-function miniPage(res, page, title, body, backUrl) {
-  const b = page ? branding.brandingFor(page, pages.absoluteUrl(page)) : null;
+async function miniPage(res, page, title, body, backUrl) {
+  const b = page ? await branding.brandingFor(page, await pages.absoluteUrl(page)) : null;
   const p = b ? b.palette : branding.THEMES.dark;
   const accent = b ? b.accent : branding.DEFAULT_ACCENT;
   const ink = b ? b.accentInk : '#ffffff';
@@ -218,10 +223,10 @@ ${page ? `<div class="brand">${b.logoUrl
 
 // ---- Atom feed ---------------------------------------------------------------
 
-function statusFeed(req, res, page) {
+async function statusFeed(req, res, page) {
   if (!servable(req, page)) return res.status(404).send('not published');
-  const d = statusData(page);
-  const pageUrl = pages.absoluteUrl(page);
+  const d = await statusData(page);
+  const pageUrl = await pages.absoluteUrl(page);
   const iso = (ts) => new Date(ts).toISOString();
   const latest = d.incidents.reduce((m, i) =>
     Math.max(m, ...i.updates.map((u) => u.ts)), d.incidents.length ? 0 : d.ts);
@@ -255,10 +260,10 @@ ${entries}
 // SERVABLE page: an unpublished or private page must not leak its org's logo
 // either. Content-Disposition + nosniff keep a direct hit on this URL an image,
 // never a document the browser would try to execute.
-function sendAsset(req, res, page, kind) {
+async function sendAsset(req, res, page, kind) {
   if (!servable(req, page)) return res.status(404).send('not found');
-  const effective = kind === 'favicon' && !branding.assetMeta(page.id, 'favicon') ? 'logo' : kind;
-  const a = branding.getAsset(page.id, effective);
+  const effective = kind === 'favicon' && !(await branding.assetMeta(page.id, 'favicon')) ? 'logo' : kind;
+  const a = await branding.getAsset(page.id, effective);
   if (!a) return res.status(404).send('not found');
   const etag = `W/"${page.id}-${kind}-${a.updated_at}"`;
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
@@ -272,12 +277,12 @@ function sendAsset(req, res, page, kind) {
 
 // ---- the page ----------------------------------------------------------------
 
-function renderStatus(req, res, page) {
+async function renderStatus(req, res, page) {
   if (!servable(req, page)) {
     return res.status(404).send('<h1>Status page not published</h1>');
   }
   pages.rememberAccess(req, res, page);
-  const d = statusData(page);
+  const d = await statusData(page);
   const reported = req.query.reported === '1';
   const subscribed = req.query.subscribed === '1';
   const canSubscribe = subscribers.available(page);
@@ -288,7 +293,7 @@ function renderStatus(req, res, page) {
   // `.json` appended to the page's OWN url — /status.json, /status/acme.json —
   // and the origin-level /summary.json alias when the page owns the whole host.
   const jsonUrl = base ? `${base}.json` : '/summary.json';
-  const b = branding.brandingFor(page, base);
+  const b = await branding.brandingFor(page, base);
   const p = b.palette;
   const compRows = d.components.map((c) => {
     // An "up" day is deliberately the faintest thing on the page so outages
@@ -413,50 +418,50 @@ ${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
 // with a slug parameter. `/summary.json` is the Instatus-shaped alias OpsCat's
 // own vendor detector probes for (engine/vendor-feeds.js), so an OpsCat status
 // page is auto-detectable by OpsCat and by anything following that convention.
-function statusJson(req, res, page) {
+async function statusJson(req, res, page) {
   if (!servable(req, page)) return res.status(404).json({ error: 'not published' });
-  res.json(statusData(page));
+  return res.json(await statusData(page));
 }
 
 // ---- token-addressed flows (confirm / unsubscribe) ---------------------------
 
-function pageOfResult(r) {
+async function pageOfResult(r) {
   return r && r.pageId ? pages.pageById(r.pageId) : null;
 }
 
-function handleConfirm(req, res) {
-  const r = subscribers.confirm(req.query.token);
+async function handleConfirm(req, res) {
+  const r = await subscribers.confirm(req.query.token);
   if (!r) {
-    return miniPage(res, subscribers.pageForToken(req.query.token), 'Link invalid or expired',
+    return miniPage(res, await subscribers.pageForToken(req.query.token), 'Link invalid or expired',
       '<p>This confirmation link is no longer valid. You can simply subscribe again on the status page.</p>');
   }
-  const page = pageOfResult(r);
-  miniPage(res, page, 'Subscription confirmed',
+  const page = await pageOfResult(r);
+  return miniPage(res, page, 'Subscription confirmed',
     '<p>You will now receive an e-mail whenever a published incident changes. Every mail carries an unsubscribe link.</p>',
-    page ? pages.absoluteUrl(page) : null);
+    page ? await pages.absoluteUrl(page) : null);
 }
 
 // Two-step on purpose: mail scanners GET every link, and a one-request GET
 // unsubscribe would let a corporate link-checker silently remove its users.
-function handleUnsubscribeForm(req, res) {
+async function handleUnsubscribeForm(req, res) {
   const q = req.query;
-  const page = q.token ? subscribers.pageForToken(q.token) : subscribers.pageForRowId(q.id);
+  const page = q.token ? await subscribers.pageForToken(q.token) : await subscribers.pageForRowId(q.id);
   const fields = q.token
     ? `<input type="hidden" name="token" value="${esc(q.token)}">`
     : `<input type="hidden" name="id" value="${esc(q.id || '')}"><input type="hidden" name="sig" value="${esc(q.sig || '')}">`;
-  miniPage(res, page, 'Unsubscribe from status updates',
+  return miniPage(res, page, 'Unsubscribe from status updates',
     `<form method="post" action="/status/unsubscribe">${fields}
 <p>No further status mails will be sent to your address.</p>
 <button type="submit">Unsubscribe</button></form>`);
 }
 
-function handleUnsubscribe(req, res) {
+async function handleUnsubscribe(req, res) {
   const b = req.body || {};
-  const r = b.token ? subscribers.unsubscribe(b.token) : subscribers.unsubscribeById(b.id, b.sig);
+  const r = b.token ? await subscribers.unsubscribe(b.token) : await subscribers.unsubscribeById(b.id, b.sig);
   if (!r) return miniPage(res, null, 'Link invalid', '<p>This unsubscribe link is no longer valid.</p>');
-  const page = pageOfResult(r);
-  miniPage(res, page, 'Unsubscribed', '<p>Done — no further status mails will be sent.</p>',
-    page ? pages.absoluteUrl(page) : null);
+  const page = await pageOfResult(r);
+  return miniPage(res, page, 'Unsubscribed', '<p>Done — no further status mails will be sent.</p>',
+    page ? await pages.absoluteUrl(page) : null);
 }
 
 // ---- routes on a page's OWN domain -------------------------------------------
@@ -477,8 +482,8 @@ domainRoutes.get('/confirm', handleConfirm);
 domainRoutes.get('/unsubscribe', handleUnsubscribeForm);
 domainRoutes.post('/unsubscribe', handleUnsubscribe);
 
-router.use((req, res, next) => {
-  const page = pages.pageByDomain(req.hostname || req.headers.host);
+router.use(async (req, res, next) => {
+  const page = await pages.pageByDomain(req.hostname || req.headers.host);
   if (!page) return next();
   req.statusPage = page;
   return domainRoutes(req, res, next);
@@ -491,18 +496,18 @@ router.use((req, res, next) => {
 // working — a status page URL is the kind of thing that ends up in a runbook, and
 // retiring one to gain a nicer name is not a trade worth making.
 if (config.statusHost) {
-  router.use('/:slug', (req, res, next) => {
+  router.use('/:slug', async (req, res, next) => {
     if (!pages.onStatusHost(req)) return next();
-    const page = pages.pageBySlug(req.params.slug);
+    const page = await pages.pageBySlug(req.params.slug);
     if (!page) return next();
     req.statusPage = page;
     return domainRoutes(req, res, next);
   });
   // A bare root on the status host has no page to name, so send it to the origin
   // org's default rather than 404 — that is the one page the host itself implies.
-  router.get('/', (req, res, next) => {
+  router.get('/', async (req, res, next) => {
     if (!pages.onStatusHost(req)) return next();
-    const page = pages.resolvePage(req, null);
+    const page = await pages.resolvePage(req, null);
     if (!page) return next();
     return res.redirect(302, `/${encodeURIComponent(page.slug)}`);
   });
@@ -525,8 +530,8 @@ if (config.statusHost) {
 // Answering 200 for anything would turn the deployment into an open certificate
 // mint (and burn the ACME rate limit), so it answers ONLY for a domain that is
 // stored, DNS-verified, and on a plan that includes custom domains.
-router.get('/api/public/tls-check', (req, res) => {
-  const page = pages.pageByDomain(req.query.domain);
+router.get('/api/public/tls-check', async (req, res) => {
+  const page = await pages.pageByDomain(req.query.domain);
   if (!page) return res.status(404).send('unknown domain');
   res.status(200).send('ok');
 });
@@ -535,38 +540,40 @@ router.get('/api/public/tls-check', (req, res) => {
 // Order matters: the fixed segments must be registered before `/status/:slug`,
 // which would otherwise swallow "confirm", "logo" and friends as slugs.
 
-router.get('/api/status', (req, res) => {
-  const page = req.query.org ? pages.pageBySlug(req.query.org) : pages.resolvePage(req, null);
-  statusJson(req, res, page);
+router.get('/api/status', async (req, res) => {
+  const page = req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null);
+  // returned, not fired: the handler is async now, and Express only sees a
+  // rejection it is handed back.
+  return statusJson(req, res, page);
 });
-router.post('/api/status/report', (req, res) =>
-  handleReport(req, res, req.query.org ? pages.pageBySlug(req.query.org) : pages.resolvePage(req, null), null));
-router.post('/api/status/subscribe', (req, res) =>
-  handleSubscribe(req, res, req.query.org ? pages.pageBySlug(req.query.org) : pages.resolvePage(req, null), null));
+router.post('/api/status/report', async (req, res) =>
+  handleReport(req, res, req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
+router.post('/api/status/subscribe', async (req, res) =>
+  handleSubscribe(req, res, req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
 
 router.get('/status/confirm', handleConfirm);
 router.get('/status/unsubscribe', handleUnsubscribeForm);
 router.post('/status/unsubscribe', handleUnsubscribe);
 
-router.get(['/status.json', '/summary.json'], (req, res) => statusJson(req, res, pages.resolvePage(req, null)));
-router.get('/status/:slug.json', (req, res) => statusJson(req, res, pages.pageBySlug(req.params.slug)));
-router.get('/status/feed.xml', (req, res) => statusFeed(req, res, pages.resolvePage(req, null)));
-router.get('/status/logo', (req, res) => sendAsset(req, res, pages.resolvePage(req, null), 'logo'));
-router.get('/status/favicon', (req, res) => sendAsset(req, res, pages.resolvePage(req, null), 'favicon'));
-router.post('/status/report', (req, res) => handleReport(req, res, pages.resolvePage(req, null), '/status'));
-router.post('/status/subscribe', (req, res) => handleSubscribe(req, res, pages.resolvePage(req, null), '/status'));
+router.get(['/status.json', '/summary.json'], async (req, res) => statusJson(req, res, await pages.resolvePage(req, null)));
+router.get('/status/:slug.json', async (req, res) => statusJson(req, res, await pages.pageBySlug(req.params.slug)));
+router.get('/status/feed.xml', async (req, res) => statusFeed(req, res, await pages.resolvePage(req, null)));
+router.get('/status/logo', async (req, res) => sendAsset(req, res, await pages.resolvePage(req, null), 'logo'));
+router.get('/status/favicon', async (req, res) => sendAsset(req, res, await pages.resolvePage(req, null), 'favicon'));
+router.post('/status/report', async (req, res) => handleReport(req, res, await pages.resolvePage(req, null), '/status'));
+router.post('/status/subscribe', async (req, res) => handleSubscribe(req, res, await pages.resolvePage(req, null), '/status'));
 
 const slugPath = (req) => `/status/${encodeURIComponent(req.params.slug)}`;
-router.get('/status/:slug/feed.xml', (req, res) => statusFeed(req, res, pages.pageBySlug(req.params.slug)));
-router.get('/status/:slug/logo', (req, res) => sendAsset(req, res, pages.pageBySlug(req.params.slug), 'logo'));
-router.get('/status/:slug/favicon', (req, res) => sendAsset(req, res, pages.pageBySlug(req.params.slug), 'favicon'));
-router.post('/status/:slug/report', (req, res) =>
-  handleReport(req, res, pages.pageBySlug(req.params.slug), slugPath(req)));
-router.post('/status/:slug/subscribe', (req, res) =>
-  handleSubscribe(req, res, pages.pageBySlug(req.params.slug), slugPath(req)));
+router.get('/status/:slug/feed.xml', async (req, res) => statusFeed(req, res, await pages.pageBySlug(req.params.slug)));
+router.get('/status/:slug/logo', async (req, res) => sendAsset(req, res, await pages.pageBySlug(req.params.slug), 'logo'));
+router.get('/status/:slug/favicon', async (req, res) => sendAsset(req, res, await pages.pageBySlug(req.params.slug), 'favicon'));
+router.post('/status/:slug/report', async (req, res) =>
+  handleReport(req, res, await pages.pageBySlug(req.params.slug), slugPath(req)));
+router.post('/status/:slug/subscribe', async (req, res) =>
+  handleSubscribe(req, res, await pages.pageBySlug(req.params.slug), slugPath(req)));
 
-router.get('/status', (req, res) => renderStatus(req, res, pages.resolvePage(req, null)));
-router.get('/status/:slug', (req, res) => renderStatus(req, res, pages.pageBySlug(req.params.slug)));
+router.get('/status', async (req, res) => renderStatus(req, res, await pages.resolvePage(req, null)));
+router.get('/status/:slug', async (req, res) => renderStatus(req, res, await pages.pageBySlug(req.params.slug)));
 
 module.exports = router;
 module.exports.statusData = statusData;

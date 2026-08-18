@@ -3,16 +3,17 @@
 // report a problem; when reports in the last 15 minutes reach the org's
 // threshold, raise ONE user_reports_spike event (re-raised at most every
 // 10 minutes while the spike lasts) — often the earliest outage signal.
-const { db, getOrgSetting } = require('../db');
-const { now } = require('../util');
+const { getOrgSetting } = require('../db');
+const q = require('../db/shim');
+const { now, DEFAULT_ORG_ID } = require('../util');
 const pipeline = require('./pipeline');
 
 const WINDOW_MS = 15 * 60 * 1000;
 const REALERT_MS = 10 * 60 * 1000;
 
-const countRecent = db.prepare(
+const countRecent = q.prepare(
   'SELECT org_id, COUNT(*) c FROM status_reports WHERE ts >= ? GROUP BY org_id');
-const countGridRecent = db.prepare(
+const countGridRecent = q.prepare(
   'SELECT slug, COUNT(*) c FROM vendor_reports WHERE ts >= ? GROUP BY slug');
 
 const alertedUntil = new Map(); // orgId -> ts until which the current spike is considered reported
@@ -21,14 +22,14 @@ const gridAlertedUntil = new Map(); // vendor slug -> ts (public grid community 
 const GRID_WINDOW_MS = 60 * 60 * 1000;
 const GRID_THRESHOLD = 5;
 
-function tick() {
+async function tick() {
   const t = now();
-  for (const row of countRecent.all(t - WINDOW_MS)) {
+  for (const row of await countRecent.all(t - WINDOW_MS)) {
     const threshold = Math.max(1, parseInt(getOrgSetting(row.org_id, 'status_reports_threshold', '5'), 10) || 5);
     if (row.c < threshold) continue;
     if ((alertedUntil.get(row.org_id) || 0) > t) continue;
     alertedUntil.set(row.org_id, t + REALERT_MS);
-    pipeline.ingestEvent({
+    await pipeline.ingestEvent({
       name: 'user_reports_spike', device: 'status-page', target: null,
       severity: row.c >= threshold * 3 ? 85 : 75,
       description: `user_reports_spike — ${row.c} user reports on the status page in 15 min (threshold ${threshold})`,
@@ -36,20 +37,24 @@ function tick() {
   }
   // community reports on the public vendor grid — surfaced to the platform org
   // (org 1): the crowd often notices before the vendor's status page does
-  for (const row of countGridRecent.all(t - GRID_WINDOW_MS)) {
+  for (const row of await countGridRecent.all(t - GRID_WINDOW_MS)) {
     if (row.c < GRID_THRESHOLD) continue;
     if ((gridAlertedUntil.get(row.slug) || 0) > t) continue;
     gridAlertedUntil.set(row.slug, t + REALERT_MS);
-    pipeline.ingestEvent({
+    await pipeline.ingestEvent({
       name: 'vendor_reports_spike', device: row.slug, target: null,
       severity: row.c >= GRID_THRESHOLD * 3 ? 80 : 70,
       description: `vendor_reports_spike ${row.slug} — ${row.c} community reports on the public grid in 60 min`,
-    }, 'reports', false, 1);
+    }, 'reports', false, DEFAULT_ORG_ID);   // never the literal 1 — it matches no organisation
   }
 }
 
 function start() {
-  const iv = setInterval(tick, 60 * 1000);
+  // tick() is async now: an unhandled rejection would exit the process under
+  // NODE_ENV=test and pass unnoticed in production, so the timer catches.
+  const iv = setInterval(() => {
+    tick().catch((e) => console.error('user reports spike check error', e.message));
+  }, 60 * 1000);
   iv.unref();
 }
 

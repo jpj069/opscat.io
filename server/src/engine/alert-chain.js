@@ -32,7 +32,7 @@
  *     `lib/incidents.js` are the two places that call it, which is why they had
  *     to become single mutation paths first.
  */
-const { db, getOrgSetting } = require('../db');
+const store = require('../db/shim');
 const { now, sha256, randHex } = require('../util');
 const config = require('../config');
 const pipeline = require('./pipeline');
@@ -50,50 +50,50 @@ const MAX_TARGET_USERS = 100;
 
 // ---- queries ---------------------------------------------------------------
 const q = {
-  policy: db.prepare('SELECT * FROM escalation_policies WHERE id = ? AND org_id = ?'),
-  steps: db.prepare('SELECT * FROM escalation_steps WHERE policy_id = ? ORDER BY position'),
-  targets: db.prepare('SELECT kind, ref_id FROM escalation_targets WHERE step_id = ?'),
-  alert: db.prepare('SELECT * FROM alerts WHERE id = ?'),
-  alertOfOrg: db.prepare('SELECT * FROM alerts WHERE id = ? AND org_id = ?'),
-  liveForSubject: db.prepare(`SELECT * FROM alerts
+  policy: store.prepare('SELECT * FROM escalation_policies WHERE id = ? AND org_id = ?'),
+  steps: store.prepare('SELECT * FROM escalation_steps WHERE policy_id = ? ORDER BY position'),
+  targets: store.prepare('SELECT kind, ref_id FROM escalation_targets WHERE step_id = ?'),
+  alert: store.prepare('SELECT * FROM alerts WHERE id = ?'),
+  alertOfOrg: store.prepare('SELECT * FROM alerts WHERE id = ? AND org_id = ?'),
+  liveForSubject: store.prepare(`SELECT * FROM alerts
     WHERE org_id = ? AND subject_kind = ? AND subject_id = ? AND status IN ('active','acked')`),
-  samePolicy: db.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = ? AND subject_id = ?
+  samePolicy: store.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = ? AND subject_id = ?
     AND status IN ('active','acked') AND COALESCE(policy_id, -1) = COALESCE(?, -1) LIMIT 1`),
-  insAlert: db.prepare(`INSERT INTO alerts
+  insAlert: store.prepare(`INSERT INTO alerts
     (org_id, subject_kind, subject_id, policy_id, urgency, status, step_position, round,
      source, message, created_at)
     VALUES (?, ?, ?, ?, ?, 'active', 0, 0, ?, ?, ?)`),
-  setStep: db.prepare('UPDATE alerts SET step_position = ?, round = ? WHERE id = ?'),
-  setAcked: db.prepare(`UPDATE alerts SET status = 'acked', acked_at = ?, acked_by = ?
+  setStep: store.prepare('UPDATE alerts SET step_position = ?, round = ? WHERE id = ?'),
+  setAcked: store.prepare(`UPDATE alerts SET status = 'acked', acked_at = ?, acked_by = ?
     WHERE id = ? AND status = 'active'`),
-  end: db.prepare(`UPDATE alerts SET status = ?, ended_at = ?, end_reason = ?
+  end: store.prepare(`UPDATE alerts SET status = ?, ended_at = ?, end_reason = ?
     WHERE id = ? AND status IN ('active','acked')`),
-  insAttempt: db.prepare(`INSERT INTO alert_attempts
+  insAttempt: store.prepare(`INSERT INTO alert_attempts
     (alert_id, user_id, step_position, round, via, notified_at) VALUES (?, ?, ?, ?, ?, ?)`),
-  attempts: db.prepare(`SELECT a.*, u.name, u.email, u.color FROM alert_attempts a
+  attempts: store.prepare(`SELECT a.*, u.name, u.email, u.color FROM alert_attempts a
     JOIN users u ON u.id = a.user_id WHERE a.alert_id = ? ORDER BY a.notified_at, a.id`),
-  insNotif: db.prepare(`INSERT INTO notifications
+  insNotif: store.prepare(`INSERT INTO notifications
     (org_id, ts, rule_id, rule_name, event_id, case_label, channel, ok, error, alert_id, cost_micros)
     VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)`),
-  insToken: db.prepare(`INSERT INTO alert_tokens (token_hash, alert_id, user_id, purpose, expires_at)
+  insToken: store.prepare(`INSERT INTO alert_tokens (token_hash, alert_id, user_id, purpose, expires_at)
     VALUES (?, ?, ?, 'ack', ?)`),
-  tokenByHash: db.prepare('SELECT * FROM alert_tokens WHERE token_hash = ?'),
-  useToken: db.prepare('UPDATE alert_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL'),
-  methods: db.prepare('SELECT * FROM contact_methods WHERE user_id = ? ORDER BY id'),
-  rules: db.prepare(`SELECT r.delay_m, m.* FROM notification_rules r
+  tokenByHash: store.prepare('SELECT * FROM alert_tokens WHERE token_hash = ?'),
+  useToken: store.prepare('UPDATE alert_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL'),
+  methods: store.prepare('SELECT * FROM contact_methods WHERE user_id = ? ORDER BY id'),
+  rules: store.prepare(`SELECT r.delay_m, m.* FROM notification_rules r
     JOIN contact_methods m ON m.id = r.method_id
     WHERE r.user_id = ? AND r.urgency = ? ORDER BY r.delay_m, r.id`),
-  method: db.prepare('SELECT * FROM contact_methods WHERE id = ? AND user_id = ?'),
-  user: db.prepare('SELECT id, name, email, color FROM users WHERE id = ? AND active = 1'),
-  member: db.prepare(`SELECT u.id, u.name, u.email, u.color FROM memberships m JOIN users u ON u.id = m.user_id
+  method: store.prepare('SELECT * FROM contact_methods WHERE id = ? AND user_id = ?'),
+  user: store.prepare('SELECT id, name, email, color FROM users WHERE id = ? AND active = 1'),
+  member: store.prepare(`SELECT u.id, u.name, u.email, u.color FROM memberships m JOIN users u ON u.id = m.user_id
     WHERE m.user_id = ? AND m.org_id = ? AND u.active = 1`),
-  teamMembers: db.prepare(`SELECT u.id, u.name, u.email, u.color FROM team_members tm
+  teamMembers: store.prepare(`SELECT u.id, u.name, u.email, u.color FROM team_members tm
     JOIN users u ON u.id = tm.user_id JOIN teams t ON t.id = tm.team_id
     WHERE tm.team_id = ? AND t.org_id = ? AND u.active = 1 ORDER BY u.name`),
-  schedule: db.prepare('SELECT * FROM schedules WHERE id = ? AND org_id = ?'),
-  caseRow: db.prepare('SELECT * FROM cases WHERE id = ? AND org_id = ?'),
-  incidentRow: db.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?'),
-  window: db.prepare(`SELECT name FROM maintenance_windows
+  schedule: store.prepare('SELECT * FROM schedules WHERE id = ? AND org_id = ?'),
+  caseRow: store.prepare('SELECT * FROM cases WHERE id = ? AND org_id = ?'),
+  incidentRow: store.prepare('SELECT * FROM incidents WHERE id = ? AND org_id = ?'),
+  window: store.prepare(`SELECT name FROM maintenance_windows
     WHERE org_id = ? AND starts_at <= ? AND ends_at >= ? ORDER BY id LIMIT 1`),
 };
 
@@ -102,15 +102,15 @@ const q = {
 // majority, but an incident declared by hand at 03:15 because customers are
 // calling has no case behind it, and "alert the on-call" is exactly the button
 // wanted there.
-function subjectOf(orgId, kind, id) {
+async function subjectOf(orgId, kind, id) {
   if (kind === 'case') {
-    const c = q.caseRow.get(id, orgId);
+    const c = await q.caseRow.get(id, orgId);
     if (!c) return null;
     return { kind, id: c.id, label: `C-${1000 + c.id}`, severity: c.severity,
       title: `${c.name} on ${c.device}`, closed: c.status === 'closed',
       url: `${config.baseUrl}/app/cases` };
   }
-  const i = q.incidentRow.get(id, orgId);
+  const i = await q.incidentRow.get(id, orgId);
   if (!i) return null;
   return { kind, id: i.id, label: `INC-${2000 + i.id}`, severity: i.severity,
     title: i.title, closed: i.status === 'resolved',
@@ -151,23 +151,23 @@ function messageFor(alert, subject, step, token) {
 // MOMENT. A schedule that resolves to nobody is a gap: it is raised as an event
 // and reported back so the caller can advance instead of waiting out a timeout
 // for a person who does not exist.
-function expandTargets(orgId, stepId) {
+async function expandTargets(orgId, stepId) {
   const users = new Map();      // id -> { user, via }
   let gaps = 0; let targets = 0;
-  for (const t of q.targets.all(stepId)) {
+  for (const t of await q.targets.all(stepId)) {
     targets++;
     if (t.kind === 'user') {
-      const u = q.member.get(t.ref_id, orgId);
+      const u = await q.member.get(t.ref_id, orgId);
       if (u) users.set(u.id, { user: u, via: 'user' });
     } else if (t.kind === 'team') {
-      for (const u of q.teamMembers.all(Number(t.ref_id), orgId)) {
+      for (const u of await q.teamMembers.all(Number(t.ref_id), orgId)) {
         if (!users.has(u.id)) users.set(u.id, { user: u, via: `team:${t.ref_id}` });
       }
     } else if (t.kind === 'schedule') {
-      const s = q.schedule.get(Number(t.ref_id), orgId);
+      const s = await q.schedule.get(Number(t.ref_id), orgId);
       if (!s) continue;
-      const r = oncall.resolve(s);
-      if (!r.user) { gaps++; oncall.raiseGap(s); continue; }
+      const r = await oncall.resolve(s);
+      if (!r.user) { gaps++; await oncall.raiseGap(s); continue; }
       if (!users.has(r.user.id)) users.set(r.user.id, { user: r.user, via: `schedule:${s.id}` });
     }
   }
@@ -176,14 +176,14 @@ function expandTargets(orgId, stepId) {
 }
 
 // ---- delivery --------------------------------------------------------------
-function logDelivery(alert, subject, channel, ok, error, costMicros = null) {
-  q.insNotif.run(alert.org_id, now(), `alert ${subject.label}`, subject.label,
+async function logDelivery(alert, subject, channel, ok, error, costMicros = null) {
+  await q.insNotif.run(alert.org_id, now(), `alert ${subject.label}`, subject.label,
     channel, ok ? 1 : 0, error || null, alert.id, costMicros);
 }
 
-function mintToken(alertId, userId) {
+async function mintToken(alertId, userId) {
   const token = randHex(32);
-  q.insToken.run(sha256(token), alertId, userId, now() + ACK_TTL_MS);
+  await q.insToken.run(sha256(token), alertId, userId, now() + ACK_TTL_MS);
   return token;
 }
 
@@ -201,10 +201,10 @@ function mintToken(alertId, userId) {
  *     it. Without this last tier a fresh org builds a perfect ladder and reaches
  *     nobody, which is silence we chose rather than a limitation.
  */
-function planFor(user, urgency) {
-  const rules = q.rules.all(user.id, urgency);
+async function planFor(user, urgency) {
+  const rules = await q.rules.all(user.id, urgency);
   if (rules.length) return rules.map((r) => ({ ...r, delay_m: r.delay_m }));
-  const methods = q.methods.all(user.id);
+  const methods = await q.methods.all(user.id);
   if (methods.length) return methods.map((m) => ({ ...m, delay_m: 0 }));
   // The account e-mail is not a contact_methods row, so it carries no id and
   // needs no decryption — the shape below is what the sender expects.
@@ -220,9 +220,9 @@ function planFor(user, urgency) {
  * include is not silently used. Both come back as a REASON, because a method
  * that is quietly skipped is indistinguishable from a channel that failed.
  */
-function resolveEntry(entry, orgId) {
+async function resolveEntry(entry, orgId) {
   if (entry.id === null) return { ok: true, address: entry.address };   // the account e-mail
-  const gate = contacts.usable(entry, orgId);
+  const gate = await contacts.usable(entry, orgId);
   if (!gate.ok) return { ok: false, reason: gate.reason };
   const address = contacts.decodeAddress(entry);
   if (!address) return { ok: false, reason: 'contact address is unreadable — the app secret changed' };
@@ -230,7 +230,7 @@ function resolveEntry(entry, orgId) {
 }
 
 async function sendOne(alert, subject, user, entry, token) {
-  const resolved = resolveEntry(entry, alert.org_id);
+  const resolved = await resolveEntry(entry, alert.org_id);
   if (!resolved.ok) throw new Error(resolved.reason);
   const { title, text } = messageFor(alert, subject, entry.step, token);
   // The token goes with it: a voice call is handed the token rather than a
@@ -250,18 +250,18 @@ async function sendOne(alert, subject, user, entry, token) {
  * configuration to surface, never a silent drop (§5).
  */
 async function deliverNow(alert, subject, target, step, stepMs) {
-  const plan = planFor(target.user, alert.urgency);
-  const token = mintToken(alert.id, target.user.id);
+  const plan = await planFor(target.user, alert.urgency);
+  const token = await mintToken(alert.id, target.user.id);
   const immediate = plan.filter((p) => !p.delay_m);
   const later = plan.filter((p) => p.delay_m > 0);
 
   for (const p of later) {
     if (p.delay_m * 60000 >= stepMs) {
-      logDelivery(alert, subject, p.kind, false,
+      await logDelivery(alert, subject, p.kind, false,
         `skipped: this rule fires after ${p.delay_m} min, the step escalates after ${Math.round(stepMs / 60000)} min`);
       continue;
     }
-    clock.schedule(alert.id, {
+    await clock.schedule(alert.id, {
       // `p.id` is the contact_methods id: the plan rows are the METHOD spread
       // with the rule's delay on top, so there is no separate `method_id`.
       // Getting this wrong cost a delayed rule its delivery, silently — the
@@ -275,32 +275,32 @@ async function deliverNow(alert, subject, target, step, stepMs) {
   for (const p of immediate) {
     try {
       const r = await sendOne(alert, subject, target.user, { ...p, step }, token);
-      logDelivery(alert, subject, p.kind, true, null, r && r.costMicros);
+      await logDelivery(alert, subject, p.kind, true, null, r && r.costMicros);
       delivered = true;
       break;
     } catch (err) {
-      logDelivery(alert, subject, p.kind, false, String(err.message).slice(0, 300));
+      await logDelivery(alert, subject, p.kind, false, String(err.message).slice(0, 300));
     }
   }
   return { delivered, pending: later.length > 0 };
 }
 
 // ---- the lifecycle ---------------------------------------------------------
-function stepsOf(policyId) { return q.steps.all(policyId).slice(0, MAX_STEPS); }
+async function stepsOf(policyId) { return (await q.steps.all(policyId)).slice(0, MAX_STEPS); }
 
 /** Begin `alert.step_position` of `alert.round`: expand, notify, arm the clock. */
-function beginStep(alert) {
-  const policy = q.policy.get(alert.policy_id, alert.org_id);
-  const subject = subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
+async function beginStep(alert) {
+  const policy = await q.policy.get(alert.policy_id, alert.org_id);
+  const subject = await subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
   if (!policy || !subject) return end(alert, 'canceled', 'policy or subject vanished');
-  const steps = stepsOf(policy.id);
+  const steps = await stepsOf(policy.id);
   const step = steps[alert.step_position];
   if (!step) return advance(alert);
 
-  const { people, gaps, targets, dropped } = expandTargets(alert.org_id, step.id);
+  const { people, gaps, targets, dropped } = await expandTargets(alert.org_id, step.id);
   const stepMs = Math.max(1, step.timeout_m) * 60000;
   if (dropped) {
-    logDelivery(alert, subject, 'alert', false,
+    await logDelivery(alert, subject, 'alert', false,
       `step ${step.position + 1}: ${dropped} target(s) beyond the ${MAX_TARGET_USERS}-person cap were not notified`);
   }
 
@@ -308,7 +308,7 @@ function beginStep(alert) {
     // Nobody to ring on this rung. Advancing immediately is the whole point of
     // rule 2: waiting out the timeout for an empty schedule is five minutes of
     // silence that reads exactly like five minutes of "nobody has answered yet".
-    logDelivery(alert, subject, 'alert', false,
+    await logDelivery(alert, subject, 'alert', false,
       gaps ? `step ${step.position + 1}: on-call gap, no one to notify — escalating now`
         : `step ${step.position + 1}: ${targets ? 'targets resolved to nobody' : 'no targets configured'} — escalating now`);
     return advance(alert);
@@ -316,7 +316,7 @@ function beginStep(alert) {
 
   const t = now();
   for (const p of people) {
-    q.insAttempt.run(alert.id, p.user.id, alert.step_position, alert.round, p.via, t);
+    await q.insAttempt.run(alert.id, p.user.id, alert.step_position, alert.round, p.via, t);
   }
   // One timer for the STEP, not one per person — and NO step timer at all for a
   // low-urgency alert: "is this worth waking someone for" is answered once, at
@@ -324,7 +324,7 @@ function beginStep(alert) {
   // until it is acknowledged or its subject closes, so it is still visible and
   // still cancellable; it simply never climbs the ladder.
   if (alert.urgency === 'high') {
-    clock.schedule(alert.id, {
+    await clock.schedule(alert.id, {
       kind: 'step', stepPosition: alert.step_position, round: alert.round, resumeAt: t + stepMs,
     });
   }
@@ -332,12 +332,12 @@ function beginStep(alert) {
   // Deliveries are awaited only against each other, never against the caller:
   // raising an alert must not block the request or the pipeline that caused it.
   Promise.all(people.map((p) => deliverNow(alert, subject, p, step, stepMs)))
-    .then((results) => {
+    .then(async (results) => {
       const any = results.some((r) => r.delivered || r.pending);
       if (!any) {
-        logDelivery(alert, subject, 'alert', false,
+        await logDelivery(alert, subject, 'alert', false,
           `step ${step.position + 1}: every contact method of every target failed`);
-        pipeline.ingestEvent({
+        await pipeline.ingestEvent({
           name: 'alert_undeliverable', device: subject.label, target: null, severity: 85,
           description: `alert_undeliverable — ${subject.label} "${subject.title}": no contact method of any `
             + `target on step ${step.position + 1} could be reached`,
@@ -349,14 +349,14 @@ function beginStep(alert) {
 }
 
 /** Step timeout elapsed with no acknowledgement: next rung, next pass, or done. */
-function advance(alert) {
-  const fresh = q.alert.get(alert.id);
+async function advance(alert) {
+  const fresh = await q.alert.get(alert.id);
   if (!fresh || fresh.status !== 'active') return fresh;
-  const policy = q.policy.get(fresh.policy_id, fresh.org_id);
+  const policy = await q.policy.get(fresh.policy_id, fresh.org_id);
   if (!policy) return end(fresh, 'canceled', 'policy deleted');
-  const steps = stepsOf(policy.id);
+  const steps = await stepsOf(policy.id);
   // Timers belonging to the rung we are leaving must not fire into the next one.
-  clock.cancel(fresh.id);
+  await clock.cancel(fresh.id);
 
   let step = fresh.step_position + 1;
   let round = fresh.round;
@@ -364,18 +364,18 @@ function advance(alert) {
     if (round >= policy.repeat_n) return exhaust(fresh, policy, steps);
     step = 0; round += 1;
   }
-  q.setStep.run(step, round, fresh.id);
-  return beginStep(q.alert.get(fresh.id));
+  await q.setStep.run(step, round, fresh.id);
+  return beginStep(await q.alert.get(fresh.id));
 }
 
-function exhaust(alert, policy, steps) {
-  const subject = subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
-  end(alert, 'exhausted', 'policy exhausted');
-  const tried = q.attempts.all(alert.id).map((a) => a.name);
+async function exhaust(alert, policy, steps) {
+  const subject = await subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
+  await end(alert, 'exhausted', 'policy exhausted');
+  const tried = (await q.attempts.all(alert.id)).map((a) => a.name);
   // The single most important signal the module emits: the policy reached
   // NOBODY. Raised as a pipeline event so an org can route it today — to a
   // manager, a second policy, a chat channel — without waiting for flows.
-  pipeline.ingestEvent({
+  await pipeline.ingestEvent({
     name: 'alert_exhausted', device: subject ? subject.label : `alert ${alert.id}`, target: null, severity: 85,
     description: `alert_exhausted — policy "${policy.name}" ran ${steps.length} step(s)`
       + `${policy.repeat_n ? ` × ${policy.repeat_n + 1} passes` : ''} without an acknowledgement`
@@ -384,9 +384,9 @@ function exhaust(alert, policy, steps) {
   return q.alert.get(alert.id);
 }
 
-function end(alert, status, reason) {
-  q.end.run(status, now(), reason, alert.id);
-  clock.cancel(alert.id);
+async function end(alert, status, reason) {
+  await q.end.run(status, now(), reason, alert.id);
+  await clock.cancel(alert.id);
   return q.alert.get(alert.id);
 }
 
@@ -398,19 +398,19 @@ function end(alert, status, reason) {
  * returns the SAME alert. A flaring event that re-fires its rule, or a re-run
  * flow, must not ring the same person twice about the same case.
  */
-function raise(orgId, { subjectKind, subjectId, policyId, urgency, source, message, severity, at = now() }) {
-  const policy = q.policy.get(policyId, orgId);
+async function raise(orgId, { subjectKind, subjectId, policyId, urgency, source, message, severity, at = now() }) {
+  const policy = await q.policy.get(policyId, orgId);
   if (!policy) return { error: 'unknown escalation policy' };
-  const subject = subjectOf(orgId, subjectKind, subjectId);
+  const subject = await subjectOf(orgId, subjectKind, subjectId);
   if (!subject) return { error: `unknown ${subjectKind}` };
   if (subject.closed) return { error: `${subject.label} is already closed` };
 
   // A ladder with no rungs cannot ring anybody. Refusing here means the operator
   // is told at the moment they wire the rule up, rather than discovering it as an
   // `alert_exhausted` event three seconds after the first real incident.
-  if (!stepsOf(policyId).length) return { error: `policy "${policy.name}" has no escalation steps` };
+  if (!(await stepsOf(policyId)).length) return { error: `policy "${policy.name}" has no escalation steps` };
 
-  const existing = q.samePolicy.get(orgId, subjectKind, subjectId, policyId);
+  const existing = await q.samePolicy.get(orgId, subjectKind, subjectId, policyId);
   if (existing) return { alert: existing, already: true };
 
   const sev = Number.isFinite(severity) ? severity : subject.severity;
@@ -418,37 +418,37 @@ function raise(orgId, { subjectKind, subjectId, policyId, urgency, source, messa
 
   // Planned work holds EVERYTHING, exactly as a channel rule does — with the
   // same visible suppression line, so the log answers "why was nobody woken".
-  const win = q.window.get(orgId, at, at);
+  const win = await q.window.get(orgId, at, at);
   if (win) {
-    q.insNotif.run(orgId, at, `policy ${policy.name}`, subject.label, 'alert', 1,
+    await q.insNotif.run(orgId, at, `policy ${policy.name}`, subject.label, 'alert', 1,
       `suppressed: maintenance window "${win.name}"`, null, null);
     return { suppressed: 'maintenance' };
   }
   // Outside support hours a LOW-urgency alert is not delivered. High always goes:
   // support hours answer "is anyone supposed to be reachable", not "may we ring".
   if (u === 'low' && !withinSupportHours(policy, at)) {
-    q.insNotif.run(orgId, at, `policy ${policy.name}`, subject.label, 'alert', 1,
+    await q.insNotif.run(orgId, at, `policy ${policy.name}`, subject.label, 'alert', 1,
       'suppressed: outside support hours (low urgency)', null, null);
     return { suppressed: 'hours' };
   }
 
-  const id = Number(q.insAlert.run(orgId, subjectKind, subjectId, policyId, u,
-    String(source || 'user'), message || null, at).lastInsertRowid);
-  beginStep(q.alert.get(id));
-  return { alert: q.alert.get(id) };
+  const id = Number(await q.insAlert.insert(orgId, subjectKind, subjectId, policyId, u,
+    String(source || 'user'), message || null, at));
+  await beginStep(await q.alert.get(id));
+  return { alert: await q.alert.get(id) };
 }
 
 /** Any alerted person may acknowledge — that is what stops the escalation. */
-function ack(orgId, alertId, userId, how = 'api') {
-  const a = q.alertOfOrg.get(alertId, orgId);
+async function ack(orgId, alertId, userId, how = 'api') {
+  const a = await q.alertOfOrg.get(alertId, orgId);
   if (!a) return { error: 'unknown alert' };
   if (a.status !== 'active') return { error: `alert is ${a.status}`, alert: a };
-  q.setAcked.run(now(), userId, a.id);
-  clock.cancel(a.id);
+  await q.setAcked.run(now(), userId, a.id);
+  await clock.cancel(a.id);
   // The ack is a fact on the SUBJECT, caused by the alert (§3.6) — which is what
   // finally gives `case.unacked` a column to read and Analytics an MTTA.
-  if (a.subject_kind === 'case') require('../lib/cases').acknowledge(orgId, a.subject_id, userId);
-  return { alert: q.alertOfOrg.get(a.id, orgId), how };
+  if (a.subject_kind === 'case') await require('../lib/cases').acknowledge(orgId, a.subject_id, userId);
+  return { alert: await q.alertOfOrg.get(a.id, orgId), how };
 }
 
 /**
@@ -456,14 +456,14 @@ function ack(orgId, alertId, userId, how = 'api') {
  * acknowledged ones are resolved — the escalation was stopped at the ack, this
  * is the bookkeeping that closes the row.
  */
-function onSubjectClosed(orgId, kind, id, reason = 'subject closed') {
-  const live = q.liveForSubject.all(orgId, kind, id);
-  for (const a of live) end(a, a.status === 'acked' ? 'resolved' : 'canceled', reason);
+async function onSubjectClosed(orgId, kind, id, reason = 'subject closed') {
+  const live = await q.liveForSubject.all(orgId, kind, id);
+  for (const a of live) await end(a, a.status === 'acked' ? 'resolved' : 'canceled', reason);
   return live.length;
 }
 
 /** A flow (or a human) saying "handled, stop alerting". */
-function cancelFor(orgId, kind, id, reason = 'canceled') {
+async function cancelFor(orgId, kind, id, reason = 'canceled') {
   return onSubjectClosed(orgId, kind, id, reason);
 }
 
@@ -471,47 +471,55 @@ function cancelFor(orgId, kind, id, reason = 'canceled') {
 // Durable by construction: nothing lives in setTimeout, so a restart loses no
 // escalation. Whatever fell due while the process was down fires on the first
 // sweep after boot.
-function fire(row) {
-  const alert = q.alert.get(row.alert_id);
-  if (!alert || alert.status !== 'active') { clock.finish(row.id); return; }
+async function fire(row) {
+  const alert = await q.alert.get(row.alert_id);
+  if (!alert || alert.status !== 'active') { await clock.finish(row.id); return; }
   // A timer from a rung we have already left is stale by definition.
   if (row.step_position !== alert.step_position || row.round !== alert.round) {
-    clock.finish(row.id);
+    await clock.finish(row.id);
     return;
   }
   if (row.kind === 'step') {
-    clock.finish(row.id);
-    advance(alert);
+    await clock.finish(row.id);
+    await advance(alert);
     return;
   }
   if (row.kind === 'notify') {
-    clock.finish(row.id);
+    await clock.finish(row.id);
     const [userId, methodId] = String(row.ref || '').split('|');
-    const user = q.user.get(userId);
-    const method = q.method.get(methodId, userId);
-    const subject = subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
-    const policy = q.policy.get(alert.policy_id, alert.org_id);
+    const user = await q.user.get(userId);
+    const method = await q.method.get(methodId, userId);
+    const subject = await subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
+    const policy = await q.policy.get(alert.policy_id, alert.org_id);
     if (!user || !method || !subject || !policy) return;
-    const step = stepsOf(policy.id)[alert.step_position];
+    const step = (await stepsOf(policy.id))[alert.step_position];
     if (!step) return;
-    const token = mintToken(alert.id, user.id);
+    const token = await mintToken(alert.id, user.id);
+    // Still not awaited against the sweep: a delayed rule's delivery is a network
+    // call, and the sweeper must go on claiming the rest of the batch.
     sendOne(alert, subject, user, { ...method, step }, token)
       .then((r) => logDelivery(alert, subject, method.kind, true, null, r && r.costMicros))
-      .catch((err) => logDelivery(alert, subject, method.kind, false, String(err.message).slice(0, 300)));
+      .catch((err) => logDelivery(alert, subject, method.kind, false, String(err.message).slice(0, 300)))
+      .catch((err) => console.error('alert delivery log failed:', err && err.message));
     return;
   }
-  clock.finish(row.id);
+  await clock.finish(row.id);
 }
 
-function sweep(at = now()) {
-  for (const row of clock.claimDue(100, at)) {
-    try { fire(row); } catch (err) { console.error('alert timer failed:', err.message); }
+async function sweep(at = now()) {
+  for (const row of await clock.claimDue(100, at)) {
+    try { await fire(row); } catch (err) { console.error('alert timer failed:', err.message); }
   }
 }
 
+// `sweep` is async now, so its rejection can no longer reach a caller: the boot
+// call and the interval each own their own catch, which is what the try/catch
+// inside the loop used to do for the synchronous version.
+const sweepSafely = () => sweep().catch((err) => console.error('alert sweep failed:', err && err.message));
+
 function start() {
-  sweep();                                  // whatever fell due while we were down
-  const iv = setInterval(() => sweep(), SWEEP_MS);
+  sweepSafely();                            // whatever fell due while we were down
+  const iv = setInterval(sweepSafely, SWEEP_MS);
   iv.unref();
 }
 
@@ -519,14 +527,14 @@ function start() {
 // GET renders, POST performs (§7): corporate mail scanners fetch every URL in a
 // message, so an acknowledging GET would let a link-preview bot silence alerts
 // before the human has looked at their phone.
-function tokenInfo(token) {
+async function tokenInfo(token) {
   if (typeof token !== 'string' || !/^[0-9a-f]{16,128}$/i.test(token)) return null;
-  const row = q.tokenByHash.get(sha256(token));
+  const row = await q.tokenByHash.get(sha256(token));
   if (!row) return null;
-  const alert = q.alert.get(row.alert_id);
+  const alert = await q.alert.get(row.alert_id);
   if (!alert) return null;
-  const subject = subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
-  const user = q.user.get(row.user_id);
+  const subject = await subjectOf(alert.org_id, alert.subject_kind, alert.subject_id);
+  const user = await q.user.get(row.user_id);
   return {
     row, alert, subject, user,
     expired: row.expires_at < now(),
@@ -534,19 +542,19 @@ function tokenInfo(token) {
   };
 }
 
-function ackByToken(token) {
-  const info = tokenInfo(token);
+async function ackByToken(token) {
+  const info = await tokenInfo(token);
   if (!info || info.expired || info.used) return null;
-  if (!q.useToken.run(now(), sha256(token)).changes) return null;   // single use, race-safe
-  const r = ack(info.alert.org_id, info.alert.id, info.row.user_id, 'token');
+  if (!(await q.useToken.run(now(), sha256(token))).changes) return null;   // single use, race-safe
+  const r = await ack(info.alert.org_id, info.alert.id, info.row.user_id, 'token');
   return { ...info, result: r };
 }
 
 // ---- read model ------------------------------------------------------------
-function view(a, { includeAttempts = false } = {}) {
-  const subject = subjectOf(a.org_id, a.subject_kind, a.subject_id);
-  const policy = a.policy_id ? q.policy.get(a.policy_id, a.org_id) : null;
-  const acked = a.acked_by ? q.user.get(a.acked_by) : null;
+async function view(a, { includeAttempts = false } = {}) {
+  const subject = await subjectOf(a.org_id, a.subject_kind, a.subject_id);
+  const policy = a.policy_id ? await q.policy.get(a.policy_id, a.org_id) : null;
+  const acked = a.acked_by ? await q.user.get(a.acked_by) : null;
   const out = {
     id: a.id, status: a.status, urgency: a.urgency,
     subjectKind: a.subject_kind, subjectId: a.subject_id,
@@ -561,10 +569,10 @@ function view(a, { includeAttempts = false } = {}) {
     endedAt: a.ended_at, endReason: a.end_reason,
     nextAt: null,
   };
-  const pending = clock.pending(a.id).find((t) => t.kind === 'step');
+  const pending = (await clock.pending(a.id)).find((t) => t.kind === 'step');
   if (pending && a.status === 'active') out.nextAt = pending.resume_at;
   if (includeAttempts) {
-    out.attempts = q.attempts.all(a.id).map((t) => ({
+    out.attempts = (await q.attempts.all(a.id)).map((t) => ({
       user: { id: t.user_id, name: t.name, color: t.color },
       step: t.step_position, round: t.round, via: t.via, notifiedAt: t.notified_at,
     }));
@@ -573,9 +581,10 @@ function view(a, { includeAttempts = false } = {}) {
 }
 
 /** Live alerts for one subject — the badge on a case or an incident. */
-function forSubject(orgId, kind, id) {
-  return db.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = ? AND subject_id = ?
-    ORDER BY created_at DESC LIMIT 20`).all(orgId, kind, id).map((a) => view(a));
+async function forSubject(orgId, kind, id) {
+  const rows = await store.prepare(`SELECT * FROM alerts WHERE org_id = ? AND subject_kind = ? AND subject_id = ?
+    ORDER BY created_at DESC LIMIT 20`).all(orgId, kind, id);
+  return Promise.all(rows.map((a) => view(a)));
 }
 
 module.exports = {

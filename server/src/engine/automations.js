@@ -8,32 +8,39 @@
 //   webhook      — POST a JSON payload to a URL (SSRF-guarded, see runWebhook)
 // Every executed action lands in audit_log as 'automation_run' with
 // user_id NULL (system actor) so the whole feature stays auditable.
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now, isId } = require('../util');
 const sec = require('../security');
 const pipeline = require('./pipeline');
 const { safeFetch } = require('../lib/ssrf');
 const cases = require('../lib/cases');
 
-const getAutomations = db.prepare('SELECT * FROM automations WHERE org_id = ? AND enabled = 1');
-const getFire = db.prepare('SELECT fired_at FROM automation_fires WHERE automation_id = ? AND dedupe_key = ?');
-const setFire = db.prepare(`INSERT INTO automation_fires (automation_id, dedupe_key, fired_at) VALUES (?, ?, ?)
-  ON CONFLICT(automation_id, dedupe_key) DO UPDATE SET fired_at = excluded.fired_at`);
-const findRaiseEvents = db.prepare(`SELECT id, name, device, target, severity FROM events
+const getAutomations = q.prepare('SELECT * FROM automations WHERE org_id = ? AND enabled = 1');
+// Same at-most-once claim as the alert engine's cooldown (engine/alerts.js):
+// the condition lives in the WHERE, so `changes` — not a JS comparison against
+// a row read a moment earlier — decides who runs the actions. Two runners past
+// this gate means the actions run twice, and the actions are not reads: the
+// webhook is POSTed twice to whatever the lead pointed it at, and close_event
+// finishes the raise events and closes their cases a second time, appending a
+// second auto-close note to work somebody may already have reopened.
+const claimFire = q.prepare(`INSERT INTO automation_fires (automation_id, dedupe_key, fired_at) VALUES (?, ?, ?)
+  ON CONFLICT(automation_id, dedupe_key) DO UPDATE SET fired_at = excluded.fired_at
+  WHERE automation_fires.fired_at <= ?`);
+const findRaiseEvents = q.prepare(`SELECT id, name, device, target, severity FROM events
   WHERE org_id = ? AND name = ? AND device = ? AND status = 'active'`);
-const finishEvent = db.prepare(`UPDATE events SET status = 'finished', finished_at = ? WHERE id = ?`);
-const findOpenCase = db.prepare("SELECT id, note FROM cases WHERE event_id = ? AND status != 'closed'");
-const assignCase = db.prepare(`UPDATE cases SET assigned_user_id = ?,
+const finishEvent = q.prepare(`UPDATE events SET status = 'finished', finished_at = ? WHERE id = ?`);
+const findOpenCase = q.prepare("SELECT id, note FROM cases WHERE event_id = ? AND status != 'closed'");
+const assignCase = q.prepare(`UPDATE cases SET assigned_user_id = ?,
   status = CASE WHEN status = 'open' THEN 'assigned' ELSE status END WHERE id = ?`);
-const userExists = db.prepare('SELECT id FROM users WHERE id = ? AND active = 1');
+const userExists = q.prepare('SELECT id FROM users WHERE id = ? AND active = 1');
 
 // per-org cache of parsed automations; invalidated by the CRUD routes
 const cache = new Map();
-function automationsFor(orgId) {
+async function automationsFor(orgId) {
   let list = cache.get(orgId);
   if (list) return list;
   list = [];
-  for (const row of getAutomations.all(orgId)) {
+  for (const row of await getAutomations.all(orgId)) {
     try {
       list.push({ id: row.id, orgId, name: row.name, cooldownM: row.cooldown_m,
         trigger: JSON.parse(row.trigger_json), actions: JSON.parse(row.actions_json) });
@@ -53,17 +60,21 @@ function matches(trigger, ev) {
   return true;
 }
 
-function runCloseEvent(auto, params, ev) {
+async function runCloseEvent(auto, params, ev) {
   const raiseName = String(params.raiseEvent || '');
   if (!raiseName) return { ok: false, detail: 'close_event: no raiseEvent configured' };
   const t = now();
   let closed = 0;
-  for (const raise of findRaiseEvents.all(auto.orgId, raiseName, ev.device)) {
+  for (const raise of await findRaiseEvents.all(auto.orgId, raiseName, ev.device)) {
     if (params.matchTarget && String(raise.target || '') !== String(ev.target || '')) continue;
-    finishEvent.run(t, raise.id);
+    await finishEvent.run(t, raise.id);
     // through lib/cases: the clear event is the good-news path, and it is the
-    // one that MUST also stop an escalation that is still ringing (ONCALL-V1 §5)
-    cases.closeForEvent(auto.orgId, raise.id, {
+    // one that MUST also stop an escalation that is still ringing (ONCALL-V1 §5).
+    // AWAITED, not fired and forgotten: closeForEvent became async with the shim,
+    // and an un-awaited call orders neither the close nor the alert cancel against
+    // this run — and its rejection reaches no catch. `closed` counts loop
+    // iterations, so the detail below looked right either way.
+    await cases.closeForEvent(auto.orgId, raise.id, {
       at: t,
       note: `auto-closed by automation "${auto.name}" — clear event ${ev.name}`
         + (ev.target ? ` (${ev.target})` : ''),
@@ -73,16 +84,16 @@ function runCloseEvent(auto, params, ev) {
   return { ok: true, detail: `close_event ${raiseName} on ${ev.device}: ${closed} event(s) finished` };
 }
 
-function runAssignCase(auto, params, ev) {
+async function runAssignCase(auto, params, ev) {
   // `users.id` is a uuid: `Number(params.userId)` was NaN for every real user,
   // NaN is falsy, and the guard below then reported "unknown user" — an
   // automation that had worked before the uuid migration failing with a message
   // that blamed the configuration (CLAUDE.md § Identity keys).
   const userId = params.userId;
-  if (!isId(userId) || !userExists.get(userId)) return { ok: false, detail: 'assign_case: unknown user' };
-  const c = findOpenCase.get(ev.id);
+  if (!isId(userId) || !(await userExists.get(userId))) return { ok: false, detail: 'assign_case: unknown user' };
+  const c = await findOpenCase.get(ev.id);
   if (!c) return { ok: true, detail: 'assign_case: no open case for event — skipped' };
-  assignCase.run(userId, c.id);
+  await assignCase.run(userId, c.id);
   return { ok: true, detail: `assign_case C-${1000 + c.id} → user ${userId}` };
 }
 
@@ -134,8 +145,8 @@ async function runActions(auto, ev) {
   for (const action of auto.actions) {
     let result;
     try {
-      if (action.type === 'close_event') result = runCloseEvent(auto, action, ev);
-      else if (action.type === 'assign_case') result = runAssignCase(auto, action, ev);
+      if (action.type === 'close_event') result = await runCloseEvent(auto, action, ev);
+      else if (action.type === 'assign_case') result = await runAssignCase(auto, action, ev);
       else if (action.type === 'webhook') result = await runWebhook(auto, action, ev);
       else result = { ok: false, detail: `unknown action type ${String(action.type).slice(0, 40)}` };
     } catch (e) {
@@ -148,20 +159,29 @@ async function runActions(auto, ev) {
   }
 }
 
-function onEvent(ev) {
+async function onEvent(ev) {
   const orgId = ev.org_id || 1;
-  const autos = automationsFor(orgId);
+  const autos = await automationsFor(orgId);
   if (!autos.length) return;
   const t = now();
   for (const auto of autos) {
     if (!matches(auto.trigger, ev)) continue;
-    const fired = getFire.get(auto.id, ev.dedupe_key);
-    if (fired && t - fired.fired_at < auto.cooldownM * 60 * 1000) continue;
-    setFire.run(auto.id, ev.dedupe_key, t);
+    // Claimed before the actions run, unchanged: an action that fails has still
+    // burned the cooldown. The other order — claim on success — would hold the
+    // gate open across the webhook's retries and backoff (up to ~5s), and every
+    // event arriving in that window would run the actions again.
+    const claimed = await claimFire.run(auto.id, ev.dedupe_key, t, t - auto.cooldownM * 60 * 1000);
+    if (claimed.changes !== 1) continue; // another runner already owns this fire
     runActions(auto, ev).catch((e) => console.error('automation error:', e.message));
   }
 }
 
-function start() { pipeline.on('event', onEvent); }
+// `emit()` is a SYNCHRONOUS fan-out (engine/pipeline.js) whose per-listener
+// try/catch cannot see a rejected promise, so the catch is spelled out here and
+// logs exactly what emit's own catch logs. Without it a failed claim or action
+// becomes an unhandledRejection and, under NODE_ENV=test, takes the process down.
+function start() {
+  pipeline.on('event', (ev) => { onEvent(ev).catch((e) => console.error('listener error', e)); });
+}
 
 module.exports = { start, invalidate };

@@ -19,7 +19,7 @@
 //   * custom CSS lands in that same <style> block, so it may not contain a
 //     closing tag — see sanitizeCss.
 //   * text lands in the document body and is escaped by the caller (public.js).
-const { db } = require('../db');
+const q = require('../db/shim');
 const { now } = require('../util');
 const pages = require('./status-pages');
 
@@ -122,40 +122,40 @@ const THEMES = {
   },
 };
 
-const assetMetaStmt = db.prepare('SELECT mime, updated_at FROM status_assets WHERE page_id = ? AND kind = ?');
-const assetStmt = db.prepare('SELECT mime, bytes, updated_at FROM status_assets WHERE page_id = ? AND kind = ?');
-const upsertStmt = db.prepare(`INSERT INTO status_assets (page_id, kind, mime, bytes, updated_at)
+const assetMetaStmt = q.prepare('SELECT mime, updated_at FROM status_assets WHERE page_id = ? AND kind = ?');
+const assetStmt = q.prepare('SELECT mime, bytes, updated_at FROM status_assets WHERE page_id = ? AND kind = ?');
+const upsertStmt = q.prepare(`INSERT INTO status_assets (page_id, kind, mime, bytes, updated_at)
   VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(page_id, kind) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes,
     updated_at = excluded.updated_at`);
-const delStmt = db.prepare('DELETE FROM status_assets WHERE page_id = ? AND kind = ?');
+const delStmt = q.prepare('DELETE FROM status_assets WHERE page_id = ? AND kind = ?');
 
-function getAsset(pageId, kind) { return assetStmt.get(pageId, kind) || null; }
-function assetMeta(pageId, kind) { return assetMetaStmt.get(pageId, kind) || null; }
+async function getAsset(pageId, kind) { return (await assetStmt.get(pageId, kind)) || null; }
+async function assetMeta(pageId, kind) { return (await assetMetaStmt.get(pageId, kind)) || null; }
 
 // Returns {ok:true} or {ok:false, error} — the caller turns it into a 400.
-function putAsset(pageId, kind, buf) {
+async function putAsset(pageId, kind, buf) {
   if (!['logo', 'favicon'].includes(kind)) return { ok: false, error: 'unknown asset kind' };
   if (!Buffer.isBuffer(buf) || buf.length === 0) return { ok: false, error: 'empty upload' };
   if (buf.length > MAX_ASSET_BYTES) return { ok: false, error: 'image larger than 512 KB' };
   const mime = sniffMime(buf);
   if (!mime) return { ok: false, error: 'unsupported image format — use PNG, JPEG, WebP or ICO' };
-  upsertStmt.run(pageId, kind, mime, buf, now());
+  await upsertStmt.run(pageId, kind, mime, buf, now());
   return { ok: true, mime, bytes: buf.length };
 }
 
-function deleteAsset(pageId, kind) { delStmt.run(pageId, kind); }
+async function deleteAsset(pageId, kind) { await delStmt.run(pageId, kind); }
 
 // Everything the renderer needs, already validated. `logoUrl`/`faviconUrl` are
 // URL paths (or ''), not bytes — the page links to them, it does not inline
 // them. `base` is the page's own path prefix, which is '' on a custom domain.
-function brandingFor(page, base) {
+async function brandingFor(page, base) {
   const themeKey = page.theme === 'light' ? 'light' : 'dark';
   const accent = accentOf(page);
-  const logo = assetMeta(page.id, 'logo');
+  const logo = await assetMeta(page.id, 'logo');
   // A favicon nobody uploaded falls back to the logo — same brand, and it saves
   // every customer a second upload of the same file at a different size.
-  const favicon = assetMeta(page.id, 'favicon') || logo;
+  const favicon = (await assetMeta(page.id, 'favicon')) || logo;
   const stamp = (a) => (a ? `?v=${a.updated_at}` : '');
   return {
     theme: themeKey,
@@ -169,8 +169,8 @@ function brandingFor(page, base) {
     description: String(page.description || '').slice(0, 300),
     supportUrl: safeUrl(page.support_url),
     legalUrl: safeUrl(page.legal_url),
-    hidePowered: pages.whitelabel(page),
-    customCss: pages.customCss(page),
+    hidePowered: await pages.whitelabel(page),
+    customCss: await pages.customCss(page),
   };
 }
 

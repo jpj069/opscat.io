@@ -46,7 +46,13 @@ edition with `OPSCAT_EDITION=community` (default).
 
 | Path | What |
 |------|------|
-| `server/` | Express 4 API + engines (pipeline, alerts, synthetics, SNMP, retention) — SQLite (WAL) storage |
+| `server/` | Express 5 API + engines (pipeline, alerts, synthetics, SNMP, retention) — PostgreSQL 16 storage, the only engine |
+
+The whole stack — API, engines, PostgreSQL, Caddy, DNS resolver — runs on a
+2-vCPU / 4 GB VM and idles under 350 MB. There is no search cluster, no message
+broker and no JVM: logs, events, cases, synthetics and incidents all live in one
+PostgreSQL. Measured figures, each with the conditions that make it true, are in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 | `web/` | React + Vite + TypeScript UI, built into the server image |
 | `sdk/js/` | `@opscat/sdk` — dependency-free logging SDK (Node ≥18 + browsers) |
 | `agent/` | `opscat-agent.js` — dependency-free server agent + probe mode + installer |

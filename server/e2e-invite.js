@@ -57,7 +57,13 @@ global.fetch = (url, opts) => {
 
 require('./src/index.js'); // boots the app on :3119
 
-const { db, addMembership } = require('./src/db');
+const { addMembership, schemaVersion } = require('./src/db');
+// Fixtures and read-back go through the SHIM, so they land in the database
+// `run-e2e.js` handed this process in DATABASE_URL — the same one the code under
+// test reads. A connection the harness opened for itself would be a different
+// session, and a fixture written there surfaces as a foreign-key violation
+// several calls later, pointing at the wrong thing entirely.
+const q = require('./src/db/shim');
 const { hashPassword, now, sha256, newId, DEFAULT_ORG_ID } = require('./src/util');
 const config = require('./src/config');
 
@@ -65,17 +71,17 @@ const BASE = 'http://127.0.0.1:3119';
 const PASS = 'e2e-user-password-1';
 const lastMail = () => MAILS[MAILS.length - 1];
 const tokenIn = (mail) => (mail.html.match(/\/app\/login\?token=([A-Za-z0-9_-]+)/) || [])[1];
-const userRow = (email) => db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-const tokensFor = (id) => db.prepare('SELECT * FROM login_tokens WHERE user_id = ?').all(id);
+const userRow = (email) => q.prepare('SELECT * FROM users WHERE email = ?').get(email);
+const tokensFor = (id) => q.prepare('SELECT * FROM login_tokens WHERE user_id = ?').all(id);
 
-function mkUser(email, role, orgId) {
+async function mkUser(email, role, orgId) {
   const { salt, hash } = hashPassword(PASS);
   const uid = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, is_super_admin, pass_salt, pass_hash,
       color, active, must_change_password, created_at)
     VALUES (?, ?, ?, ?, ?, 0, ?, ?, '#388bfd', 1, 0, ?)`)
     .run(uid, orgId, email, email.split('@')[0], role, salt, hash, now());
-  addMembership(uid, orgId, role);
+  await addMembership(uid, orgId, role);
   return { id: uid, email };
 }
 
@@ -130,9 +136,16 @@ async function main() {
   chk('server boots and answers /api/health', await waitForServer());
 
   // ── migration ─────────────────────────────────────────────────────────────
-  const cols = db.pragma('table_info(login_tokens)').map((c) => c.name);
-  chk('login_tokens carries a purpose column', cols.includes('purpose'), cols.join(','));
-  chk('user_version is at least 13', db.pragma('user_version', { simple: true }) >= 13);
+  /* Asked of the SCHEMA rather than of `PRAGMA table_info`, which exists on one
+   * engine only: selecting the column succeeds where it exists and raises where
+   * it does not, on both. Same for the version — `schemaVersion()` is db.js's
+   * single accessor, reading `user_version` on SQLite and the
+   * `schema_migrations` row on Postgres, where the schema is created fresh at
+   * v-latest and there is no pragma to read. */
+  const purposeCol = await q.prepare('SELECT purpose FROM login_tokens LIMIT 1').all()
+    .then(() => true, (e) => String(e.message));
+  chk('login_tokens carries a purpose column', purposeCol === true, String(purposeCol));
+  chk('user_version is at least 13', await schemaVersion() >= 13, String(await schemaVersion()));
 
   const admin = await login('seed-admin@e2e.test', 'seed-admin-password-1');
   chk('seeded admin can sign in', admin.status === 200 && admin.user.role === 'admin', String(admin.status));
@@ -145,12 +158,12 @@ async function main() {
   chk('invite reports invited, not a password',
     inv.j.invited === true && inv.j.initialPassword === undefined, JSON.stringify(inv.j));
 
-  const nb = userRow('newbie@e2e.test');
+  const nb = await userRow('newbie@e2e.test');
   chk('invited account has NO password', nb.pass_hash === '' && nb.pass_salt === '');
   chk('invited account is not forced to change one', nb.must_change_password === 0);
   chk('invited account is active', nb.active === 1);
 
-  const toks = tokensFor(nb.id);
+  const toks = await tokensFor(nb.id);
   chk('exactly one activation token exists', toks.length === 1, String(toks.length));
   chk('the token has purpose invite', toks[0] && toks[0].purpose === 'invite');
   const ttlDays = toks[0] ? (toks[0].expires_at - toks[0].created_at) / 86400000 : 0;
@@ -184,9 +197,9 @@ async function main() {
   chk('the activation link is single-use', replay.status === 401, String(replay.status));
 
   chk('the acceptance is audited',
-    !!db.prepare("SELECT 1 FROM audit_log WHERE action = 'invite_accepted' AND user_id = ?").get(nb.id));
+    !!await q.prepare("SELECT 1 FROM audit_log WHERE action = 'invite_accepted' AND user_id = ?").get(nb.id));
   chk('the invitation itself is audited',
-    !!db.prepare("SELECT 1 FROM audit_log WHERE action = 'user_invited'").get());
+    !!await q.prepare("SELECT 1 FROM audit_log WHERE action = 'user_invited'").get());
 
   // ── 3. setting the first password needs no current one ────────────────────
   const NEW = 'chosen-by-the-user-1';
@@ -210,10 +223,10 @@ async function main() {
   const inv2 = await call(admin, 'POST', '/api/admin/users',
     { email: 'pending@e2e.test', name: 'Pen Ding', role: 'analyst' });
   chk('second invitation sent', inv2.j.invited === true);
-  const pend = userRow('pending@e2e.test');
-  const inviteHash = tokensFor(pend.id)[0].token_hash;
+  const pend = await userRow('pending@e2e.test');
+  const inviteHash = (await tokensFor(pend.id))[0].token_hash;
   await anon('POST', '/api/auth/magic-link', { email: 'pending@e2e.test' });
-  const stillThere = tokensFor(pend.id);
+  const stillThere = await tokensFor(pend.id);
   chk('requesting a magic link keeps the pending invitation',
     stillThere.some((t) => t.token_hash === inviteHash), JSON.stringify(stillThere.map((t) => t.purpose)));
   chk('and adds a login token beside it',
@@ -227,7 +240,7 @@ async function main() {
   chk('a failed send still answers 200', broke.status === 200, String(broke.status));
   chk('a failed send returns a one-time password', typeof broke.j.initialPassword === 'string');
   chk('a failed send says so', broke.j.mailFailed === true);
-  const nm = userRow('nomail@e2e.test');
+  const nm = await userRow('nomail@e2e.test');
   chk('the fallback account must change its password', nm.must_change_password === 1);
   const nmLogin = await login('nomail@e2e.test', broke.j.initialPassword);
   chk('the fallback password works', nmLogin.status === 200, String(nmLogin.status));
@@ -241,9 +254,9 @@ async function main() {
   chk('without a transport an invite returns a password',
     typeof offline.j.initialPassword === 'string' && offline.j.invited === undefined,
     JSON.stringify(offline.j));
-  const off = userRow('offline@e2e.test');
+  const off = await userRow('offline@e2e.test');
   chk('that account is forced to change it', off.must_change_password === 1);
-  chk('and no activation token was minted', tokensFor(off.id).length === 0);
+  chk('and no activation token was minted', (await tokensFor(off.id)).length === 0);
 
   // reset without a transport keeps the old behaviour too
   const offReset = await call(admin, 'PATCH', `/api/admin/users/${off.id}`, { resetPassword: true });
@@ -252,12 +265,12 @@ async function main() {
   config.resendApiKey = keepKey;
 
   // ── 7. reset by link ──────────────────────────────────────────────────────
-  const victim = mkUser('victim@e2e.test', 'analyst', DEFAULT_ORG_ID);
+  const victim = await mkUser('victim@e2e.test', 'analyst', DEFAULT_ORG_ID);
   const V = await login('victim@e2e.test');
   chk('the user has a session before the reset', V.status === 200);
   const reset = await call(admin, 'PATCH', `/api/admin/users/${victim.id}`, { resetPassword: true });
   chk('a reset with mail sends a link', reset.j.invited === true, JSON.stringify(reset.j));
-  const vr = userRow('victim@e2e.test');
+  const vr = await userRow('victim@e2e.test');
   chk('the reset clears the password', vr.pass_hash === '' && vr.must_change_password === 0);
   const oldPw = await login('victim@e2e.test', PASS);
   chk('the old password stops working', oldPw.status === 401, String(oldPw.status));
@@ -265,7 +278,7 @@ async function main() {
   chk('the reset signed every session out', vSession.status === 401, String(vSession.status));
   chk('the reset mail is a reset, not an invitation', /new .*password/i.test(lastMail().subject),
     lastMail().subject);
-  const vTok = tokensFor(victim.id);
+  const vTok = await tokensFor(victim.id);
   chk('a 7-day activation token was minted for the reset',
     vTok.length === 1 && vTok[0].purpose === 'invite');
   const vBack = await anon('POST', '/api/auth/magic-login', { token: tokenIn(lastMail()) });
@@ -278,9 +291,9 @@ async function main() {
     { email: 'manual@e2e.test', name: 'Man Ual', role: 'analyst', manual: true });
   chk('manual:true returns a one-time password even with mail configured',
     typeof man.j.initialPassword === 'string' && man.j.invited === undefined, JSON.stringify(man.j));
-  const mu = userRow('manual@e2e.test');
+  const mu = await userRow('manual@e2e.test');
   chk('the manual account is forced to change it', mu.must_change_password === 1);
-  chk('no activation token was minted for it', tokensFor(mu.id).length === 0);
+  chk('no activation token was minted for it', (await tokensFor(mu.id)).length === 0);
   chk('and no mail went out', lastMail().to[0] !== 'manual@e2e.test');
   chk('the manual password works', (await login('manual@e2e.test', man.j.initialPassword)).status === 200);
   // anything other than the literal true keeps the safe path
@@ -316,17 +329,17 @@ async function main() {
   chk('creating an org answers 200', org.status === 200, JSON.stringify(org.j));
   chk('the owner is invited, not handed a password',
     org.j.invited === true && org.j.initialPassword === undefined, JSON.stringify(org.j));
-  const owner = userRow('owner@acme.test');
+  const owner = await userRow('owner@acme.test');
   chk('the owner has no password', owner.pass_hash === '');
   chk('and is not forced to change one', owner.must_change_password === 0);
-  const oTok = tokensFor(owner.id);
+  const oTok = await tokensFor(owner.id);
   chk('an activation token was minted for the owner',
     oTok.length === 1 && oTok[0].purpose === 'invite');
   chk('the mail names the organization', /Acme Inc/.test(lastMail().subject), lastMail().subject);
   chk('the activation link signs the owner in',
     (await anon('POST', '/api/auth/magic-login', { token: tokenIn(lastMail()) })).status === 200);
 
-  const newOrg = db.prepare("SELECT * FROM organizations WHERE slug LIKE 'acme%'").get();
+  const newOrg = await q.prepare("SELECT * FROM organizations WHERE slug LIKE 'acme%'").get();
   chk('the new org is on the free plan and active',
     newOrg.plan === 'free' && newOrg.status === 'active');
   // `free` is forever — nothing ever read trial_ends_at to expire anything, and the
@@ -340,48 +353,101 @@ async function main() {
   chk('an existing account can own a new org', attach.status === 200 && attach.j.attached === true,
     JSON.stringify(attach.j));
   chk('it is the SAME user, not a second account',
-    attach.j.ownerId === userRow('newbie@e2e.test').id);
-  chk('their password is left untouched', userRow('newbie@e2e.test').pass_hash !== '');
+    attach.j.ownerId === (await userRow('newbie@e2e.test')).id);
+  chk('their password is left untouched', (await userRow('newbie@e2e.test')).pass_hash !== '');
   chk('and they got no invitation mail', lastMail().to[0] !== 'newbie@e2e.test');
   chk('they hold an admin membership in the new org',
-    db.prepare("SELECT role FROM memberships WHERE user_id = ? AND org_id = ?")
-      .get(attach.j.ownerId, attach.j.orgId)?.role === 'admin');
+    (await q.prepare("SELECT role FROM memberships WHERE user_id = ? AND org_id = ?")
+      .get(attach.j.ownerId, attach.j.orgId))?.role === 'admin');
 
   // the manual escape hatch, and the must_change guard that used to be missing
   const orgMan = await call(sa, 'POST', '/api/superadmin/orgs',
     { orgName: 'Manual Ltd', email: 'owner2@acme.test', name: 'Man Ual', plan: 'free', manual: true });
   chk('manual:true hands over a one-time password',
     typeof orgMan.j.initialPassword === 'string' && orgMan.j.invited === undefined);
-  chk('and THAT owner must change it', userRow('owner2@acme.test').must_change_password === 1);
+  chk('and THAT owner must change it',
+    (await userRow('owner2@acme.test')).must_change_password === 1);
   const oIn = await login('owner2@acme.test', orgMan.j.initialPassword);
   chk('the handed-over password works', oIn.status === 200, String(oIn.status));
   chk('and the browser is told to force a change', oIn.user.mustChangePassword === true);
 
+  /* ── 11b. the org-creation TRANSACTION actually rolls back ────────────────
+   *
+   * `createOrganizationWithOwner` writes the org, the owner, an admin
+   * membership, four org settings and a starter component inside ONE
+   * `q.withTx`. The membership and the settings go through db.js's spine
+   * helpers, and those are the interesting ones: unawaited, their writes leave
+   * the transaction. On SQLite they would still land (one connection), so
+   * nothing looks wrong here — but under node-postgres they run on a different
+   * pooled client and commit independently of the org and owner rows, which
+   * means a failed signup leaves a member of an organisation that does not
+   * exist. The plan calls this out as the one hole that appears at the DRIVER
+   * SWAP rather than at conversion time; this check is what will notice.
+   *
+   * The failure is injected at the LAST write in the body — a trigger that
+   * aborts the starter-component insert — so everything under test has already
+   * been written when the rollback happens. Anything else would prove nothing.
+   */
+  const countRows = async (t) => (await q.prepare(`SELECT COUNT(*) c FROM ${t}`).get()).c;
+  const beforeRollback = { m: await countRows('memberships'), s: await countRows('org_settings'),
+    o: await countRows('organizations'), u: await countRows('users') };
+  /* The injected failure: a plpgsql function behind a FOR EACH ROW trigger,
+   * which aborts the LAST write inside ee/accounts.js's withTx — after the
+   * membership and the four org settings have gone in. */
+  await q.run("CREATE FUNCTION e2e_rollback_probe() RETURNS trigger AS $$ "
+    + "BEGIN RAISE EXCEPTION 'e2e injected failure'; END; $$ LANGUAGE plpgsql");
+  await q.run('CREATE TRIGGER e2e_rollback_probe BEFORE INSERT ON components '
+    + 'FOR EACH ROW EXECUTE FUNCTION e2e_rollback_probe()');
+  const doomed = await call(sa, 'POST', '/api/superadmin/orgs',
+    { orgName: 'Doomed GmbH', email: 'doomed@acme.test', name: 'Doo Med', plan: 'free' });
+  await q.run('DROP TRIGGER e2e_rollback_probe ON components');
+  await q.run('DROP FUNCTION e2e_rollback_probe()');
+  chk('a failure inside the org-creation transaction is reported, not swallowed',
+    doomed.status === 500, `got ${doomed.status}`);
+  const ghostOrg = await q.prepare("SELECT id FROM organizations WHERE name = 'Doomed GmbH'").get();
+  chk('…and the organization row is gone', !ghostOrg, JSON.stringify(ghostOrg));
+  chk('…and the owner account with it', !await userRow('doomed@acme.test'));
+  const ghostMem = (await q.prepare(`SELECT COUNT(*) c FROM memberships m
+    LEFT JOIN organizations o ON o.id = m.org_id WHERE o.id IS NULL`).get()).c;
+  chk('…and NO membership points at an organization that does not exist',
+    ghostMem === 0, `${ghostMem} orphaned membership(s)`);
+  const ghostSettings = (await q.prepare(`SELECT COUNT(*) c FROM org_settings s
+    LEFT JOIN organizations o ON o.id = s.org_id WHERE o.id IS NULL`).get()).c;
+  chk('…and no org settings either', ghostSettings === 0, `${ghostSettings} orphaned setting(s)`);
+  // Row COUNTS, not only orphans: a rollback that half-worked can leave the
+  // membership and the four settings attached to an organization that survived,
+  // which no orphan query would ever see.
+  const afterRollback = { m: await countRows('memberships'), s: await countRows('org_settings'),
+    o: await countRows('organizations'), u: await countRows('users') };
+  chk('…and nothing at all was written — every table is exactly where it was',
+    JSON.stringify(afterRollback) === JSON.stringify(beforeRollback),
+    `${JSON.stringify(beforeRollback)} -> ${JSON.stringify(afterRollback)}`);
+
   // ── 12. gating and the multi-org path are untouched ───────────────────────
-  const grunt = mkUser('grunt@e2e.test', 'analyst', DEFAULT_ORG_ID);
+  const grunt = await mkUser('grunt@e2e.test', 'analyst', DEFAULT_ORG_ID);
   const G = await login('grunt@e2e.test');
   const denied = await call(G, 'POST', '/api/admin/users',
     { email: 'sneak@e2e.test', name: 'Sneak', role: 'admin' });
   chk('a non-admin cannot invite', denied.status === 403, String(denied.status));
-  chk('and no account was created', !userRow('sneak@e2e.test'));
+  chk('and no account was created', !await userRow('sneak@e2e.test'));
 
   // no hard-coded id: earlier sections now create organizations of their own, and a
   // fixture that pins a primary key breaks the moment something is added above it.
   const otherOrgId = newId();
-  db.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+  await q.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
     VALUES (?, 'Other Org', 'other', 'enterprise', 'active', ?)`).run(otherOrgId, now());
-  const outsider = mkUser('outsider@e2e.test', 'admin', otherOrgId);
+  const outsider = await mkUser('outsider@e2e.test', 'admin', otherOrgId);
   const addExisting = await call(admin, 'POST', '/api/admin/users',
     { email: 'outsider@e2e.test', name: 'Out Sider', role: 'lead' });
   chk('an existing account is attached to the org, not re-created',
     addExisting.j.added === true && addExisting.j.invited === undefined, JSON.stringify(addExisting.j));
-  chk('its password is left alone', userRow('outsider@e2e.test').pass_hash !== '');
+  chk('its password is left alone', (await userRow('outsider@e2e.test')).pass_hash !== '');
   chk('and it got no invitation mail', lastMail().to[0] !== 'outsider@e2e.test');
   chk('adding the same account twice is refused',
     (await call(admin, 'POST', '/api/admin/users',
       { email: 'outsider@e2e.test', name: 'Out Sider', role: 'lead' })).status === 409);
   chk('outsider still belongs to its own org',
-    db.prepare('SELECT 1 FROM memberships WHERE user_id = ? AND org_id = ?')
+    await q.prepare('SELECT 1 FROM memberships WHERE user_id = ? AND org_id = ?')
       .get(outsider.id, otherOrgId) !== undefined);
 
   // ── summary ───────────────────────────────────────────────────────────────

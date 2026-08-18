@@ -23,7 +23,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
                         └───────────────┬────────────────────────────┘
                                         │
                         ┌───────────────▼───────────────┐
-                        │ SQLite (WAL) on docker volume │
+                        │ PostgreSQL 16 (docker volume) │
                         └───────────────────────────────┘
 
  Feeders:  @opscat/sdk (apps) ── HTTPS ──► /v1/ingest/logs
@@ -37,7 +37,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 | Decision | Rationale |
 |---|---|
 | Express 5 + Node 22 | Tiny footprint on the 2-vCPU VPS, and async handlers forward rejections to the error middleware on their own. Upgraded from 4 in one line: path-to-regexp v8 needs NAMED wildcards, so the SPA catch-all is `/app/*splat`, not `/app/*` — a bare `*` throws at registration. Nothing else in the codebase used the removed APIs (`req.param()`, `app.del()`, `res.sendfile()`, `res.json(obj, status)`) or mutated `req.query`, which is a getter now. |
-| SQLite (better-sqlite3, WAL) | Zero-ops, extremely fast for this write pattern (batched transactional inserts). One file → trivial backup. The storage layer is isolated in `server/src/db.js` + plain SQL, so a later Postgres/ClickHouse move is mechanical. |
+| PostgreSQL 16 (node-postgres) | The only engine, in both editions (decision D6). Every statement in `server/src` goes through the async shim (`src/db/shim.js`); `src/schema.sql` is PostgreSQL DDL and is the only description of the shape. It replaced SQLite, which was genuinely good at this write pattern and gave a one-file backup — what it cost was a second SQL dialect over ~770 statements, with `int8`-as-string, `CAST` disagreements, case-sensitivity of `LIKE`, `lastInsertRowid` and a `withTx` serialisation lock all differing per engine, and no product benefit on the other side. See `docs/POSTGRES-MIGRATION-PLAN.md`. |
 | In-process schedulers | No queue infra needed at this load. Engine modules are already isolated so they can be split into separate probe/worker processes when scaling out. |
 | API-key ingest, session UI auth | Open "drop your logs here" endpoints stay decoupled from human auth. Keys are hashed (SHA-256) — plaintext is shown once at creation. |
 | SSE (not WebSocket) | One-directional live streams (logs/events) through Caddy with zero extra dependencies. |
@@ -163,8 +163,8 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    third is the one that changes behaviour: MTTA (over acknowledged cases ONLY — the
    unacknowledged ones are reported beside it rather than averaged in as zero), the
    escalation and "reached nobody" rates, **out-of-hours load per person**, and alerts
-   per schedule. Out-of-hours cannot be asked in SQL — it is a question about local time
-   and SQLite has no timezone database — so `alert_attempts` are folded in JS through the
+   per schedule. Out-of-hours is folded in JS rather than in SQL: it is a question about
+   each person's OWN local time, so `alert_attempts` go through the
    same `localParts` the rotation engine uses, and the response says which zone each
    person was counted in and where it came from. A rotation can look perfectly fair on a
    calendar and still land every single night on one name.
@@ -332,8 +332,8 @@ a listing raises its own event (`reputation_listed`) rather than
   itself, otherwise `mail4.example.com [1.2.3.4]`), so "the domain is on DBL" and "its
   mail server is on ZEN" stay separate facts with separate lifecycles — including on the
   same zone at the same time, which is why the unique index spans
-  `(asset_id, subject, zone)`. `subject` is `NOT NULL DEFAULT ''` on purpose: SQLite
-  treats NULLs as distinct in a unique index, so a nullable column would quietly permit
+  `(asset_id, subject, zone)`. `subject` is `NOT NULL DEFAULT ''` on purpose: NULLs
+  are DISTINCT in a unique index, so a nullable column would quietly permit
   several open episodes for the asset itself. Capped at 3 distinct addresses and
   de-duplicated (several MX names sharing one address is the norm) — each one is a full
   ~31-zone lookup, so an unbounded fan-out would be ~250 queries against lists that
@@ -449,8 +449,8 @@ Five decisions in these modules are load-bearing:
   per-person auth — stated plainly here because the honest scope is smaller than
   the words "private page" suggest.
 
-Assets are blobs in `status_assets` rather than files on disk — the SQLite file is
-the only volume the Docker deployment persists — and are served same-origin, so
+Assets are blobs in `status_assets` rather than files on disk — the database is
+the only store the Docker deployment persists — and are served same-origin, so
 they need no CSP `img-src` entry. They 404 while the page is unpublished: an
 unpublished status page must not leak its org's logo either.
 
@@ -521,13 +521,55 @@ Page admin screen.
   from the membership-based switcher normal users get).
 - Public status pages are per-org: `/status` (default org) and `/status/:slug`.
 
+## Boot sequence
+
+`src/index.js` builds the Express app at require time and then runs an **async
+`boot()`**, in this order, with `app.listen` LAST:
+
+1. `db.init()` — applies `src/schema.sql`, which is idempotent (`CREATE … IF NOT
+   EXISTS` throughout), so it creates a fresh install and leaves an existing database
+   alone; then any migration file in `src/migrations/` numbered above the version the
+   database carries; then the settings cache and `app_secret`.
+2. `seed()` — default organization, first super-admin, default components, checks and
+   alert rule. Idempotent.
+3. The engines' `start()` timers.
+4. `app.listen`.
+
+**`/api/health` answering means the app is fully booted**, not merely that the port is
+open — the e2e harnesses' `waitForServer()` is a stricter gate than it was.
+
+### Changing the schema
+
+`schema.sql` describes the databases that do not exist yet; a numbered file in
+`src/migrations/` (`026-add-cases-owner.sql`, plain PostgreSQL, no wrapper) moves the
+ones that do. Each runs in its own transaction and is recorded in `schema_migrations`;
+a FRESH database is stamped at the highest number and runs none of them. Migrations are
+one-way — a rollback of a schema change on a live database is a restore, not a script
+nobody has run.
+
+**Both are written in the same commit.** They describe different populations, so
+nothing can detect a half-done change from one side: edit only the migration and every
+fresh install is missing the column, edit only `schema.sql` and production never gets
+it. `e2e-schema.js` guards what is mechanically checkable — that `schema.sql` applies
+to an empty database and applies AGAIN (boot runs it every time, so a statement without
+`IF NOT EXISTS` works exactly once and then kills every restart), that the numbering
+rules hold, and that the loader actually applies and records a pending migration.
+
+This replaced a 25-step migration ladder in `db.js` built from `PRAGMA user_version`
+and table rebuilds through `sqlite_master`. It was SQLite's history and was never run
+on Postgres, so it went with SQLite; `schema_migrations` keeps the number it recorded
+(25) as the baseline, which is what makes an existing production database
+indistinguishable from a fresh one.
+
 ## Scaling / HA path (documented now, executed when load demands)
 
 Current: 1 VPS ≈ everything. The seams are already cut so each step below is isolated:
 
-1. **Vertical**: bigger VPS; SQLite WAL handles tens of GB and thousands of writes/s.
-2. **Split storage**: swap `db.js` for Postgres (metadata) + ClickHouse (logs/metrics time series).
-   All SQL lives in the storage layer; ingest/report queries are the only hot spots.
+1. **Vertical**: bigger VPS; PostgreSQL handles this workload with room to spare — see
+   the measurements in `docs/POSTGRES-MIGRATION-PLAN.md` § 0a.
+2. **Split storage**: ClickHouse for the high-volume time series (logs, metrics,
+   synthetic results), PostgreSQL keeping the metadata. All SQL lives in the storage
+   layer; ingest/report queries are the only hot spots.
 3. **Split roles**: run engines (`synthetics`, `snmp`, `alerts`) as separate worker
    processes/containers (`node src/worker.js synthetics` — modules take no HTTP deps).
 4. **Scale ingest horizontally**: stateless API nodes behind LB (Caddy/HAProxy),
@@ -1073,12 +1115,14 @@ the tenant that owns them and are joined against constantly, where 1–2 bytes b
 
 Four consequences worth knowing before touching this code:
 
-- **There is no `lastInsertRowid`.** SQLite only reports one for INTEGER keys, so
-  an insert mints its id first (`const id = newId()`) and names it. That also means
-  the caller knows the id before the write, which several call sites wanted anyway.
-- **`NOT NULL` is not redundant on those two keys.** SQLite keeps a legacy quirk
-  where only an INTEGER primary key implies it — a TEXT primary key accepts NULL,
-  and the failure then surfaces as a foreign-key error somewhere else entirely.
+- **There is no `lastInsertRowid`.** The shim refuses it outright; an insert mints
+  its id first (`const id = newId()`) and names it, which also means the caller knows
+  the id before the write — several call sites wanted that anyway. Use `stmt.insert()`
+  (`RETURNING id`) for the integer-keyed tables.
+- **`NOT NULL` on those two keys is documentation, not enforcement.** It is redundant
+  under a PRIMARY KEY on this engine, and it is kept because it says what is meant. It
+  was load-bearing on SQLite, which accepts NULL in a TEXT primary key and surfaces the
+  failure as a foreign-key error somewhere else entirely.
 - **The default organization has a FIXED id**, `DEFAULT_ORG_ID` in `util.js`
   (`00000000-0000-4000-8000-000000000001`). A dozen platform paths mean "the org" —
   the single-tenant community edition, the vendor grid, the default status page,
@@ -1090,13 +1134,11 @@ Four consequences worth knowing before touching this code:
   not count, so ordering by them is arbitrary; the platform org list orders by
   `created_at`.
 
-Migration 21 does the conversion generically rather than by hand: SQLite cannot
-alter a column's type, so each affected table is rebuilt, and the new CREATE
-statement is derived from the table's OWN stored SQL with only the column type
-rewritten — every CHECK, DEFAULT and foreign key comes along untouched, and the
-indexes are replayed from `sqlite_master`. Old integer ids are mapped through temp
-tables, so the copy is one SQL join per table. Verified by `e2e-reputation.js`,
-which builds a v10-era database by hand and migrates it all the way through.
+The conversion from integer keys happened in migration 21, on SQLite, and both the
+migration and the harness that verified it (`e2e-reputation.js` built a v10-era
+database by hand and migrated it through) went with the ladder when SQLite was
+removed. `schema.sql` declares these columns as `UUID` directly; there is no
+pre-uuid database left anywhere to convert.
 
 ## Log retention (per org, ceiling per plan)
 

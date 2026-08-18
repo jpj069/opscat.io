@@ -7,21 +7,29 @@
 // The Microsoft channel is `msteams` everywhere in code and storage; "Teams"
 // alone is ambiguous now that On-Call has a Team object of its own
 // (docs/ONCALL-V1.md §2). The UI label is still "Microsoft Teams".
-const { db, getOrgSetting } = require('../db');
+const { getOrgSetting } = require('../db');
+const store = require('../db/shim');
 const config = require('../config');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const mailer = require('../mailer');
 const pipeline = require('./pipeline');
 const { safeFetch } = require('../lib/ssrf');
 
-const getRules = db.prepare('SELECT * FROM alert_rules WHERE org_id = ? AND enabled = 1');
-const getFire = db.prepare('SELECT fired_at FROM rule_fires WHERE rule_id = ? AND dedupe_key = ?');
-const setFire = db.prepare(`INSERT INTO rule_fires (rule_id, dedupe_key, fired_at) VALUES (?, ?, ?)
-  ON CONFLICT(rule_id, dedupe_key) DO UPDATE SET fired_at = excluded.fired_at`);
-const insNotif = db.prepare(`INSERT INTO notifications
+const getRules = store.prepare('SELECT * FROM alert_rules WHERE org_id = ? AND enabled = 1');
+// The cooldown is CLAIMED in one statement — insert the fire, or move fired_at
+// forward only if the previous one is already older than the cooldown — and
+// `changes` is the decision. Read the row, compare in JS, then write, and two
+// dispatchers of the same event both see the same fired_at, both pass, and the
+// rule sends the page twice: two Slack messages, two Telegram messages, two
+// POSTs to a customer's webhook. A page that is already out cannot be recalled,
+// so this gate has to be the database's, not JS's.
+const claimFire = store.prepare(`INSERT INTO rule_fires (rule_id, dedupe_key, fired_at) VALUES (?, ?, ?)
+  ON CONFLICT(rule_id, dedupe_key) DO UPDATE SET fired_at = excluded.fired_at
+  WHERE rule_fires.fired_at <= ?`);
+const insNotif = store.prepare(`INSERT INTO notifications
   (org_id, ts, rule_id, rule_name, event_id, case_label, channel, ok, error)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-const caseForEvent = db.prepare("SELECT id FROM cases WHERE event_id = ? ORDER BY id DESC LIMIT 1");
+const caseForEvent = store.prepare("SELECT id FROM cases WHERE event_id = ? ORDER BY id DESC LIMIT 1");
 
 function severityLabel(s) {
   return s >= 80 ? 'Critical' : s >= 60 ? 'High' : s >= 40 ? 'Medium' : s >= 20 ? 'Low' : 'Info';
@@ -170,7 +178,7 @@ async function sendVia(kind, address, { title, text, severity = 0, orgId = DEFAU
 async function dispatch(rule, ev) {
   const orgId = rule.org_id || 1;
   const sevLabel = severityLabel(ev.severity);
-  const caseRow = caseForEvent.get(ev.id);
+  const caseRow = await caseForEvent.get(ev.id);
   const caseLabel = caseRow ? `C-${1000 + caseRow.id}` : null;
   const title = `[OpsCat ${sevLabel}] ${ev.name} on ${ev.device}`;
   const text = `${ev.description || ev.name}\n\nSeverity: ${ev.severity} (${sevLabel})\n` +
@@ -220,7 +228,7 @@ async function dispatch(rule, ev) {
   return caseLabel;
 }
 
-const getActiveWindow = db.prepare(`SELECT name FROM maintenance_windows
+const getActiveWindow = store.prepare(`SELECT name FROM maintenance_windows
   WHERE org_id = ? AND starts_at <= ? AND ends_at >= ? ORDER BY id LIMIT 1`);
 
 // The chain's own signals. A rule that raised an alert ON one of these would
@@ -229,40 +237,46 @@ const getActiveWindow = db.prepare(`SELECT name FROM maintenance_windows
 // fires is indistinguishable from a quiet night.
 const SELF_EVENTS = ['alert_exhausted', 'alert_undeliverable', 'oncall_gap'];
 
-function raiseFromRule(rule, ev, orgId) {
+async function raiseFromRule(rule, ev, orgId) {
   const log = (err) => insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, 'alert', 0, err);
   if (SELF_EVENTS.includes(ev.name)) {
-    return log(`refused: "${ev.name}" is raised BY the alert chain — a policy rule on it would escalate itself`);
+    await log(`refused: "${ev.name}" is raised BY the alert chain — a policy rule on it would escalate itself`);
+    return;
   }
   // The OPEN case, not the latest one: an alert about a case somebody already
   // closed is the failure this whole slice is built to avoid.
-  const c = require('../lib/cases').openForEvent(orgId, ev.id);
+  const c = await require('../lib/cases').openForEvent(orgId, ev.id);
   if (!c) {
-    return log('no open case for this event — cases open at severity 60+, and an alert needs a subject');
+    await log('no open case for this event — cases open at severity 60+, and an alert needs a subject');
+    return;
   }
-  const r = require('./alert-chain').raise(orgId, {
+  const r = await require('./alert-chain').raise(orgId, {
     subjectKind: 'case', subjectId: c.id, policyId: rule.policy_id,
     source: `rule:${rule.id}`, severity: ev.severity,
   });
-  if (r && r.error) log(`alert not raised: ${r.error}`);
+  if (r && r.error) await log(`alert not raised: ${r.error}`);
 }
 
-function onEvent(ev) {
+async function onEvent(ev) {
   const t = now();
   const orgId = ev.org_id || 1;
-  const rules = getRules.all(orgId);
+  const rules = await getRules.all(orgId);
   if (!rules.length) return;
   // planned work: keep recording events, but hold every notification back —
   // one visible "suppressed" line per rule/cooldown in the notification log
-  const win = getActiveWindow.get(orgId, t, t);
+  const win = await getActiveWindow.get(orgId, t, t);
   for (const rule of rules) {
     if (ev.severity < rule.severity_min) continue;
     if (rule.trigger_name && rule.trigger_name !== ev.name) continue;
-    const fired = getFire.get(rule.id, ev.dedupe_key);
-    if (fired && t - fired.fired_at < rule.cooldown_m * 60 * 1000) continue;
-    setFire.run(rule.id, ev.dedupe_key, t);
+    // The claim happens BEFORE the send, unchanged: a dispatch that then fails
+    // has burned the cooldown window, which is the same trade the maintenance
+    // branch below already makes. The alternative — claim after a confirmed
+    // send — would leave the gate open for the whole duration of the HTTP call,
+    // which is precisely the window a second event arrives in.
+    const claimed = await claimFire.run(rule.id, ev.dedupe_key, t, t - rule.cooldown_m * 60 * 1000);
+    if (claimed.changes !== 1) continue; // somebody else is already sending this page
     if (win) {
-      insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, rule.channel, 1,
+      await insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, rule.channel, 1,
         `suppressed: maintenance window "${win.name}"`);
       continue;
     }
@@ -270,16 +284,32 @@ function onEvent(ev) {
     // channel: the ladder, the ack and the escalation, with no flow involved.
     // That is what makes on-call work in the community edition out of the box
     // (docs/ONCALL-V1.md §8) — one column on the rule, not a second engine.
-    if (rule.target_type === 'policy') { raiseFromRule(rule, ev, orgId); continue; }
+    if (rule.target_type === 'policy') { await raiseFromRule(rule, ev, orgId); continue; }
+    // Still NOT awaited against the caller: the loop must not serialise one
+    // rule's HTTP call behind another's. The trailing catch is new only because
+    // the notification-log write is a promise now — without it a failing log
+    // write becomes an unhandledRejection instead of the console line it was.
     dispatch(rule, ev)
       .then((caseLabel) => insNotif.run(orgId, now(), rule.id, rule.name, ev.id, caseLabel, rule.channel, 1, null))
       .catch((err) => {
-        insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, rule.channel, 0, String(err.message).slice(0, 300));
+        const logged = insNotif.run(orgId, now(), rule.id, rule.name, ev.id, null, rule.channel, 0,
+          String(err.message).slice(0, 300));
         console.error(`alert rule "${rule.name}" failed:`, err.message);
-      });
+        return logged;
+      })
+      .catch((err) => console.error('alert notification log failed:', err && err.message));
   }
 }
 
-function start() { pipeline.on('event', onEvent); }
+// `onEvent` is async now (Phase 4), and `pipeline.emit` is a synchronous
+// fan-out whose `try/catch` therefore no longer sees a rejection — an unhandled
+// one exits the process under NODE_ENV=test. The catch moves here, where it
+// keeps exactly the old meaning: a failing alert listener is logged, never
+// thrown at the ingest that caused it.
+function start() {
+  pipeline.on('event', (ev) => {
+    onEvent(ev).catch((err) => console.error('alert engine failed:', err && err.message));
+  });
+}
 
 module.exports = { start, dispatch, sendVia, sendEmail, severityLabel, SELF_EVENTS };

@@ -1,0 +1,38 @@
+# ClickHouse — EXPERIMENT, and deliberately not wired into anything.
+#
+# Phase 9 of docs/POSTGRES-MIGRATION-PLAN.md proper needs a bigger host (that
+# plan's § Phase 9 sizing: ~9 GB floor, 8 vCPU). This file is the cheap version
+# of the question "what does it actually do on the host we have", run against
+# real production data on 2026-08-18. The measurements are in the plan.
+#
+# The app does NOT know this exists. Nothing depends on it, no code path reads
+# it, and it is behind a profile so no deploy starts it. That is what makes it
+# safe to run beside production rather than a second database to keep alive.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.clickhouse.yml \
+#     --profile clickhouse up -d clickhouse
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: [clickhouse]
+    environment:
+      - CLICKHOUSE_DB=opscat
+      - CLICKHOUSE_USER=opscat
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - ./ch-config/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      - opscat_chdata:/var/lib/clickhouse
+    # A hard cap, AND ClickHouse made the preferred OOM victim. Without the
+    # second part the kernel picks by score, and on this host the app scored
+    # highest (696, measured) — so an experiment gone wrong would have killed
+    # production instead of itself.
+    mem_limit: 1g
+    oom_score_adj: 800
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    # Never restart on its own: an experiment that quietly comes back after
+    # being killed is one that stops telling you it failed.
+    restart: "no"
+volumes:
+  opscat_chdata:

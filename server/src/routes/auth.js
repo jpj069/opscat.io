@@ -1,7 +1,8 @@
 'use strict';
 const express = require('express');
 const crypto = require('crypto');
-const { db, getSetting, getOrgSetting, listMemberships, getMembership } = require('../db');
+const q = require('../db/shim');
+const { getSetting, getOrgSetting, listMemberships, getMembership } = require('../db');
 const config = require('../config');
 const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError, isOrgId } = require('../util');
 const sec = require('../security');
@@ -26,12 +27,12 @@ const publicUser = (u) => ({
   isSuperAdmin: !!u.is_super_admin,
 });
 
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   const ip = sec.clientIp(req);
   if (!sec.authLimiter.allow(ip)) return httpError(res, 429, 'too many attempts, slow down');
   const { email, password } = req.body || {};
   if (!isEmail(email) || !isStr(password, 200)) return httpError(res, 400, 'email and password required');
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase());
+  const user = await q.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase());
   // An empty pass_hash means "this account has no password" — an invited user who
   // has not set one, or an SSO/reset account. It must never be loggable-into with
   // any password, so it takes the same dummy-hash path as an unknown address (both
@@ -45,7 +46,7 @@ router.post('/login', (req, res) => {
     sec.audit(user ? user.id : null, 'login_failed', `${email} from ${ip}`);
     return httpError(res, 401, 'invalid credentials');
   }
-  const { sid, csrf } = sec.createSession(user.id, req);
+  const { sid, csrf } = await sec.createSession(user.id, req);
   sec.setSessionCookie(res, sid);
   sec.audit(user.id, 'login', ip);
   res.json({ user: publicUser(user), csrf });
@@ -59,7 +60,7 @@ router.post('/magic-link', async (req, res) => {
   if (!sec.authLimiter.allow(`ml:${ip}`)) return httpError(res, 429, 'too many attempts, slow down');
   const { email } = req.body || {};
   if (!isEmail(email)) return httpError(res, 400, 'valid email required');
-  const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.toLowerCase());
+  const user = await q.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.toLowerCase());
   if (user && mailer.mailConfigured()) {
     try {
       const token = crypto.randomBytes(32).toString('base64url');
@@ -67,9 +68,9 @@ router.post('/magic-link', async (req, res) => {
       // Only this user's OTHER SIGN-IN tokens go — a pending invitation must
       // survive, or requesting a magic link would silently void the activation
       // link the admin just sent. Expired rows of any purpose are swept here too.
-      db.prepare(`DELETE FROM login_tokens
+      await q.prepare(`DELETE FROM login_tokens
         WHERE (user_id = ? AND purpose = 'login') OR expires_at < ?`).run(user.id, t);
-      db.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
+      await q.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
         VALUES (?, ?, ?, ?, 'login')`).run(sha256(token), user.id, t, t + 15 * 60 * 1000);
       const url = `${config.baseUrl}/app/login?token=${token}`;
       const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
@@ -88,18 +89,25 @@ router.post('/magic-link', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/magic-login', (req, res) => {
+router.post('/magic-login', async (req, res) => {
   const ip = sec.clientIp(req);
   if (!sec.authLimiter.allow(`mt:${ip}`)) return httpError(res, 429, 'too many attempts, slow down');
   const { token } = req.body || {};
   if (!isStr(token, 100)) return httpError(res, 400, 'token required');
-  const row = db.prepare('SELECT * FROM login_tokens WHERE token_hash = ?').get(sha256(token));
+  const row = await q.prepare('SELECT * FROM login_tokens WHERE token_hash = ?').get(sha256(token));
   const t = now();
   if (!row || row.used_at || row.expires_at < t) return httpError(res, 401, 'invalid or expired link');
-  db.prepare('UPDATE login_tokens SET used_at = ? WHERE token_hash = ?').run(t, row.token_hash);
-  const user = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(row.user_id);
+  // `used_at IS NULL` in the WHERE is the gate; the check above is only the
+  // diagnosis. With an await between the read and the write, two redemptions of
+  // one emailed link both see an unused token and both get a session — and for
+  // purpose='invite' the activation runs twice off a link a mail scanner may
+  // have prefetched. The UPDATE that changed no row belongs to the loser.
+  const claimed = await q.prepare(
+    'UPDATE login_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL').run(t, row.token_hash);
+  if (claimed.changes !== 1) return httpError(res, 401, 'invalid or expired link');
+  const user = await q.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(row.user_id);
   if (!user) return httpError(res, 401, 'account disabled');
-  const { sid, csrf } = sec.createSession(user.id, req);
+  const { sid, csrf } = await sec.createSession(user.id, req);
   sec.setSessionCookie(res, sid);
   sec.audit(user.id, row.purpose === 'invite' ? 'invite_accepted' : 'login_magic_link', ip);
   // `invited` tells the app this was an activation, not a routine sign-in, so it
@@ -108,8 +116,8 @@ router.post('/magic-login', (req, res) => {
   res.json({ user: publicUser(user), csrf, invited: row.purpose === 'invite' });
 });
 
-router.post('/logout', sec.requireSession, (req, res) => {
-  db.prepare('DELETE FROM sessions WHERE id = ?').run(req.session.id);
+router.post('/logout', sec.requireSession, async (req, res) => {
+  await q.prepare('DELETE FROM sessions WHERE id = ?').run(req.session.id);
   sec.clearSessionCookie(res);
   res.json({ ok: true });
 });
@@ -118,11 +126,11 @@ router.get('/me', sec.requireSession, (req, res) => {
   res.json({ user: publicUser(req.user), csrf: req.session.csrf });
 });
 
-router.post('/change-password', sec.requireSession, (req, res) => {
+router.post('/change-password', sec.requireSession, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!isStr(newPassword, 200)) return httpError(res, 400, 'newPassword required');
   if (newPassword.length < 12) return httpError(res, 400, 'new password must be at least 12 characters');
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const user = await q.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
   // Two cases need no proof of the old password: a FORCED change replaces an
   // admin-issued one the user may never have seen, and an account with NO
   // password (invited, or reset by an admin) has nothing to prove — ownership of
@@ -135,33 +143,37 @@ router.post('/change-password', sec.requireSession, (req, res) => {
     }
   }
   const { salt, hash } = hashPassword(newPassword);
-  db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 0 WHERE id = ?')
+  await q.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 0 WHERE id = ?')
     .run(salt, hash, user.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(user.id, req.session.id);
+  await q.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(user.id, req.session.id);
   sec.audit(user.id, 'password_changed', null);
   res.json({ ok: true });
 });
 
 // --- multi-org: the caller's organizations + switching the active one ---
-router.get('/orgs', sec.requireSession, (req, res) => {
+router.get('/orgs', sec.requireSession, async (req, res) => {
   res.json({
     activeOrgId: req.orgId,
-    orgs: listMemberships(req.user.id).map((m) => ({
+    // getOrgSetting stays synchronous (the boot-loaded cache) — only the
+    // membership read is awaited.
+    orgs: (await listMemberships(req.user.id)).map((m) => ({
       orgId: m.org_id, name: m.name, slug: m.slug, plan: m.plan, role: m.role,
       onboardingDone: getOrgSetting(m.org_id, 'onboarding_done', '1') === '1',
     })),
   });
 });
 
-router.post('/switch-org', sec.requireSession, (req, res) => {
+router.post('/switch-org', sec.requireSession, async (req, res) => {
   // Switching organizations is a Cloud-edition feature; community is single-org.
   if (!edition.isCloud()) return httpError(res, 403, 'switching organizations is a Cloud feature');
   const orgId = String((req.body && req.body.orgId) || '').trim();
   if (!isOrgId(orgId)) return httpError(res, 400, 'orgId required');
   // Only orgs the user is a member of. (Super-admins target other orgs through
   // the platform console's X-OpsCat-Org header, not this endpoint.)
-  if (!getMembership(req.user.id, orgId)) return httpError(res, 403, 'not a member of that organization');
-  db.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?').run(orgId, req.session.id);
+  // Parenthesised: `!await f()` and `!(await f())` differ by punctuation, and one
+  // of them is a guard that never fires. See db.js § memberships.
+  if (!(await getMembership(req.user.id, orgId))) return httpError(res, 403, 'not a member of that organization');
+  await q.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?').run(orgId, req.session.id);
   sec.audit(req.user.id, 'org_switch', `org ${orgId}`, orgId);
   res.json({ ok: true, activeOrgId: orgId });
 });

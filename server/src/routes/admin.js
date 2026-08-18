@@ -3,7 +3,8 @@
 // status page components. RBAC enforced per route group.
 const express = require('express');
 const crypto = require('crypto');
-const { db, getOrgSetting, setOrgSetting,
+const q = require('../db/shim');
+const { getOrgSetting, setOrgSetting,
   getMembership, addMembership, removeMembership, listMemberships } = require('../db');
 const config = require('../config');
 const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt, newId, isId } = require('../util');
@@ -24,9 +25,13 @@ const invites = require('../lib/invites');
 const router = express.Router();
 router.use(sec.requireSession);
 
-// Returns true if allowed; otherwise sends a 402 and returns false.
-function withinPlan(req, res, resource) {
-  const lim = plans.checkLimit(req.orgId, req.org.plan, resource);
+/* Returns true if allowed; otherwise sends a 402 and returns false.
+ * Every caller PARENTHESISES the await — `!(await withinPlan(...))` — because a
+ * lost one is `!Promise`, i.e. `false`: the cap silently stops applying and the
+ * 402 is then written onto a response already sent. Nothing reads a property off
+ * that Promise, so no type and no proxy sees it. */
+async function withinPlan(req, res, resource) {
+  const lim = await plans.checkLimit(req.orgId, req.org.plan, resource);
   if (!lim.ok) {
     httpError(res, 402, `plan limit reached (${lim.used}/${lim.limit} ${resource}) — upgrade your plan to add more`);
     return false;
@@ -41,17 +46,17 @@ const COLORS = ['#bc8cff', '#38b6ff', '#3fb950', '#f0883e', '#e3b341', '#f85149'
 // "Users in this org" = members (memberships is the authority). Role is per-org
 // (from the membership); active is a global per-user flag.
 // GET is lead+ (email/role/last-seen enumeration); assignee pickers use /api/team.
-router.get('/users', sec.requireRole('lead'), (req, res) => {
+router.get('/users', sec.requireRole('lead'), async (req, res) => {
   // `pending` = invited but never activated. Derived from an OUTSTANDING invite
   // token rather than from an empty pass_hash alone: an SSO account has no
   // password either and is not pending, and an expired link is not either — it
   // needs re-inviting, which is exactly what the admin has to be able to see.
-  res.json(db.prepare(`SELECT u.id, u.email, u.name, m.role, u.color, u.active, u.last_seen_at,
+  res.json((await q.prepare(`SELECT u.id, u.email, u.name, m.role, u.color, u.active, u.last_seen_at,
       (u.pass_hash = '' AND u.auth_provider = 'password' AND EXISTS (
          SELECT 1 FROM login_tokens t WHERE t.user_id = u.id AND t.purpose = 'invite'
            AND t.used_at IS NULL AND t.expires_at > ?)) AS pending
     FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY u.id`)
-    .all(now(), req.orgId).map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
+    .all(now(), req.orgId)).map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, color: u.color,
       active: !!u.active, lastSeenAt: u.last_seen_at, pending: !!u.pending })));
 });
 
@@ -66,17 +71,17 @@ router.post('/users', sec.requireRole('admin'), async (req, res) => {
   const { email, name, role, manual } = req.body || {};
   if (!isEmail(email)) return httpError(res, 400, 'valid email required');
   if (!ROLES.includes(role)) return httpError(res, 400, 'bad role');
-  const existing = db.prepare('SELECT id, name FROM users WHERE email = ?').get(email.toLowerCase());
+  const existing = await q.prepare('SELECT id, name FROM users WHERE email = ?').get(email.toLowerCase());
   if (existing) {
-    if (getMembership(existing.id, req.orgId)) return httpError(res, 409, 'user already in this organization');
-    if (!withinPlan(req, res, 'users')) return undefined;
-    addMembership(existing.id, req.orgId, role);
+    if (await getMembership(existing.id, req.orgId)) return httpError(res, 409, 'user already in this organization');
+    if (!(await withinPlan(req, res, 'users'))) return undefined;
+    await addMembership(existing.id, req.orgId, role);
     sec.audit(req.user.id, 'member_add', `${email} (${role})`, req.orgId);
     return res.json({ id: existing.id, added: true });
   }
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  if (!withinPlan(req, res, 'users')) return undefined;
-  const color = COLORS[listMemberships(req.user.id).length % COLORS.length];
+  if (!(await withinPlan(req, res, 'users'))) return undefined;
+  const color = COLORS[(await listMemberships(req.user.id)).length % COLORS.length];
   // `manual` is the deliberate escape hatch — a colleague whose mailbox is not
   // reachable yet, a shared NOC account, an air-gapped instance. It is a choice
   // the admin has to make on purpose; it is never the default where mail works.
@@ -86,10 +91,10 @@ router.post('/users', sec.requireRole('admin'), async (req, res) => {
   const password = byLink ? null : crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = password ? hashPassword(password) : { salt: '', hash: '' };
   const id = newId();
-  db.prepare(`INSERT INTO users (id, org_id, email, name, role, pass_salt, pass_hash, color, active,
+  await q.prepare(`INSERT INTO users (id, org_id, email, name, role, pass_salt, pass_hash, color, active,
     must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
     .run(id, req.orgId, email.toLowerCase(), name, role, salt, hash, color, byLink ? 0 : 1, now());
-  addMembership(id, req.orgId, role);
+  await addMembership(id, req.orgId, role);
   sec.audit(req.user.id, 'user_create', `${email} (${role})`, req.orgId);
 
   if (!byLink) return res.json({ id, initialPassword: password });
@@ -105,7 +110,7 @@ router.post('/users', sec.requireRole('admin'), async (req, res) => {
     console.error('invite mail failed:', e.message);
     const fallback = crypto.randomBytes(12).toString('base64url');
     const f = hashPassword(fallback);
-    db.prepare(`UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1
+    await q.prepare(`UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1
       WHERE id = ?`).run(f.salt, f.hash, id);
     return res.json({ id, initialPassword: fallback, mailFailed: true });
   }
@@ -113,8 +118,8 @@ router.post('/users', sec.requireRole('admin'), async (req, res) => {
 
 router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
   // target must be a member of the acting org
-  const mem = getMembership(req.params.id, req.orgId);
-  const u = mem && db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  const mem = await getMembership(req.params.id, req.orgId);
+  const u = mem && await q.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return httpError(res, 404, 'user not found');
   const b = req.body || {};
   if (b.role && !ROLES.includes(b.role)) return httpError(res, 400, 'bad role');
@@ -123,11 +128,11 @@ router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
   // in its other orgs. Deactivating globally is a separate action (active:false).
   if (b.remove === true) {
     if (u.id === req.user.id) return httpError(res, 400, 'cannot remove yourself');
-    const others = listMemberships(u.id).filter((m) => m.org_id !== req.orgId);
+    const others = (await listMemberships(u.id)).filter((m) => m.org_id !== req.orgId);
     if (others.length === 0) return httpError(res, 400, 'user belongs only to this org — deactivate instead');
-    removeMembership(u.id, req.orgId);
-    if (u.org_id === req.orgId) db.prepare('UPDATE users SET org_id = ? WHERE id = ?').run(others[0].org_id, u.id);
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND active_org_id = ?').run(u.id, req.orgId);
+    await removeMembership(u.id, req.orgId);
+    if (u.org_id === req.orgId) await q.prepare('UPDATE users SET org_id = ? WHERE id = ?').run(others[0].org_id, u.id);
+    await q.prepare('DELETE FROM sessions WHERE user_id = ? AND active_org_id = ?').run(u.id, req.orgId);
     sec.audit(req.user.id, 'member_remove', u.email, req.orgId);
     return res.json({ ok: true, removed: true });
   }
@@ -137,19 +142,19 @@ router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
     return httpError(res, 400, 'cannot demote yourself');
   }
   // role is per-org → update the membership; name/active are global user fields
-  if (b.role) addMembership(u.id, req.orgId, b.role);
-  db.prepare('UPDATE users SET name = COALESCE(?, name), active = COALESCE(?, active) WHERE id = ?')
+  if (b.role) await addMembership(u.id, req.orgId, b.role);
+  await q.prepare('UPDATE users SET name = COALESCE(?, name), active = COALESCE(?, active) WHERE id = ?')
     .run(isStr(b.name, 100) ? b.name : null,
       typeof b.active === 'boolean' ? (b.active ? 1 : 0) : null, u.id);
-  if (b.active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  if (b.active === false) await q.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
   // Same split as the invitation: a reset link when mail works, a one-time
   // password only when it does not. Sessions die either way — that is the point
   // of a reset — so a mail failure must still leave a usable credential behind.
   if (b.resetPassword === true) {
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+    await q.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
     sec.audit(req.user.id, 'user_password_reset', u.email, req.orgId);
     if (invites.mailConfigured()) {
-      invites.clearPassword(u.id);
+      await invites.clearPassword(u.id);
       try {
         await invites.sendInviteLink(u, { kind: 'reset', invitedBy: req.user.name });
         return res.json({ ok: true, invited: true, email: u.email });
@@ -159,7 +164,7 @@ router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
     }
     const password = crypto.randomBytes(12).toString('base64url');
     const { salt, hash } = hashPassword(password);
-    db.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1 WHERE id = ?')
+    await q.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, must_change_password = 1 WHERE id = ?')
       .run(salt, hash, u.id);
     return res.json({ ok: true, initialPassword: password,
       mailFailed: invites.mailConfigured() || undefined });
@@ -169,14 +174,14 @@ router.patch('/users/:id', sec.requireRole('admin'), async (req, res) => {
 });
 
 // ---- API keys (lead+) ----
-router.get('/apikeys', sec.requireRole('lead'), (req, res) => {
-  res.json(db.prepare(`SELECT id, name, prefix, scopes, active, created_at, last_used_at
-    FROM api_keys WHERE org_id = ? ORDER BY id`).all(req.orgId)
+router.get('/apikeys', sec.requireRole('lead'), async (req, res) => {
+  res.json((await q.prepare(`SELECT id, name, prefix, scopes, active, created_at, last_used_at
+    FROM api_keys WHERE org_id = ? ORDER BY id`).all(req.orgId))
     .map((k) => ({ id: k.id, name: k.name, prefix: k.prefix, scopes: k.scopes.split(','),
       active: !!k.active, createdAt: k.created_at, lastUsedAt: k.last_used_at })));
 });
 
-router.post('/apikeys', sec.requireRole('lead'), (req, res) => {
+router.post('/apikeys', sec.requireRole('lead'), async (req, res) => {
   const { name, scopes, role } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   // `api` lets the key drive the full operations REST API (see security.js
@@ -190,9 +195,9 @@ router.post('/apikeys', sec.requireRole('lead'), (req, res) => {
   if (sec.ROLE_RANK[wanted] > sec.ROLE_RANK[req.user.role]) {
     return httpError(res, 403, 'cannot grant a key a higher role than your own');
   }
-  if (!withinPlan(req, res, 'apiKeys')) return undefined;
+  if (!(await withinPlan(req, res, 'apiKeys'))) return undefined;
   const key = 'ock_' + crypto.randomBytes(24).toString('hex');
-  db.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
+  await q.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
     .run(req.orgId, name, key.slice(0, 12), sha256(key), sc.join(','), wanted, req.user.id, now());
   sec.audit(req.user.id, 'apikey_create', `${name} scopes=${sc.join('+')} role=${wanted}`, req.orgId);
@@ -202,9 +207,9 @@ router.post('/apikeys', sec.requireRole('lead'), (req, res) => {
 // ── authorized MCP clients (OAuth grants) ─────────────────────────────────
 // A user manages their OWN connections: these are grants they personally
 // authorized, not org-wide configuration, so this is not role-gated.
-router.get('/connections', (req, res) => {
+router.get('/connections', async (req, res) => {
   const oauth = require('../lib/oauth');
-  res.json(oauth.listGrants(req.user.id)
+  res.json((await oauth.listGrants(req.user.id))
     .filter((g) => g.orgId === req.orgId)
     .map((g) => ({
       clientId: g.clientId,
@@ -215,19 +220,19 @@ router.get('/connections', (req, res) => {
     })));
 });
 
-router.delete('/connections/:clientId', (req, res) => {
+router.delete('/connections/:clientId', async (req, res) => {
   const oauth = require('../lib/oauth');
-  const removed = oauth.revokeGrant(String(req.params.clientId), req.user.id, req.orgId);
+  const removed = await oauth.revokeGrant(String(req.params.clientId), req.user.id, req.orgId);
   if (!removed) return httpError(res, 404, 'connection not found');
   sec.audit(req.user.id, 'mcp.revoke', `client=${req.params.clientId}`, req.orgId);
   res.json({ ok: true });
 });
 
-router.patch('/apikeys/:id', sec.requireRole('lead'), (req, res) => {
-  const k = db.prepare('SELECT * FROM api_keys WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.patch('/apikeys/:id', sec.requireRole('lead'), async (req, res) => {
+  const k = await q.prepare('SELECT * FROM api_keys WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!k) return httpError(res, 404, 'key not found');
   if (typeof req.body?.active === 'boolean') {
-    db.prepare('UPDATE api_keys SET active = ? WHERE id = ? AND org_id = ?').run(req.body.active ? 1 : 0, k.id, req.orgId);
+    await q.prepare('UPDATE api_keys SET active = ? WHERE id = ? AND org_id = ?').run(req.body.active ? 1 : 0, k.id, req.orgId);
   }
   sec.audit(req.user.id, 'apikey_update', k.name, req.orgId);
   res.json({ ok: true });
@@ -245,7 +250,7 @@ const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal'
   'status_reports_enabled', 'status_reports_public', 'status_reports_threshold',
   'status_subscribers_enabled'];
 
-router.get('/settings', (req, res) => {
+router.get('/settings', async (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
   const out = {};
   for (const k of keys) out[k] = getOrgSetting(req.orgId, k, '');
@@ -253,13 +258,13 @@ router.get('/settings', (req, res) => {
   // say what the limit is instead of letting someone type 365 and find out from a
   // 400 (or, before this, from nothing happening at all). '' = no ceiling
   // (community edition, or an unlimited tier).
-  const cap = plans.retentionCapFor(req.orgId);
+  const cap = await plans.retentionCapFor(req.orgId);
   out.retention_logs_days_max = cap === -1 ? '' : String(cap);
-  out.retention_logs_days_effective = String(plans.retentionDaysFor(req.orgId));
+  out.retention_logs_days_effective = String(await plans.retentionDaysFor(req.orgId));
   res.json(out);
 });
 
-router.patch('/settings', sec.requireRole('admin'), (req, res) => {
+router.patch('/settings', sec.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   for (const [k, v] of Object.entries(b)) {
     if (!ADMIN_SETTINGS.includes(k)) return httpError(res, 400, `unknown setting ${k}`);
@@ -282,19 +287,20 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
     if (!Number.isInteger(d) || d < 1 || d > 3650) {
       return httpError(res, 400, 'retention_logs_days must be a whole number of days (1-3650)');
     }
-    const cap = plans.retentionCapFor(req.orgId);
+    const cap = await plans.retentionCapFor(req.orgId);
     if (cap !== -1 && d > cap) {
       return httpError(res, 400,
         `your plan keeps logs for up to ${cap} days — upgrade for longer retention`);
     }
   }
-  for (const [k, v] of Object.entries(b)) setOrgSetting(req.orgId, k, v);
+  // eslint-disable-next-line no-await-in-loop
+  for (const [k, v] of Object.entries(b)) await setOrgSetting(req.orgId, k, v);
   // `status_published` is the DEFAULT page's publish flag. Kept as a setting for
   // the Settings screen and EE org provisioning, written through so the page row
   // — which is what the public routes actually read — never drifts from it.
   if (b.status_published !== undefined) {
-    const dflt = statusPages.defaultPage(req.orgId);
-    if (dflt) db.prepare('UPDATE status_pages SET published = ? WHERE id = ?')
+    const dflt = await statusPages.defaultPage(req.orgId);
+    if (dflt) await q.prepare('UPDATE status_pages SET published = ? WHERE id = ?')
       .run(b.status_published === '1' ? 1 : 0, dflt.id);
   }
   if (b.classifiers) pipelineEngine.loadClassifiers(req.orgId);
@@ -314,23 +320,23 @@ router.patch('/settings', sec.requireRole('admin'), (req, res) => {
 const PAGE_ROLE = 'lead';   // read
 const canEditPages = sec.requireRole('admin');
 
-function pageOr404(req, res) {
-  const page = statusPages.pageById(clampInt(req.params.id, 1, 2 ** 31, 0), req.orgId);
+async function pageOr404(req, res) {
+  const page = await statusPages.pageById(clampInt(req.params.id, 1, 2 ** 31, 0), req.orgId);
   if (!page) { httpError(res, 404, 'status page not found'); return null; }
   return page;
 }
 
-function pageDTO(req, page) {
+async function pageDTO(req, page) {
   // The admin preview always addresses the page by its opscat.io path, never by
   // its custom domain: the domain may be unverified, or verified but not yet
   // resolving, and a broken <img> in the admin UI would read as "my logo is
   // gone". The stub request is what forces that choice explicitly.
-  const b = branding.brandingFor(page, statusPages.basePath({ hostname: '', headers: {} }, page));
-  const compIds = statusPages.componentIdsFor(page);
+  const b = await branding.brandingFor(page, statusPages.basePath({ hostname: '', headers: {} }, page));
+  const compIds = await statusPages.componentIdsFor(page);
   return {
     id: page.id, slug: page.slug, name: page.name, isDefault: page.is_default === 1,
     published: page.published === 1, visibility: page.visibility,
-    url: statusPages.absoluteUrl(page),
+    url: await statusPages.absoluteUrl(page),
     accessToken: page.visibility === 'private' ? page.access_token : null,
     domain: page.domain || '', domainVerifiedAt: page.domain_verified_at,
     dns: statusDomains.dnsInstructions(page),
@@ -338,21 +344,21 @@ function pageDTO(req, page) {
     supportUrl: page.support_url || '', legalUrl: page.legal_url || '',
     hidePowered: page.hide_powered === 1, customCss: page.custom_css || '',
     componentIds: compIds,
-    logo: assetDTO(page.id, 'logo'), favicon: assetDTO(page.id, 'favicon'),
+    logo: await assetDTO(page.id, 'logo'), favicon: await assetDTO(page.id, 'favicon'),
     // the EXACT object the public page renders with, so the admin preview cannot
     // drift away from the thing it is previewing
     resolved: b,
   };
 }
-function assetDTO(pageId, kind) {
-  const a = branding.assetMeta(pageId, kind);
+async function assetDTO(pageId, kind) {
+  const a = await branding.assetMeta(pageId, kind);
   return a ? { mime: a.mime, updatedAt: a.updated_at } : null;
 }
 
-router.get('/status-pages', sec.requireRole(PAGE_ROLE), (req, res) => {
-  statusPages.defaultPage(req.orgId); // invariant: an org always has one
+router.get('/status-pages', sec.requireRole(PAGE_ROLE), async (req, res) => {
+  await statusPages.defaultPage(req.orgId); // invariant: an org always has one
   res.json({
-    pages: statusPages.listPages(req.orgId).map((p) => pageDTO(req, p)),
+    pages: await Promise.all((await statusPages.listPages(req.orgId)).map((p) => pageDTO(req, p))),
     limits: {
       canWhitelabel: plans.hasFeature(req.org.plan, 'status_whitelabel'),
       canCustomCss: plans.hasFeature(req.org.plan, 'status_css'),
@@ -387,18 +393,18 @@ const RESERVED_SLUGS = [
 // arrives before the submit rather than as a 409 after it. Deliberately says only
 // free/taken with the reason — the slug namespace is global (a slug resolves a page
 // on any host), so a "which org has it" answer would leak tenants to each other.
-router.get('/status-pages/slug-available', canEditPages, (req, res) => {
+router.get('/status-pages/slug-available', canEditPages, async (req, res) => {
   const slug = String(req.query.slug || '').trim().toLowerCase();
   if (!slug) return res.json({ slug, available: false, reason: 'enter a slug' });
   if (!SLUG_RE.test(slug)) {
     return res.json({ slug, available: false, reason: '2-41 characters of a-z, 0-9 and -' });
   }
   if (RESERVED_SLUGS.includes(slug)) return res.json({ slug, available: false, reason: 'reserved' });
-  if (statusPages.pageBySlug(slug)) return res.json({ slug, available: false, reason: 'already taken' });
+  if (await statusPages.pageBySlug(slug)) return res.json({ slug, available: false, reason: 'already taken' });
   return res.json({ slug, available: true, reason: '' });
 });
 
-router.post('/status-pages', canEditPages, (req, res) => {
+router.post('/status-pages', canEditPages, async (req, res) => {
   if (!plans.hasFeature(req.org.plan, 'status_pages_multi')) {
     return httpError(res, 403, 'additional status pages require the Enterprise plan');
   }
@@ -408,31 +414,33 @@ router.post('/status-pages', canEditPages, (req, res) => {
   if (!isStr(name, 80)) return httpError(res, 400, 'name required');
   if (!SLUG_RE.test(slug)) return httpError(res, 400, 'slug must be 2-41 chars of a-z, 0-9 and -');
   if (RESERVED_SLUGS.includes(slug)) return httpError(res, 400, `"${slug}" is reserved`);
-  if (statusPages.pageBySlug(slug)) return httpError(res, 409, 'that slug is already taken');
+  if (await statusPages.pageBySlug(slug)) return httpError(res, 409, 'that slug is already taken');
   const visibility = b.visibility === 'private' ? 'private' : 'public';
-  const info = db.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published,
+  // insert() rather than run().lastInsertRowid: better-sqlite3 reports one and
+  // node-postgres has no such field, so the shim uses RETURNING id on both.
+  const pageId = await q.prepare(`INSERT INTO status_pages (org_id, slug, name, is_default, published,
       visibility, access_token, created_at) VALUES (?, ?, ?, 0, 1, ?, ?, ?)`)
-    .run(req.orgId, slug, name, visibility,
+    .insert(req.orgId, slug, name, visibility,
       visibility === 'private' ? statusPages.newAccessToken() : null, now());
-  const page = statusPages.pageById(info.lastInsertRowid, req.orgId);
-  setPageComponents(page, b.componentIds);
+  const page = await statusPages.pageById(pageId, req.orgId);
+  await setPageComponents(page, b.componentIds);
   sec.audit(req.user.id, 'status_page_create', `${name} (/status/${slug})`, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
 // The component subset. An EMPTY selection means "all", which is stored as no
 // rows — so a page that shows everything keeps showing everything as components
 // are added, instead of freezing at today's list.
-function setPageComponents(page, ids) {
+async function setPageComponents(page, ids) {
   if (!Array.isArray(ids)) return;
-  db.prepare('DELETE FROM status_page_components WHERE page_id = ?').run(page.id);
-  const ins = db.prepare('INSERT INTO status_page_components (page_id, component_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
-  const owned = db.prepare('SELECT id FROM components WHERE org_id = ?').all(page.org_id).map((c) => c.id);
-  for (const id of ids) if (owned.includes(Number(id))) ins.run(page.id, Number(id));
+  await q.prepare('DELETE FROM status_page_components WHERE page_id = ?').run(page.id);
+  const ins = q.prepare('INSERT INTO status_page_components (page_id, component_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
+  const owned = (await q.prepare('SELECT id FROM components WHERE org_id = ?').all(page.org_id)).map((c) => c.id);
+  for (const id of ids) if (owned.includes(Number(id))) await ins.run(page.id, Number(id));
 }
 
-router.patch('/status-pages/:id', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.patch('/status-pages/:id', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   const b = req.body || {};
   const set = [];
@@ -454,7 +462,7 @@ router.patch('/status-pages/:id', canEditPages, (req, res) => {
     const slug = String(b.slug).trim().toLowerCase();
     if (!SLUG_RE.test(slug)) return httpError(res, 400, 'slug must be 2-41 chars of a-z, 0-9 and -');
     if (RESERVED_SLUGS.includes(slug)) return httpError(res, 400, `"${slug}" is reserved`);
-    const taken = statusPages.pageBySlug(slug);
+    const taken = await statusPages.pageBySlug(slug);
     if (taken && taken.id !== page.id) return httpError(res, 409, 'that slug is already taken');
     put('slug', slug);
   }
@@ -509,22 +517,22 @@ router.patch('/status-pages/:id', canEditPages, (req, res) => {
     put('custom_css', String(b.customCss));
   }
 
-  if (set.length) db.prepare(`UPDATE status_pages SET ${set.join(', ')} WHERE id = ?`).run(...args, page.id);
-  if (b.componentIds !== undefined) setPageComponents(page, b.componentIds);
+  if (set.length) await q.prepare(`UPDATE status_pages SET ${set.join(', ')} WHERE id = ?`).run(...args, page.id);
+  if (b.componentIds !== undefined) await setPageComponents(page, b.componentIds);
   // the default page's publish flag is mirrored by the settings endpoint, so
   // keep the setting in step when it is flipped from here instead
   if (b.published !== undefined && page.is_default) {
-    setOrgSetting(req.orgId, 'status_published', b.published ? '1' : '0');
+    await setOrgSetting(req.orgId, 'status_published', b.published ? '1' : '0');
   }
   sec.audit(req.user.id, 'status_page_update', `${page.name}: ${Object.keys(b).join(',')}`, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
-router.delete('/status-pages/:id', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.delete('/status-pages/:id', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   if (page.is_default) return httpError(res, 400, 'the main status page cannot be deleted');
-  db.prepare('DELETE FROM status_pages WHERE id = ?').run(page.id);
+  await q.prepare('DELETE FROM status_pages WHERE id = ?').run(page.id);
   sec.audit(req.user.id, 'status_page_delete', `${page.name} (/status/${page.slug})`, req.orgId);
   res.json({ ok: true });
 });
@@ -532,22 +540,22 @@ router.delete('/status-pages/:id', canEditPages, (req, res) => {
 // Rotating the secret is the "revoke the link" button — everyone who was sent
 // the old URL loses access immediately, which is the only lever a shared-link
 // audience has.
-router.post('/status-pages/:id/rotate-token', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.post('/status-pages/:id/rotate-token', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   if (page.visibility !== 'private') return httpError(res, 400, 'page is not private');
-  db.prepare('UPDATE status_pages SET access_token = ? WHERE id = ?')
+  await q.prepare('UPDATE status_pages SET access_token = ? WHERE id = ?')
     .run(statusPages.newAccessToken(), page.id);
   sec.audit(req.user.id, 'status_page_rotate_token', page.name, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
 // ---- branding assets ----
 // Uploads arrive base64 in a JSON body rather than as multipart: it keeps the
 // dependency list unchanged (no multer) and a 512 KB logo is nowhere near the
 // 1 MB express.json ceiling. The bytes are sniffed, never trusted.
-router.put('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.put('/status-pages/:id/asset/:kind', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   const kind = req.params.kind;
   if (!['logo', 'favicon'].includes(kind)) return httpError(res, 404, 'unknown asset');
@@ -562,36 +570,36 @@ router.put('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
   const b64 = data.replace(/^data:[^;,]*;base64,/, '');
   let buf;
   try { buf = Buffer.from(b64, 'base64'); } catch { return httpError(res, 400, 'data is not valid base64'); }
-  const r = branding.putAsset(page.id, kind, buf);
+  const r = await branding.putAsset(page.id, kind, buf);
   if (!r.ok) return httpError(res, 400, r.error);
   sec.audit(req.user.id, 'status_branding_upload', `${page.name} ${kind} (${r.mime}, ${r.bytes} bytes)`, req.orgId);
   res.json({ ok: true, mime: r.mime, bytes: r.bytes });
 });
 
-router.delete('/status-pages/:id/asset/:kind', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.delete('/status-pages/:id/asset/:kind', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   if (!['logo', 'favicon'].includes(req.params.kind)) return httpError(res, 404, 'unknown asset');
-  branding.deleteAsset(page.id, req.params.kind);
+  await branding.deleteAsset(page.id, req.params.kind);
   sec.audit(req.user.id, 'status_branding_delete', `${page.name} ${req.params.kind}`, req.orgId);
   res.json({ ok: true });
 });
 
 // ---- custom domain ----
-router.post('/status-pages/:id/domain', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.post('/status-pages/:id/domain', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   if (!plans.hasFeature(req.org.plan, 'status_domain')) {
     return httpError(res, 403, 'a custom domain requires the Pro plan');
   }
-  const r = statusDomains.setDomain(page, req.body?.domain);
+  const r = await statusDomains.setDomain(page, req.body?.domain);
   if (!r.ok) return httpError(res, 400, r.error);
   sec.audit(req.user.id, 'status_domain_set', `${page.name} -> ${r.domain}`, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
 router.post('/status-pages/:id/domain/verify', canEditPages, async (req, res) => {
-  const page = pageOr404(req, res);
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
   if (!plans.hasFeature(req.org.plan, 'status_domain')) {
     return httpError(res, 403, 'a custom domain requires the Pro plan');
@@ -599,28 +607,28 @@ router.post('/status-pages/:id/domain/verify', canEditPages, async (req, res) =>
   const r = await statusDomains.verifyDomain(page, req.app.get('dnsResolver') || null);
   if (!r.ok) return res.status(400).json({ error: r.error, found: r.found });
   sec.audit(req.user.id, 'status_domain_verified', `${page.name} -> ${page.domain}`, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
-router.delete('/status-pages/:id/domain', canEditPages, (req, res) => {
-  const page = pageOr404(req, res);
+router.delete('/status-pages/:id/domain', canEditPages, async (req, res) => {
+  const page = await pageOr404(req, res);
   if (!page) return undefined;
-  statusDomains.clearDomain(page);
+  await statusDomains.clearDomain(page);
   sec.audit(req.user.id, 'status_domain_clear', page.name, req.orgId);
-  res.json(pageDTO(req, statusPages.pageById(page.id, req.orgId)));
+  res.json(await pageDTO(req, await statusPages.pageById(page.id, req.orgId)));
 });
 
 // ---- log pipeline: throughput + classifiers ----
 
 // Ingest throughput from the hourly ingest_stats counters. 24h keeps hour
 // buckets; 7d/30d aggregate into days. Gaps are zero-filled for the charts.
-router.get('/pipeline/stats', (req, res) => {
+router.get('/pipeline/stats', async (req, res) => {
   const range = ['24h', '7d', '30d'].includes(req.query.range) ? req.query.range : '24h';
   const days = { '24h': 1, '7d': 7, '30d': 30 }[range];
   const step = days === 1 ? 3600000 : 86400000;
   const t = now();
   const since = Math.floor((t - days * 86400000) / step) * step + step;
-  const rows = db.prepare(`SELECT bucket, lines, bytes, events FROM ingest_stats
+  const rows = await q.prepare(`SELECT bucket, lines, bytes, events FROM ingest_stats
     WHERE org_id = ? AND bucket >= ? ORDER BY bucket`).all(req.orgId, since);
   const byBucket = new Map();
   const totals = { lines: 0, bytes: 0, events: 0 };
@@ -640,10 +648,10 @@ router.get('/pipeline/stats', (req, res) => {
   // for 7d/30d there is no honest minute figure and we say so (`peak.source`)
   // rather than dividing the busiest hour by 60 and calling it a peak.
   const minuteSince = Math.max(since, t - 48 * 3600000);
-  const pm = db.prepare(`SELECT bucket, lines, bytes FROM ingest_minutes
+  const pm = await q.prepare(`SELECT bucket, lines, bytes FROM ingest_minutes
     WHERE org_id = ? AND bucket >= ? ORDER BY lines DESC LIMIT 1`).get(req.orgId, minuteSince);
-  const covers = db.prepare('SELECT MIN(bucket) mn FROM ingest_minutes WHERE org_id = ?')
-    .get(req.orgId).mn;
+  const covers = (await q.prepare('SELECT MIN(bucket) mn FROM ingest_minutes WHERE org_id = ?')
+    .get(req.orgId)).mn;
   const peak = pm
     ? { source: 'minute', lines: pm.lines, bytes: pm.bytes, at: pm.bucket,
         perSecond: pm.lines / 60, coveredFrom: Math.max(minuteSince, covers ?? minuteSince) }
@@ -656,7 +664,7 @@ router.get('/pipeline/classifiers', (req, res) => {
 });
 
 const CLASSIFIER_NAME_RE = /^[\w.:-]{1,50}$/;
-router.put('/pipeline/classifiers', sec.requireRole('admin'), (req, res) => {
+router.put('/pipeline/classifiers', sec.requireRole('admin'), async (req, res) => {
   const arr = req.body?.classifiers;
   if (!Array.isArray(arr) || arr.length > 100) {
     return httpError(res, 400, 'expected {classifiers:[...]} with at most 100 rules');
@@ -681,7 +689,7 @@ router.put('/pipeline/classifiers', sec.requireRole('admin'), (req, res) => {
     cleaned.push({ pattern: c.pattern, flags, name: c.name, severity,
       ...(targetGroup ? { targetGroup } : {}), ...(draft ? { enabled: false } : {}) });
   }
-  setOrgSetting(req.orgId, 'classifiers', JSON.stringify(cleaned));
+  await setOrgSetting(req.orgId, 'classifiers', JSON.stringify(cleaned));
   pipelineEngine.loadClassifiers(req.orgId);
   sec.audit(req.user.id, 'classifiers_update', `${cleaned.length} rules`, req.orgId);
   res.json({ ok: true, count: cleaned.length });
@@ -703,7 +711,7 @@ router.post('/pipeline/test', (req, res) => {
 // Dry-run a rule against the logs already stored: "what would this have done in
 // the last N hours", including whether an existing custom rule shadows it. Reads
 // only — nothing is classified, stored or alerted.
-router.post('/pipeline/dryrun', sec.requireRole('admin'), (req, res) => {
+router.post('/pipeline/dryrun', sec.requireRole('admin'), async (req, res) => {
   const pattern = req.body?.pattern;
   if (!isStr(pattern, 300)) return httpError(res, 400, 'expected {pattern} (max 300 chars)');
   const flags = req.body?.flags == null || req.body.flags === '' ? 'i' : String(req.body.flags);
@@ -711,7 +719,7 @@ router.post('/pipeline/dryrun', sec.requireRole('admin'), (req, res) => {
   const name = isStr(req.body?.name, 50) && CLASSIFIER_NAME_RE.test(req.body.name) ? req.body.name : 'rule';
   const targetGroup = req.body?.targetGroup ? clampInt(req.body.targetGroup, 1, 9, 0) || null : null;
   try {
-    res.json(pipelineEngine.backtest({
+    res.json(await pipelineEngine.backtest({
       orgId: req.orgId, pattern, flags, name,
       severity: clampInt(req.body?.severity, 0, 100, 50),
       targetGroup, hours: clampInt(req.body?.hours, 1, 720, 24),
@@ -723,12 +731,12 @@ router.post('/pipeline/dryrun', sec.requireRole('admin'), (req, res) => {
 
 // ---- Scout: rule suggestions mined from unclassified lines ----
 
-const getScoutRow = db.prepare('SELECT * FROM scout_templates WHERE id = ? AND org_id = ?');
+const getScoutRow = q.prepare('SELECT * FROM scout_templates WHERE id = ? AND org_id = ?');
 
-router.get('/scout', (req, res) => {
+router.get('/scout', async (req, res) => {
   const status = ['pending', 'approved', 'dismissed'].includes(req.query.status)
     ? req.query.status : 'pending';
-  const rows = db.prepare(`SELECT id, template, count, sample, status, suggestion, first_seen, last_seen
+  const rows = await q.prepare(`SELECT id, template, count, sample, status, suggestion, first_seen, last_seen
     FROM scout_templates WHERE org_id = ? AND status = ? ORDER BY count DESC LIMIT 200`)
     .all(req.orgId, status);
   res.json(rows.map((r) => {
@@ -755,7 +763,7 @@ const SCOUT_SYSTEM_PROMPT =
 // Ask the org's LLM for a name/severity suggestion; stored on the row so the
 // call happens once per template (admins can re-run it after model changes).
 router.post('/scout/:id/suggest', sec.requireRole('admin'), async (req, res) => {
-  const row = getScoutRow.get(req.params.id, req.orgId);
+  const row = await getScoutRow.get(req.params.id, req.orgId);
   if (!row) return httpError(res, 404, 'template not found');
   try {
     const reply = await llm.chat(req.orgId, [
@@ -771,7 +779,7 @@ router.post('/scout/:id/suggest', sec.requireRole('admin'), async (req, res) => 
       skip: !!s.skip,
       reason: String(s.reason || '').slice(0, 300),
     };
-    db.prepare('UPDATE scout_templates SET suggestion = ? WHERE id = ?')
+    await q.prepare('UPDATE scout_templates SET suggestion = ? WHERE id = ?')
       .run(JSON.stringify(suggestion), row.id);
     res.json({ ok: true, suggestion });
   } catch (e) {
@@ -789,8 +797,8 @@ router.post('/scout/:id/suggest', sec.requireRole('admin'), async (req, res) => 
  * that disagrees with the rule is worse than no preview. Returning it from the
  * dry-run means the pattern displayed is literally the one just executed.
  */
-router.post('/scout/:id/dryrun', sec.requireRole('admin'), (req, res) => {
-  const row = getScoutRow.get(req.params.id, req.orgId);
+router.post('/scout/:id/dryrun', sec.requireRole('admin'), async (req, res) => {
+  const row = await getScoutRow.get(req.params.id, req.orgId);
   if (!row) return httpError(res, 404, 'template not found');
   const targetIndex = clampInt(req.body?.targetIndex, 0, 9, 0);
   const { pattern, captureGroup } = scoutEngine.templateToPattern(row.template, targetIndex);
@@ -800,10 +808,10 @@ router.post('/scout/:id/dryrun', sec.requireRole('admin'), (req, res) => {
   try {
     res.json({
       pattern, captureGroup, tooLong: pattern.length > 300,
-      ...pipelineEngine.backtest({
+      ...(await pipelineEngine.backtest({
         orgId: req.orgId, pattern, flags: 'i', name, severity,
         targetGroup: captureGroup, hours: clampInt(req.body?.hours, 1, 720, 24),
-      }),
+      })),
     });
   } catch (e) {
     httpError(res, 400, String(e.message).slice(0, 200));
@@ -815,8 +823,8 @@ router.post('/scout/:id/dryrun', sec.requireRole('admin'), (req, res) => {
 // asks for a live rule — Scout proposes, a human switches it on under
 // Classifiers. targetIndex picks which placeholder (1-based) is captured into
 // the event target.
-router.post('/scout/:id/approve', sec.requireRole('admin'), (req, res) => {
-  const row = getScoutRow.get(req.params.id, req.orgId);
+router.post('/scout/:id/approve', sec.requireRole('admin'), async (req, res) => {
+  const row = await getScoutRow.get(req.params.id, req.orgId);
   if (!row) return httpError(res, 404, 'template not found');
   const name = req.body?.name;
   if (!isStr(name, 50) || !CLASSIFIER_NAME_RE.test(name)) {
@@ -834,18 +842,18 @@ router.post('/scout/:id/approve', sec.requireRole('admin'), (req, res) => {
   const live = req.body?.enable === true;
   custom.push({ pattern, flags: 'i', name, severity,
     ...(captureGroup ? { targetGroup: captureGroup } : {}), ...(live ? {} : { enabled: false }) });
-  setOrgSetting(req.orgId, 'classifiers', JSON.stringify(custom));
+  await setOrgSetting(req.orgId, 'classifiers', JSON.stringify(custom));
   pipelineEngine.loadClassifiers(req.orgId);
-  db.prepare("UPDATE scout_templates SET status = 'approved' WHERE id = ?").run(row.id);
+  await q.prepare("UPDATE scout_templates SET status = 'approved' WHERE id = ?").run(row.id);
   sec.audit(req.user.id, live ? 'scout_approve' : 'scout_draft',
     `${name} (sev ${severity}${live ? '' : ', draft'}) ← ${row.template.slice(0, 120)}`, req.orgId);
   res.json({ ok: true, pattern, name, severity, enabled: live });
 });
 
-router.post('/scout/:id/dismiss', sec.requireRole('admin'), (req, res) => {
-  const row = getScoutRow.get(req.params.id, req.orgId);
+router.post('/scout/:id/dismiss', sec.requireRole('admin'), async (req, res) => {
+  const row = await getScoutRow.get(req.params.id, req.orgId);
   if (!row) return httpError(res, 404, 'template not found');
-  db.prepare("UPDATE scout_templates SET status = 'dismissed' WHERE id = ?").run(row.id);
+  await q.prepare("UPDATE scout_templates SET status = 'dismissed' WHERE id = ?").run(row.id);
   sec.audit(req.user.id, 'scout_dismiss', row.template.slice(0, 120), req.orgId);
   res.json({ ok: true });
 });
@@ -889,8 +897,8 @@ function validateAutomation(b, res) {
     cooldownM: clampInt(b.cooldownM, 0, 1440, 15), enabled: b.enabled !== false };
 }
 
-router.get('/automations', (req, res) => {
-  res.json(db.prepare('SELECT * FROM automations WHERE org_id = ? ORDER BY id').all(req.orgId)
+router.get('/automations', async (req, res) => {
+  res.json((await q.prepare('SELECT * FROM automations WHERE org_id = ? ORDER BY id').all(req.orgId))
     .map((a) => {
       let trigger = null, actions = [];
       try { trigger = JSON.parse(a.trigger_json); actions = JSON.parse(a.actions_json); } catch { /* invalid */ }
@@ -900,35 +908,35 @@ router.get('/automations', (req, res) => {
 });
 
 // recent runs (from the audit trail; system actor)
-router.get('/automations/runs', (req, res) => {
+router.get('/automations/runs', async (req, res) => {
   const limit = clampInt(req.query.limit, 1, 200, 50);
-  res.json(db.prepare(`SELECT ts, detail FROM audit_log
+  res.json(await q.prepare(`SELECT ts, detail FROM audit_log
     WHERE org_id = ? AND action = 'automation_run' ORDER BY ts DESC LIMIT ?`).all(req.orgId, limit));
 });
 
-router.post('/automations', sec.requireRole('lead'), (req, res) => {
+router.post('/automations', sec.requireRole('lead'), async (req, res) => {
   const v = validateAutomation(req.body || {}, res);
   if (!v) return undefined;
-  const info = db.prepare(`INSERT INTO automations (org_id, name, enabled, trigger_json, actions_json,
+  const id = await q.prepare(`INSERT INTO automations (org_id, name, enabled, trigger_json, actions_json,
     cooldown_m, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(req.orgId, v.name, v.enabled ? 1 : 0, JSON.stringify(v.trigger), JSON.stringify(v.actions),
+    .insert(req.orgId, v.name, v.enabled ? 1 : 0, JSON.stringify(v.trigger), JSON.stringify(v.actions),
       v.cooldownM, req.user.id, now());
   automationEngine.invalidate(req.orgId);
   sec.audit(req.user.id, 'automation_create', v.name, req.orgId);
-  res.json({ id: info.lastInsertRowid });
+  res.json({ id });
 });
 
-router.patch('/automations/:id', sec.requireRole('lead'), (req, res) => {
-  const a = db.prepare('SELECT * FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.patch('/automations/:id', sec.requireRole('lead'), async (req, res) => {
+  const a = await q.prepare('SELECT * FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!a) return httpError(res, 404, 'automation not found');
   const b = req.body || {};
   // toggle-only PATCH keeps the stored definition untouched
   if (Object.keys(b).length === 1 && typeof b.enabled === 'boolean') {
-    db.prepare('UPDATE automations SET enabled = ? WHERE id = ?').run(b.enabled ? 1 : 0, a.id);
+    await q.prepare('UPDATE automations SET enabled = ? WHERE id = ?').run(b.enabled ? 1 : 0, a.id);
   } else {
     const v = validateAutomation(b, res);
     if (!v) return undefined;
-    db.prepare(`UPDATE automations SET name = ?, enabled = ?, trigger_json = ?, actions_json = ?,
+    await q.prepare(`UPDATE automations SET name = ?, enabled = ?, trigger_json = ?, actions_json = ?,
       cooldown_m = ? WHERE id = ?`)
       .run(v.name, v.enabled ? 1 : 0, JSON.stringify(v.trigger), JSON.stringify(v.actions), v.cooldownM, a.id);
   }
@@ -937,10 +945,10 @@ router.patch('/automations/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/automations/:id', sec.requireRole('lead'), (req, res) => {
-  const a = db.prepare('SELECT name FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.delete('/automations/:id', sec.requireRole('lead'), async (req, res) => {
+  const a = await q.prepare('SELECT name FROM automations WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!a) return httpError(res, 404, 'automation not found');
-  db.prepare('DELETE FROM automations WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+  await q.prepare('DELETE FROM automations WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   automationEngine.invalidate(req.orgId);
   sec.audit(req.user.id, 'automation_delete', a.name, req.orgId);
   res.json({ ok: true });
@@ -955,7 +963,7 @@ router.get('/ai', sec.requireRole('admin'), (req, res) => {
   res.json(llm.statusFor(req.orgId));
 });
 
-router.put('/ai', sec.requireRole('admin'), (req, res) => {
+router.put('/ai', sec.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const patch = {};
   if (b.baseUrl !== undefined) {
@@ -971,7 +979,7 @@ router.put('/ai', sec.requireRole('admin'), (req, res) => {
     if (typeof b.apiKey !== 'string' || b.apiKey.length > 500) return httpError(res, 400, 'bad apiKey');
     patch.apiKey = b.apiKey; // '' clears the stored key
   }
-  llm.saveOrgConfig(req.orgId, patch);
+  await llm.saveOrgConfig(req.orgId, patch);
   sec.audit(req.user.id, 'ai_config_update',
     Object.keys(patch).map((k) => (k === 'apiKey' ? 'apiKey(hidden)' : k)).join(','), req.orgId);
   res.json({ ok: true, ...llm.statusFor(req.orgId) });
@@ -1004,7 +1012,7 @@ router.get('/telephony', sec.requireRole('admin'), (req, res) => {
   res.json({ ...telephony.statusFor(req.orgId), providers: telephony.PROVIDERS });
 });
 
-router.put('/telephony', sec.requireRole('admin'), (req, res) => {
+router.put('/telephony', sec.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const patch = {};
   if (b.provider !== undefined) {
@@ -1029,7 +1037,7 @@ router.put('/telephony', sec.requireRole('admin'), (req, res) => {
     if (typeof b.secret !== 'string' || b.secret.length > 500) return httpError(res, 400, 'bad secret');
     patch.secret = b.secret;   // '' clears it
   }
-  telephony.save(req.orgId, patch);
+  await telephony.save(req.orgId, patch);
   sec.audit(req.user.id, 'telephony_config_update',
     Object.keys(patch).map((k) => (k === 'secret' ? 'secret(hidden)' : k)).join(','), req.orgId);
   res.json({ ok: true, ...telephony.statusFor(req.orgId) });
@@ -1045,7 +1053,7 @@ router.get('/voice', sec.requireRole('admin'), (req, res) => {
   res.json(voice.statusFor(req.orgId));
 });
 
-router.put('/voice', sec.requireRole('admin'), (req, res) => {
+router.put('/voice', sec.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const patch = {};
   if (b.baseUrl !== undefined) {
@@ -1061,7 +1069,7 @@ router.put('/voice', sec.requireRole('admin'), (req, res) => {
     if (typeof b.apiKey !== 'string' || b.apiKey.length > 500) return httpError(res, 400, 'bad apiKey');
     patch.apiKey = b.apiKey; // '' clears the stored key
   }
-  voice.saveOrgConfig(req.orgId, patch);
+  await voice.saveOrgConfig(req.orgId, patch);
   sec.audit(req.user.id, 'voice_config_update',
     Object.keys(patch).map((k) => (k === 'apiKey' ? 'apiKey(hidden)' : k)).join(','), req.orgId);
   res.json({ ok: true, ...voice.statusFor(req.orgId) });
@@ -1083,9 +1091,9 @@ router.post('/voice/test', sec.requireRole('admin'), async (req, res) => {
 });
 
 // ---- SNMP targets (lead+) ----
-router.get('/snmp/targets', sec.requireRole('lead'), (req, res) => {
-  res.json(db.prepare(`SELECT id, name, host, port, version, oids, interval_s, enabled,
-    last_status, last_seen_at, v3_user, v3_level FROM snmp_targets WHERE org_id = ? ORDER BY id`).all(req.orgId)
+router.get('/snmp/targets', sec.requireRole('lead'), async (req, res) => {
+  res.json((await q.prepare(`SELECT id, name, host, port, version, oids, interval_s, enabled,
+    last_status, last_seen_at, v3_user, v3_level FROM snmp_targets WHERE org_id = ? ORDER BY id`).all(req.orgId))
     .map((t) => ({ id: t.id, name: t.name, host: t.host, port: t.port, version: t.version,
       oids: JSON.parse(t.oids || '[]'), intervalS: t.interval_s, enabled: !!t.enabled,
       lastStatus: t.last_status, lastSeenAt: t.last_seen_at,
@@ -1094,7 +1102,7 @@ router.get('/snmp/targets', sec.requireRole('lead'), (req, res) => {
 
 const V3_LEVELS = ['noAuthNoPriv', 'authNoPriv', 'authPriv'];
 
-router.post('/snmp/targets', sec.requireRole('lead'), (req, res) => {
+router.post('/snmp/targets', sec.requireRole('lead'), async (req, res) => {
   const { name, host, port, version, community, oids, intervalS,
     v3User, v3Level, v3AuthProtocol, v3AuthKey, v3PrivProtocol, v3PrivKey } = req.body || {};
   if (!isStr(name, 100) || !isStr(host, 255)) return httpError(res, 400, 'name and host required');
@@ -1117,27 +1125,27 @@ router.post('/snmp/targets', sec.requireRole('lead'), (req, res) => {
       v3.privKeyEnc = encrypt(v3PrivKey, config.secret);
     }
   }
-  if (!withinPlan(req, res, 'snmpTargets')) return undefined;
+  if (!(await withinPlan(req, res, 'snmpTargets'))) return undefined;
   let oidsJson = '[]';
   if (Array.isArray(oids)) {
     const clean = oids.filter((o) => o && /^[0-9.]+$/.test(o.oid) && isStr(o.label, 100)).slice(0, 48);
     oidsJson = JSON.stringify(clean);
   }
-  const info = db.prepare(`INSERT INTO snmp_targets (org_id, name, host, port, version, community_enc, oids,
+  const id = await q.prepare(`INSERT INTO snmp_targets (org_id, name, host, port, version, community_enc, oids,
     interval_s, enabled, v3_user, v3_level, v3_auth_protocol, v3_auth_key_enc, v3_priv_protocol, v3_priv_key_enc,
     created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(req.orgId, name, host, clampInt(port, 1, 65535, 161), ver,
+    .insert(req.orgId, name, host, clampInt(port, 1, 65535, 161), ver,
       encrypt(ver === '2c' ? community : '', config.secret), oidsJson, clampInt(intervalS, 15, 3600, 60),
       v3.user, v3.level, v3.authProto, v3.authKeyEnc, v3.privProto, v3.privKeyEnc, now());
   sec.audit(req.user.id, 'snmp_target_create', `${name} (${host}, v${ver})`, req.orgId);
-  res.json({ id: info.lastInsertRowid });
+  res.json({ id });
 });
 
-router.patch('/snmp/targets/:id', sec.requireRole('lead'), (req, res) => {
-  const t = db.prepare('SELECT * FROM snmp_targets WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.patch('/snmp/targets/:id', sec.requireRole('lead'), async (req, res) => {
+  const t = await q.prepare('SELECT * FROM snmp_targets WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!t) return httpError(res, 404, 'target not found');
   const b = req.body || {};
-  db.prepare(`UPDATE snmp_targets SET name = COALESCE(?, name), host = COALESCE(?, host),
+  await q.prepare(`UPDATE snmp_targets SET name = COALESCE(?, name), host = COALESCE(?, host),
       enabled = COALESCE(?, enabled), interval_s = COALESCE(?, interval_s),
       community_enc = COALESCE(?, community_enc) WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null, isStr(b.host, 255) ? b.host : null,
@@ -1148,72 +1156,72 @@ router.patch('/snmp/targets/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/snmp/targets/:id', sec.requireRole('lead'), (req, res) => {
-  db.prepare('DELETE FROM snmp_targets WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+router.delete('/snmp/targets/:id', sec.requireRole('lead'), async (req, res) => {
+  await q.prepare('DELETE FROM snmp_targets WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'snmp_target_delete', `target ${req.params.id}`, req.orgId);
   res.json({ ok: true });
 });
 
 // ---- agents management ----
-router.get('/agents', (req, res) => {
+router.get('/agents', async (req, res) => {
   const t = now();
-  res.json(db.prepare(`SELECT id, name, grp, hostname, platform, version, active, auto_update,
-    last_seen_at, created_at FROM agents WHERE org_id = ? ORDER BY grp, id`).all(req.orgId)
+  res.json((await q.prepare(`SELECT id, name, grp, hostname, platform, version, active, auto_update,
+    last_seen_at, created_at FROM agents WHERE org_id = ? ORDER BY grp, id`).all(req.orgId))
     .map((a) => ({ id: a.id, name: a.name, group: a.grp, hostname: a.hostname, platform: a.platform,
       version: a.version, active: !!a.active, autoUpdate: !!a.auto_update, lastSeenAt: a.last_seen_at,
       online: !!a.last_seen_at && t - a.last_seen_at < 3 * 60 * 1000 })));
 });
 
-router.post('/agents', sec.requireRole('lead'), (req, res) => {
+router.post('/agents', sec.requireRole('lead'), async (req, res) => {
   const { name, group, autoUpdate } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  if (db.prepare('SELECT id FROM agents WHERE name = ?').get(name)) {
+  if (await q.prepare('SELECT id FROM agents WHERE name = ?').get(name)) {
     return httpError(res, 409, 'agent name already exists');
   }
-  if (!withinPlan(req, res, 'agents')) return undefined;
+  if (!(await withinPlan(req, res, 'agents'))) return undefined;
   const token = 'oca_' + crypto.randomBytes(24).toString('hex');
-  const info = db.prepare(`INSERT INTO agents (org_id, name, grp, token_hash, auto_update, created_at)
+  const id = await q.prepare(`INSERT INTO agents (org_id, name, grp, token_hash, auto_update, created_at)
     VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(req.orgId, name, isStr(group, 100) ? group : 'default', sha256(token),
+    .insert(req.orgId, name, isStr(group, 100) ? group : 'default', sha256(token),
       autoUpdate === false ? 0 : 1, now());
   sec.audit(req.user.id, 'agent_create', name, req.orgId);
-  res.json({ id: info.lastInsertRowid, token, note: 'store this token now — it is not retrievable later' });
+  res.json({ id, token, note: 'store this token now — it is not retrievable later' });
 });
 
-router.patch('/agents/:id', sec.requireRole('lead'), (req, res) => {
-  const a = db.prepare('SELECT * FROM agents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.patch('/agents/:id', sec.requireRole('lead'), async (req, res) => {
+  const a = await q.prepare('SELECT * FROM agents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!a) return httpError(res, 404, 'agent not found');
   const b = req.body || {};
-  db.prepare('UPDATE agents SET auto_update = COALESCE(?, auto_update) WHERE id = ? AND org_id = ?')
+  await q.prepare('UPDATE agents SET auto_update = COALESCE(?, auto_update) WHERE id = ? AND org_id = ?')
     .run(typeof b.autoUpdate === 'boolean' ? (b.autoUpdate ? 1 : 0) : null, a.id, req.orgId);
   sec.audit(req.user.id, 'agent_update', a.name, req.orgId);
   res.json({ ok: true });
 });
 
-router.get('/agents/:id/metrics', (req, res) => {
+router.get('/agents/:id/metrics', async (req, res) => {
   const hours = clampInt(req.query.hours, 1, 168, 24);
   // confirm the agent belongs to this org before returning its (org-less) metrics
-  const agent = db.prepare('SELECT id FROM agents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+  const agent = await q.prepare('SELECT id FROM agents WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!agent) return httpError(res, 404, 'agent not found');
-  const rows = db.prepare(`SELECT ts, cpu_pct, load1, mem_used, mem_total, disk_used, disk_total,
+  const rows = await q.prepare(`SELECT ts, cpu_pct, load1, mem_used, mem_total, disk_used, disk_total,
     net_rx, net_tx FROM agent_metrics WHERE agent_id = ? AND ts >= ? ORDER BY ts`)
     .all(req.params.id, now() - hours * 3600000);
   res.json(rows);
 });
 
-router.delete('/agents/:id', sec.requireRole('lead'), (req, res) => {
-  db.prepare('DELETE FROM agents WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+router.delete('/agents/:id', sec.requireRole('lead'), async (req, res) => {
+  await q.prepare('DELETE FROM agents WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'agent_delete', `agent ${req.params.id}`, req.orgId);
   res.json({ ok: true });
 });
 
 // ---- status page components (lead+ to modify) ----
-router.get('/components', (req, res) => {
-  const comps = db.prepare(`SELECT c.*, co.user_id AS owner_user_id FROM components c
+router.get('/components', async (req, res) => {
+  const comps = await q.prepare(`SELECT c.*, co.user_id AS owner_user_id FROM components c
     LEFT JOIN component_owners co ON co.component_id = c.id
     WHERE c.org_id = ? ORDER BY c.sort, c.id`).all(req.orgId);
   const since = new Date(now() - 45 * 86400000).toISOString().slice(0, 10);
-  const days = db.prepare(`SELECT cd.* FROM component_days cd
+  const days = await q.prepare(`SELECT cd.* FROM component_days cd
     JOIN components c ON c.id = cd.component_id
     WHERE cd.day >= ? AND c.org_id = ?`).all(since, req.orgId);
   const byComp = new Map();
@@ -1234,34 +1242,39 @@ router.get('/components', (req, res) => {
   }));
 });
 
-router.post('/components', sec.requireRole('lead'), (req, res) => {
+router.post('/components', sec.requireRole('lead'), async (req, res) => {
   const { name, group } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  const info = db.prepare(`INSERT INTO components (org_id, name, grp, status, sort, created_at)
+  const id = await q.prepare(`INSERT INTO components (org_id, name, grp, status, sort, created_at)
     VALUES (?, ?, ?, 'operational', (SELECT COALESCE(MAX(sort), 0) + 1 FROM components WHERE org_id = ?), ?)`)
-    .run(req.orgId, name, isStr(group, 100) ? group : 'Core', req.orgId, now());
+    .insert(req.orgId, name, isStr(group, 100) ? group : 'Core', req.orgId, now());
   sec.audit(req.user.id, 'component_create', name, req.orgId);
-  res.json({ id: info.lastInsertRowid });
+  res.json({ id });
 });
 
-router.patch('/components/:id', sec.requireRole('lead'), (req, res) => {
-  const c = db.prepare('SELECT * FROM components WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
+router.patch('/components/:id', sec.requireRole('lead'), async (req, res) => {
+  const c = await q.prepare('SELECT * FROM components WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!c) return httpError(res, 404, 'component not found');
   const b = req.body || {};
   if (b.status && !statusScale.ORDER.includes(b.status)) return httpError(res, 400, 'bad status');
-  db.prepare(`UPDATE components SET name = COALESCE(?, name), grp = COALESCE(?, grp),
+  await q.prepare(`UPDATE components SET name = COALESCE(?, name), grp = COALESCE(?, grp),
       status = COALESCE(?, status) WHERE id = ? AND org_id = ?`)
     .run(isStr(b.name, 100) ? b.name : null, isStr(b.group, 100) ? b.group : null,
       b.status || null, c.id, req.orgId);
   // owner: an explicit null clears, a user id (org member) sets, absent = keep
   if ('ownerId' in b) {
     if (b.ownerId === null) {
-      db.prepare('DELETE FROM component_owners WHERE component_id = ?').run(c.id);
+      await q.prepare('DELETE FROM component_owners WHERE component_id = ?').run(c.id);
     } else {
-      const u = db.prepare(`SELECT u.id FROM memberships m JOIN users u ON u.id = m.user_id
+      // Shape-checked BEFORE it reaches a uuid column. Unvalidated, SQLite just
+      // matched no row (400, by luck) while Postgres raised
+      // `invalid input syntax for type uuid` — an unhandled 500 for what is
+      // plainly a bad request.
+      if (!isId(b.ownerId)) return httpError(res, 400, 'owner must be a member of this organization');
+      const u = await q.prepare(`SELECT u.id FROM memberships m JOIN users u ON u.id = m.user_id
         WHERE m.user_id = ? AND m.org_id = ? AND u.active = 1`).get(b.ownerId, req.orgId);
       if (!u) return httpError(res, 400, 'owner must be a member of this organization');
-      db.prepare(`INSERT INTO component_owners (component_id, user_id) VALUES (?, ?)
+      await q.prepare(`INSERT INTO component_owners (component_id, user_id) VALUES (?, ?)
         ON CONFLICT(component_id) DO UPDATE SET user_id = excluded.user_id`).run(c.id, u.id);
     }
   }
@@ -1280,8 +1293,8 @@ router.patch('/components/:id', sec.requireRole('lead'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/components/:id', sec.requireRole('lead'), (req, res) => {
-  db.prepare('DELETE FROM components WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
+router.delete('/components/:id', sec.requireRole('lead'), async (req, res) => {
+  await q.prepare('DELETE FROM components WHERE id = ? AND org_id = ?').run(req.params.id, req.orgId);
   sec.audit(req.user.id, 'component_delete', `component ${req.params.id}`, req.orgId);
   res.json({ ok: true });
 });
@@ -1289,13 +1302,13 @@ router.delete('/components/:id', sec.requireRole('lead'), (req, res) => {
 // ---- status-page subscribers (lead+: addresses are PII, same gate as users) --
 const subscribersLib = require('../lib/subscribers');
 
-router.get('/status-subscribers', sec.requireRole('lead'), (req, res) => {
-  res.json({ available: subscribersLib.available(req.orgId),
-    enabled: subscribersLib.enabled(req.orgId), ...subscribersLib.adminList(req.orgId) });
+router.get('/status-subscribers', sec.requireRole('lead'), async (req, res) => {
+  res.json({ available: subscribersLib.availableForOrg(req.orgId),
+    enabled: subscribersLib.enabled(req.orgId), ...(await subscribersLib.adminList(req.orgId)) });
 });
 
-router.delete('/status-subscribers/:id', sec.requireRole('lead'), (req, res) => {
-  if (!subscribersLib.adminDelete(req.orgId, Number(req.params.id))) {
+router.delete('/status-subscribers/:id', sec.requireRole('lead'), async (req, res) => {
+  if (!(await subscribersLib.adminDelete(req.orgId, Number(req.params.id)))) {
     return httpError(res, 404, 'subscriber not found');
   }
   sec.audit(req.user.id, 'status_subscriber_delete', `subscriber ${req.params.id}`, req.orgId);
@@ -1303,25 +1316,29 @@ router.delete('/status-subscribers/:id', sec.requireRole('lead'), (req, res) => 
 });
 
 // ---- system info (admin) ----
-router.get('/system', sec.requireRole('admin'), (req, res) => {
-  const fs = require('fs');
+router.get('/system', sec.requireRole('admin'), async (req, res) => {
+  // The size the ENGINE reports. It used to be `fs.statSync(config.dbFile)`,
+  // which stopped existing with the file it measured.
   let dbSize = 0;
-  try { dbSize = fs.statSync(config.dbFile).size; } catch { /* noop */ }
+  try {
+    const r = await q.prepare('SELECT pg_database_size(current_database()) AS n').get();
+    dbSize = Number(r.n) || 0;
+  } catch { /* a role without the privilege must not 500 the whole panel */ }
   res.json({
     uptimeS: Math.floor(process.uptime()),
     dbSizeBytes: dbSize,
     counts: {
-      logs: db.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?').get(req.orgId).c,
-      events: db.prepare('SELECT COUNT(*) c FROM events WHERE org_id = ?').get(req.orgId).c,
-      cases: db.prepare('SELECT COUNT(*) c FROM cases WHERE org_id = ?').get(req.orgId).c,
-      users: db.prepare('SELECT COUNT(*) c FROM memberships WHERE org_id = ?').get(req.orgId).c,
+      logs: (await q.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?').get(req.orgId)).c,
+      events: (await q.prepare('SELECT COUNT(*) c FROM events WHERE org_id = ?').get(req.orgId)).c,
+      cases: (await q.prepare('SELECT COUNT(*) c FROM cases WHERE org_id = ?').get(req.orgId)).c,
+      users: (await q.prepare('SELECT COUNT(*) c FROM memberships WHERE org_id = ?').get(req.orgId)).c,
     },
     node: process.version,
   });
 });
 
-router.get('/audit', sec.requireRole('admin'), (req, res) => {
-  res.json(db.prepare(`SELECT a.ts, a.action, a.detail, u.email FROM audit_log a
+router.get('/audit', sec.requireRole('admin'), async (req, res) => {
+  res.json(await q.prepare(`SELECT a.ts, a.action, a.detail, u.email FROM audit_log a
     LEFT JOIN users u ON u.id = a.user_id WHERE a.org_id = ? ORDER BY a.ts DESC LIMIT 200`).all(req.orgId));
 });
 

@@ -4,7 +4,8 @@
 // became a first-class row (schema v18) — it needs to answer at the ROOT of a
 // customer's own domain, and this file owns `/` for the marketing site.
 const express = require('express');
-const { db, getOrgSetting, getSetting } = require('../db');
+const q = require('../db/shim');
+const { getOrgSetting, getSetting } = require('../db');
 const { now, sha256, RateLimiter, clampInt, escapeHtml: esc, DEFAULT_ORG_ID } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
@@ -37,24 +38,24 @@ function gridPublished() {
 }
 
 let gridCache = { ts: 0, data: null };
-function gridData() {
+async function gridData() {
   const t = now();
   if (gridCache.data && t - gridCache.ts < 60000) return gridCache.data;
-  const reports = new Map(db.prepare(
-    'SELECT slug, COUNT(*) c FROM vendor_reports WHERE ts >= ? GROUP BY slug').all(t - 3600000)
+  const reports = new Map((await q.prepare(
+    'SELECT slug, COUNT(*) c FROM vendor_reports WHERE ts >= ? GROUP BY slug').all(t - 3600000))
     .map((r) => [r.slug, r.c]));
   const since = new Date(t - 45 * 86400000).toISOString().slice(0, 10);
   const byVendorDays = new Map();
-  for (const d of db.prepare(`SELECT d.vendor_id, d.day, d.worst, d.down_seconds
+  for (const d of (await q.prepare(`SELECT d.vendor_id, d.day, d.worst, d.down_seconds
       FROM vendor_days d JOIN vendors v ON v.id = d.vendor_id
-      WHERE v.org_id = ? AND d.day >= ? ORDER BY d.day`).all(DEFAULT_ORG_ID, since)) {
+      WHERE v.org_id = ? AND d.day >= ? ORDER BY d.day`).all(DEFAULT_ORG_ID, since))) {
     if (!byVendorDays.has(d.vendor_id)) byVendorDays.set(d.vendor_id, []);
     byVendorDays.get(d.vendor_id).push(d);
   }
-  const vendors = db.prepare(`SELECT v.id, v.slug, v.name, v.status, v.page_url, v.last_checked_at,
+  const vendors = (await q.prepare(`SELECT v.id, v.slug, v.name, v.status, v.page_url, v.last_checked_at,
       (SELECT COUNT(*) FROM vendor_incidents i WHERE i.vendor_id = v.id AND i.resolved_at IS NULL) AS active
     FROM vendors v WHERE v.org_id = ? AND v.enabled = 1
-      AND v.slug NOT LIKE 'custom-%' ORDER BY v.name`).all(DEFAULT_ORG_ID)
+      AND v.slug NOT LIKE 'custom-%' ORDER BY v.name`).all(DEFAULT_ORG_ID))
     .map((v) => {
       const days = byVendorDays.get(v.id) || [];
       const totalDown = days.reduce((a, d) => a + d.down_seconds, 0);
@@ -78,11 +79,11 @@ function gridData() {
 
 // community signal: anonymous "down for me too" reports on grid vendors
 const gridReportLimiter = new RateLimiter({ perMinute: 4, burst: 4 });
-const insVendorReport = db.prepare('INSERT INTO vendor_reports (slug, ts, ip_hash) VALUES (?, ?, ?)');
-const lastVendorReport = db.prepare(
+const insVendorReport = q.prepare('INSERT INTO vendor_reports (slug, ts, ip_hash) VALUES (?, ?, ?)');
+const lastVendorReport = q.prepare(
   'SELECT MAX(ts) t FROM vendor_reports WHERE slug = ? AND ip_hash = ?');
 
-function handleGridReport(req, res) {
+async function handleGridReport(req, res) {
   const back = (req.hostname || '').toLowerCase() === config.gridHost ? '/' : '/vendor-grid';
   const redirect = req.is('application/json') ? null : back;
   const done = () => (redirect ? res.redirect(303, `${redirect}?reported=1`) : res.json({ ok: true }));
@@ -90,15 +91,15 @@ function handleGridReport(req, res) {
   const b = req.body || {};
   if (typeof b.website === 'string' && b.website.trim() !== '') return done(); // honeypot
   const slug = typeof b.slug === 'string' ? b.slug.slice(0, 80) : '';
-  const known = gridData().vendors.some((v) => v.slug === slug);
+  const known = (await gridData()).vendors.some((v) => v.slug === slug);
   if (!known) return done(); // silently ignore unknown slugs
   const ip = clientIp(req);
   if (!gridReportLimiter.allow(ip)) return done();
   const ipHash = sha256(`grid|${ip}`);
   const t = now();
-  const last = lastVendorReport.get(slug, ipHash).t;
+  const last = (await lastVendorReport.get(slug, ipHash)).t;
   if (last && t - last < 60 * 60 * 1000) return done(); // one report per visitor per vendor per hour
-  insVendorReport.run(slug, t, ipHash);
+  await insVendorReport.run(slug, t, ipHash);
   gridCache.ts = 0; // reflect the new count on the next render
   return done();
 }
@@ -106,10 +107,10 @@ function handleGridReport(req, res) {
 router.post('/api/public/vendor-grid/report', handleGridReport);
 router.post('/vendor-grid/report', handleGridReport);
 
-router.get('/api/public/vendor-grid', (req, res) => {
+router.get('/api/public/vendor-grid', async (req, res) => {
   if (!gridPublished()) return res.status(404).json({ error: 'not published' });
   res.setHeader('Cache-Control', 'public, max-age=60');
-  res.json(gridData());
+  return res.json(await gridData());
 });
 
 const GRID_DOT = { operational: '#3fb950', maintenance: '#bc8cff', degraded: '#e3b341',
@@ -142,9 +143,9 @@ function heatStrip(days) {
   return `<span class="strip">${cells}</span>`;
 }
 
-function renderVendorGrid(req, res) {
+async function renderVendorGrid(req, res) {
   if (!gridPublished()) return res.status(404).send('<h1>Not published</h1>');
-  const d = gridData();
+  const d = await gridData();
   const reported = req.query.reported === '1';
   const view = req.query.view === 'list' ? 'list' : 'grid';
   const filter = GRID_FILTERS[req.query.f] ? req.query.f : 'all';
@@ -255,7 +256,9 @@ router.get('/vendor-grid', renderVendorGrid);
 // the grid subdomain serves the grid as its front page
 router.get('/', (req, res, next) => {
   if ((req.hostname || '').toLowerCase() !== config.gridHost) return next();
-  renderVendorGrid(req, res);
+  // returned, not fired: renderVendorGrid is async now and Express only sees a
+  // rejection it is handed back.
+  return renderVendorGrid(req, res);
 });
 
 module.exports = router;

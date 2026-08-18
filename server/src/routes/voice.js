@@ -60,9 +60,9 @@ const twiml = (inner) => `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${in
 const say = (t) => `<Say voice="alice">${esc(t)}</Say>`;
 
 // ---- Twilio: the call flow -------------------------------------------------
-router.get('/v/:token/twiml', (req, res) => {
+router.get('/v/:token/twiml', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return res.status(429).end();
-  const info = chain.tokenInfo(req.params.token);
+  const info = await chain.tokenInfo(req.params.token);
   res.type('text/xml');
   if (!info || info.expired || info.used || info.alert.status !== 'active') {
     return res.send(twiml(say('This OpsCat alert has already been handled. Goodbye.')));
@@ -77,25 +77,25 @@ router.get('/v/:token/twiml', (req, res) => {
   ));
 });
 
-router.post('/v/:token/digits', (req, res) => {
+router.post('/v/:token/digits', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return res.status(429).end();
   res.type('text/xml');
-  const info = chain.tokenInfo(req.params.token);
+  const info = await chain.tokenInfo(req.params.token);
   if (!info || !twilioSignatureOk(req, info.alert.org_id)) {
     return res.send(twiml(say('This call could not be verified. Goodbye.')));
   }
   const digits = String((req.body && req.body.Digits) || '');
   if (digits !== '1') return res.send(twiml(say('Nothing was acknowledged. Goodbye.')));
-  const r = chain.ackByToken(req.params.token);
+  const r = await chain.ackByToken(req.params.token);
   res.send(twiml(say(r
     ? 'Acknowledged. The escalation has stopped. Goodbye.'
     : 'This alert has already been handled. Goodbye.')));
 });
 
 // ---- Vonage: the same flow, in that provider's document --------------------
-router.get('/v/:token/ncco', (req, res) => {
+router.get('/v/:token/ncco', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return res.status(429).end();
-  const info = chain.tokenInfo(req.params.token);
+  const info = await chain.tokenInfo(req.params.token);
   if (!info || info.expired || info.used || info.alert.status !== 'active') {
     return res.json([{ action: 'talk', text: 'This OpsCat alert has already been handled. Goodbye.' }]);
   }
@@ -106,13 +106,13 @@ router.get('/v/:token/ncco', (req, res) => {
   ]);
 });
 
-router.post('/v/:token/digits-json', (req, res) => {
+router.post('/v/:token/digits-json', async (req, res) => {
   if (!limiter.allow(req.ip || 'anon')) return res.status(429).end();
   const dtmf = (req.body && req.body.dtmf) || {};
   if (String(dtmf.digits || '') !== '1') {
     return res.json([{ action: 'talk', text: 'Nothing was acknowledged. Goodbye.' }]);
   }
-  const r = chain.ackByToken(req.params.token);
+  const r = await chain.ackByToken(req.params.token);
   res.json([{ action: 'talk', text: r
     ? 'Acknowledged. The escalation has stopped. Goodbye.'
     : 'This alert has already been handled. Goodbye.' }]);

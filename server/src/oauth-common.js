@@ -10,7 +10,7 @@
  * admin has already created.
  */
 const crypto = require('crypto');
-const { db } = require('./db');
+const q = require('./db/shim');
 const config = require('./config');
 const edition = require('./edition');
 const { now } = require('./util');
@@ -19,43 +19,43 @@ const sec = require('./security');
 let eeAccounts = null;
 try { eeAccounts = require('./ee/accounts'); } catch (e) { /* community build */ }
 
-const insState = db.prepare('INSERT INTO oauth_states (state, provider, redirect, created_at) VALUES (?, ?, ?, ?)');
-const getState = db.prepare('SELECT * FROM oauth_states WHERE state = ?');
-const delState = db.prepare('DELETE FROM oauth_states WHERE state = ?');
+const insState = q.prepare('INSERT INTO oauth_states (state, provider, redirect, created_at) VALUES (?, ?, ?, ?)');
+const getState = q.prepare('SELECT * FROM oauth_states WHERE state = ?');
+const delState = q.prepare('DELETE FROM oauth_states WHERE state = ?');
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
-function beginState(provider, redirectQuery) {
+async function beginState(provider, redirectQuery) {
   const state = crypto.randomBytes(16).toString('hex');
   const redirect = typeof redirectQuery === 'string' ? redirectQuery.slice(0, 200) : '/app';
-  insState.run(state, provider, redirect, now());
+  await insState.run(state, provider, redirect, now());
   return state;
 }
 
-function consumeState(state, provider) {
-  const row = state && getState.get(state);
+async function consumeState(state, provider) {
+  const row = state ? await getState.get(state) : null;
   if (!row || row.provider !== provider || now() - row.created_at > STATE_TTL_MS) return null;
-  delState.run(state);
+  await delState.run(state);
   return row;
 }
 
 // Finish an OAuth flow with a provider-verified identity. `emailVerified` must
 // only be true when the provider actually vouches for the address.
-function finishLogin(req, res, row, { provider, email, name, emailVerified }) {
+async function finishLogin(req, res, row, { provider, email, name, emailVerified }) {
   if (!email || !emailVerified) return res.redirect('/app/login?error=email');
   email = String(email).toLowerCase();
 
-  let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  let user = await q.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (user) {
     if (!user.active) return res.redirect('/app/login?error=disabled');
     // adopt the provider for password-less accounts created via invite
-    db.prepare("UPDATE users SET auth_provider = ? WHERE id = ? AND auth_provider = 'password' AND pass_hash = ''")
+    await q.prepare("UPDATE users SET auth_provider = ? WHERE id = ? AND auth_provider = 'password' AND pass_hash = ''")
       .run(provider, user.id);
     // a pending forced change means the password is an admin-issued temporary
     // one the user may never have seen; the provider just vouched for the
     // address, so retire that password instead of forcing a change
     if (user.must_change_password) {
-      db.prepare(`UPDATE users SET auth_provider = ?, pass_salt = '', pass_hash = '',
+      await q.prepare(`UPDATE users SET auth_provider = ?, pass_salt = '', pass_hash = '',
         must_change_password = 0 WHERE id = ?`).run(provider, user.id);
       sec.audit(user.id, 'temp_password_retired', provider, user.org_id);
     }
@@ -65,14 +65,14 @@ function finishLogin(req, res, row, { provider, email, name, emailVerified }) {
       return res.redirect('/app/login?error=nosignup');
     }
     const fallbackName = name || email.split('@')[0];
-    const created = eeAccounts.createOrganizationWithOwner({
+    const created = await eeAccounts.createOrganizationWithOwner({
       orgName: `${fallbackName}'s team`, email, name: fallbackName, provider,
     });
     user = created.user;
     sec.audit(user.id, `signup_${provider}`, email, created.org.id);
   }
 
-  const { sid } = sec.createSession(user.id, req);
+  const { sid } = await sec.createSession(user.id, req);
   sec.setSessionCookie(res, sid);
   sec.audit(user.id, `login_${provider}`, sec.clientIp(req), user.org_id);
   res.redirect(typeof row.redirect === 'string' && row.redirect.startsWith('/') ? row.redirect : '/app');
