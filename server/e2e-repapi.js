@@ -56,7 +56,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — config.js and db.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-repapi-'));
@@ -179,6 +179,32 @@ const listingCount = async (assetId) => (await q.prepare(
   'SELECT COUNT(*) c FROM reputation_listings WHERE asset_id = ?').get(assetId)).c;
 const audits = (action) => q.prepare(
   'SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action);
+
+/* Wait for the audit trail to reach a row count, then return the rows.
+ *
+ * `audit()` keeps a SYNCHRONOUS call shape with an internal `.catch` — a
+ * deliberate decision (CLAUDE.md § audit): the write it describes has already
+ * happened, so failing the request because the audit row failed would report an
+ * error for work that succeeded. The consequence for a harness is that the row
+ * lands AFTER the response, and reading `audit_log` on the next line is a race.
+ *
+ * It is not a theoretical one. Under CPU load this file failed roughly one run
+ * in six — "a bulk add is audited once, with the count" reporting the PREVIOUS
+ * row's detail, and the count check that follows it seeing the late row and
+ * disagreeing with a total taken a moment earlier. It went red on CI the first
+ * time the runner had a second service container competing for the same cores.
+ *
+ * Same shape as e2e-incidents' alert-delivery assertions and for the same
+ * reason. The deadline is what keeps a genuine regression a FAIL rather than a
+ * hang: if the row never arrives, `until` gives up and the check fails on the
+ * count it was always going to fail on.
+ */
+/* `untilAsync` (e2e-lib.js) rather than a loop of our own: the plain `until`
+ * throws on a thenable by design, and this condition needs a database read. */
+const auditsAtLeast = async (action, n) => {
+  await untilAsync(async () => (await audits(action)).length >= n);
+  return audits(action);
+};
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -348,7 +374,7 @@ async function main() {
   chk('an interval over 24h is clamped down', (await assetRow(slow.j?.id))?.interval_s === 86400,
     String((await assetRow(slow.j?.id))?.interval_s));
 
-  const created = (await audits('reputation_asset_create'));
+  const created = await auditsAtLeast('reputation_asset_create', 5);
   chk('creating an asset writes one audit row naming the target',
     created.length === 5 && created[0]?.detail === '203.0.113.9', JSON.stringify(created.map((a) => a.detail)));
   chk('…in the acting org, not the default one',
@@ -467,7 +493,7 @@ async function main() {
   chk('another org\'s asset is 404, not 403', crossPatch.status === 404, String(crossPatch.status));
   chk('…and it was not modified', (await assetRow(target)).enabled === 1);
   chk('an id that does not exist is 404', (await patch(lead, 999999, { enabled: false })).status === 404);
-  const updated = (await audits('reputation_asset_update'));
+  const updated = await auditsAtLeast('reputation_asset_update', 1);
   chk('a patch is audited in the acting org, naming the target',
     updated.length >= 1 && updated[0]?.detail === 'mail.example.com' && updated[0]?.org_id === ACME,
     JSON.stringify(updated[0]));
@@ -564,7 +590,7 @@ async function main() {
     `${(await runCount(doomed))} runs, ${(await listingCount(doomed))} listings`);
   chk('…it is gone from the list',
     !byTarget((await call(lead, 'GET', '/api/reputation/assets')).j, '198.51.100.40'));
-  const deleted = (await audits('reputation_asset_delete'));
+  const deleted = await auditsAtLeast('reputation_asset_delete', 1);
   chk('the deletion is audited by target in the acting org',
     deleted.length === 1 && deleted[0]?.detail === '198.51.100.40' && deleted[0]?.org_id === ACME,
     JSON.stringify(deleted[0]));
@@ -665,14 +691,22 @@ async function main() {
   chk('…the batch interval is clamped to the floor',
     (await q.prepare('SELECT interval_s FROM reputation_assets WHERE org_id = ? AND target = ?')
       .get(ACME, '198.51.100.60'))?.interval_s === 3600);
-  const afterBulk = (await audits('reputation_asset_create'));
+  const afterBulk = await auditsAtLeast('reputation_asset_create', auditsBefore + 1);
   chk('a bulk add is audited once, with the count',
     afterBulk.length === auditsBefore + 1 && /^2 from SPF: /.test(afterBulk[afterBulk.length - 1]?.detail || ''),
     afterBulk[afterBulk.length - 1]?.detail);
   const allSkipped = await bulk(lead, { targets: ['203.0.113.9', 'nope!'] });
+  /* The NEGATIVE of the same race, and it cannot be condition-waited: "no row
+   * appears" is only ever provable by looking and finding none. What makes it
+   * sound is that the previous line already waited for this action's trail to
+   * settle, so a row arriving now would be this batch's — which is exactly what
+   * the check forbids. Re-read once rather than twice: calling audits() in both
+   * the assertion and the detail string used to report a count taken after the
+   * one it compared. */
+  const afterEmpty = await audits('reputation_asset_create');
   chk('a batch that adds nothing writes no audit row',
-    allSkipped.j?.added?.length === 0 && (await audits('reputation_asset_create')).length === afterBulk.length,
-    String((await audits('reputation_asset_create')).length));
+    allSkipped.j?.added?.length === 0 && afterEmpty.length === afterBulk.length,
+    `${afterEmpty.length} vs ${afterBulk.length}`);
 
   // ── the plan limit (cloud edition) ─────────────────────────────────────────
   // `checks` is ONE budget spanning synthetic_checks and reputation_assets, so a

@@ -4,6 +4,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const q = require('../db/shim');
+const logs = require('../db/log-store');   // log LINES may not be in the shim — see db/log-store.js
 const { getOrgSetting, setOrgSetting,
   getMembership, addMembership, removeMembership, listMemberships } = require('../db');
 const config = require('../config');
@@ -1328,7 +1329,7 @@ router.get('/system', sec.requireRole('admin'), async (req, res) => {
     uptimeS: Math.floor(process.uptime()),
     dbSizeBytes: dbSize,
     counts: {
-      logs: (await q.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?').get(req.orgId)).c,
+      logs: await logs.countForOrg(req.orgId),
       events: (await q.prepare('SELECT COUNT(*) c FROM events WHERE org_id = ?').get(req.orgId)).c,
       cases: (await q.prepare('SELECT COUNT(*) c FROM cases WHERE org_id = ?').get(req.orgId)).c,
       users: (await q.prepare('SELECT COUNT(*) c FROM memberships WHERE org_id = ?').get(req.orgId)).c,

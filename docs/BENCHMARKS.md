@@ -4,6 +4,9 @@ Measured 2026-08-18 against commit `1a61982` (the PostgreSQL-only build, the day
 SQLite was removed). The source under test did not change during the run — the
 commit landed mid-session on work that was already on disk.
 
+§5 (PostgreSQL vs ClickHouse) was measured later the same day against `aa0f0db`,
+on the same sandbox, with the same corpus generator.
+
 Every number below was produced in **this repository's sandbox**, never against
 production, and every one carries the command that produces it again.
 
@@ -407,7 +410,325 @@ was re-measured with the variable unset.
 
 ---
 
-## 5. Claim sheet
+## 5. PostgreSQL vs ClickHouse, head to head
+
+This section exists because the question *"should the log-search path move to
+ClickHouse?"* had been answered twice with spot measurements taken on the
+production host during an experiment, and never with a controlled comparison.
+It is a **database** comparison, not a product comparison: the app is not in the
+path on either side.
+
+### 5.1 Method
+
+Both engines are fed the **same file**. `gen.js` is seeded (xorshift32, seed
+`20260818`), so a rerun produces a byte-identical corpus, and the TSV is loaded
+into Postgres with `COPY` and into ClickHouse with `INSERT … FORMAT
+TabSeparated`. Nothing is generated twice, so nothing can differ by generator.
+
+| | |
+|---|---|
+| Corpus | 596,491 lines · 7 days · 24 devices · same 8/12/80 severity mix and diurnal shape as §2 |
+| Scale-up corpus | 5,964,910 lines — same 7 days, 10× the density |
+| PostgreSQL | 16.13, packaged defaults, `logs` + both shipped indexes |
+| ClickHouse | 26.8.1.1663 (official build), `MergeTree`, `ORDER BY (org_id, ts)`, `PARTITION BY` day, `device`/`source` as `LowCardinality` |
+| Transport | both over TCP from one Node process — `pg` for Postgres, HTTP for ClickHouse |
+| Timing | 3 warm-up passes discarded, then 25 timed (15 on the 10× corpus); p50 and p95 over those |
+| Cores | both engines pinned to `0,1`, load generator on `2,3`; ClickHouse additionally `max_threads=2`, which is what it would auto-detect on a 2-vCPU box |
+
+The queries are the ones §2.1 measured, copied from `server/src/routes/ops.js`,
+translated to ClickHouse syntax but not to ClickHouse *idiom* — same windows,
+same `LIKE`, same `ORDER BY`, same limits. Where the translation would have
+changed what the product asks for, it was left alone.
+
+**The per-query floor is not the same on both.** An empty `SELECT 1` costs
+**0.19 ms** on Postgres and **1.39 ms** over ClickHouse's HTTP interface. Roughly
+1.2 ms of every ClickHouse number below is transport, which matters only for the
+queries that finish in single-digit milliseconds — and those are exactly the ones
+Postgres wins.
+
+### 5.2 Bulk load
+
+| | PostgreSQL | ClickHouse |
+|---|---|---|
+| 596 k rows, data only | 2.76 s — **216 k rows/s** | 2.97 s — 201 k rows/s |
+| + indexes / merge | 3.07 s | 0.29 s |
+| **596 k total** | 5.83 s — **102 k rows/s** | 3.27 s — **183 k rows/s** |
+| **5.96 M total** | 62.8 s — **95 k rows/s** | 11.5 s — **518 k rows/s** |
+
+At the small corpus the two are within a factor of two. At ten times the volume
+they are not: Postgres has to build two B-trees over 6 M rows, ClickHouse sorts
+into daily parts and merges. **This is bulk load, not the product's ingest
+path** — OpsCat ingests through `POST /v1/ingest/logs`, which does dedupe,
+severity ratcheting and rollups per batch, and tops out around 10,500 lines/s
+(§1.2). Neither number above is reachable through the API.
+
+### 5.3 On-disk size
+
+| | PostgreSQL | ClickHouse | |
+|---|---|---|---|
+| 596 k rows | 172 MB (95 heap + 76 index) | **12.68 MiB** | **13.6× smaller** |
+| 5.96 M rows | 1,713 MB (951 + 762) | **123.07 MiB** | **13.9× smaller** |
+| per row | ~301 bytes | **22 bytes** | |
+| compression ratio | — | 4.5× on the columns, before the index saving | |
+
+Two thirds of the difference is compression of `line`; the rest is that Postgres
+carries 762 MB of B-tree for the same 6 M rows and ClickHouse carries a sparse
+primary index measured in kilobytes. This is the single most one-sided result in
+the comparison and it is the one that would actually change what retention we can
+offer on a small disk.
+
+### 5.4 Query latency — the corpus we have today
+
+596 k rows, both engines on two cores. p50, with p95 in brackets.
+
+| Query | PostgreSQL | ClickHouse | |
+|---|---|---|---|
+| Log tail — 2 h window, LIMIT 300 | **1.2 ms** (4.5) | 6.6 ms (9.1) | **PG 5.5×** |
+| Recent logs for ONE device, LIMIT 20 | **0.3 ms** (0.4) | 11.8 ms (24.1) | **PG 39×** |
+| Dashboard — `COUNT(*)`, last 24 h | 9.1 ms (10.6) | **3.6 ms** (4.3) | CH 2.6× |
+| Log search — substring, 24 h | 76.1 ms (105) | **7.1 ms** (9.6) | CH 10.7× |
+| Log search — substring, 7 d | 435.3 ms (453) | **17.2 ms** (19.8) | CH 25.2× |
+| Log search — rare term, 7 d | 414.3 ms (438) | **25.4 ms** (28.1) | CH 16.3× |
+| Roll-call — last line per device | 96.8 ms (101) | **19.6 ms** (21.9) | CH 4.9× |
+| Top devices by volume, 7 d | 95.9 ms (100) | **20.6 ms** (35.6) | CH 4.7× |
+| Throughput chart — daily, 7 d | 260.6 ms (275) | **25.8 ms** (31.6) | CH 10.1× |
+| Throughput chart — hourly, 7 d | 159.2 ms (171) | **23.1 ms** (30.0) | CH 6.9× |
+
+**ClickHouse is faster on eight of ten, and slower on the two that run most
+often** — the Logs page opens with the tail, the event slide-over with the
+per-device tail. Read that as arithmetic and not yet as a conclusion: §5.7 counts
+the same table against a latency budget instead, and both of those queries turn
+out to be **inside** the budget on both engines, which makes the 5× and the 39×
+differences nobody can perceive. What follows is still worth understanding,
+because it is structural rather than a misconfiguration.
+
+That is not a tuning gap. `EXPLAIN indexes=1, projections=1` shows ClickHouse
+reading **14 granules out of 70** for the 20-row device lookup — it is finding the
+right place efficiently and then reading 8,192 rows per granule because
+`index_granularity = 8192` is what a MergeTree does. **A sparse index cannot do a
+20-row point lookup**, and a 300-line tail is a point lookup.
+
+The obvious counter-move was tried and **did not work**, which is worth recording
+rather than omitting: giving ClickHouse a projection ordered `(org_id, device,
+ts)` — the exact shape of Postgres's second index — left the device lookup at
+**11.6 ms** (from 11.8 ms) and **doubled on-disk size from 22 to 44 bytes/row**.
+The projection *is* used, and it does not help, because granularity and not
+ordering is the cost.
+
+### 5.5 Query latency — ten times the corpus
+
+5.96 M rows, otherwise identical. This is the number the old "do not extrapolate"
+caveat asked for.
+
+| Query | PostgreSQL | ClickHouse | |
+|---|---|---|---|
+| Log tail — 2 h window | **1.3 ms** | 6.4 ms | PG 4.9× |
+| Recent logs for ONE device | **0.4 ms** | 16.1 ms | PG 40× |
+| Dashboard — `COUNT(*)`, 24 h | 374.6 ms | **3.8 ms** | **CH 98×** |
+| Log search — substring, 24 h | 916.3 ms | **10.8 ms** | **CH 85×** |
+| Log search — substring, 7 d | 51.0 ms | **23.4 ms** | CH 2.2× |
+| Log search — rare term, 7 d | 67.4 ms | **24.7 ms** | CH 2.7× |
+| Roll-call — last line per device | 880.2 ms | **87.3 ms** | CH 10.1× |
+| Top devices by volume, 7 d | 908.9 ms | **87.3 ms** | CH 10.4× |
+| Throughput chart — daily, 7 d | 2,620 ms | **133.7 ms** | CH 19.6× |
+| Throughput chart — hourly, 7 d | 1,809 ms | **110.4 ms** | CH 16.4× |
+
+The two queries Postgres wins are **flat** — 1.2 → 1.3 ms and 0.3 → 0.4 ms for
+ten times the data, because an index scan that stops at `LIMIT` does not care how
+big the table is. Everything else on the Postgres side grew by roughly the factor
+the old caveat predicted, and the shipped throughput chart crossed **2.6 seconds**,
+which is past the point where a page feels broken.
+
+**One Postgres result is not monotone, and it is the more interesting finding.**
+The 24-hour search costs **916 ms** while the 7-day search over the same table
+costs **51 ms** — the narrower question is 18× more expensive than the wider one.
+`EXPLAIN (ANALYZE)` says why:
+
+```
+24 h:  Parallel Seq Scan on logs  (actual rows=14176 loops=3)   976 ms
+ 7 d:  Parallel Index Scan Backward using idx_logs_org_ts       66 ms
+```
+
+Over 7 days the planner walks the index backward from the newest row and stops
+once the `LIMIT 300` is satisfied. Over 24 hours it estimates that the range is
+too narrow to find 300 matches that way, and scans 6 M rows instead. Both plans
+are reasonable; the estimate is what flips. The consequence for a user is that
+**narrowing the time filter can make log search slower**, unpredictably, at a
+volume we have not reached yet. ClickHouse's two numbers for the same pair are
+10.8 ms and 23.4 ms — monotone, because it scans either way and the window only
+decides how many parts it touches.
+
+### 5.6 What it costs to run
+
+| | resident |
+|---|---|
+| PostgreSQL — postmaster + all backends, PSS | **161 MB** |
+| ClickHouse — single process, PSS | **609 MB** |
+| ClickHouse — RSS | 695 MB |
+
+Measured after the query runs, at rest, on the 6 M-row corpus. ClickHouse is
+**~3.8× the whole Postgres cluster**, and it is a floor rather than a peak: mark
+cache, uncompressed cache and per-query memory come out of the same process.
+
+On the 4 vCPU / 16 GB sandbox that is irrelevant. On the production VM it is not:
+**3,800 MB total**, already running the app, Postgres, Caddy, unbound and
+livekit, with the whole stack idling at 283 MB (§3). Adding ClickHouse would
+roughly **triple the platform's resident memory** and take a fifth of the machine
+for a database with no user-visible query to answer yet.
+
+### 5.7 Against a budget, not against each other
+
+The tables above are ratios, and **a ratio between two numbers that are both far
+below perception is not a finding.** The per-device tail is 0.3 ms on Postgres
+and 11.8 ms on ClickHouse — 39×, and nobody on earth can tell those apart. The
+first version of this section led with that number, which made a real difference
+(storage, the scans) share a headline with a difference that does not exist.
+
+So: a budget first, and the ratios only where a budget is crossed.
+
+**The budget, derived rather than picked.** §2.2 measured Express and JSON
+serialisation at 8-20 ms on top of the query, and no number here includes real
+network. So:
+
+| Band | Database time | What it means |
+|---|---|---|
+| **inside** | ≤ 50 ms | invisible — the request is dominated by overhead and network, not by the database |
+| **edge** | 50-250 ms | perceptible, and acceptable for a deliberate action (a search, opening a chart) |
+| **outside** | > 250 ms | the user waits for us |
+
+Counted that way, on two cores:
+
+| | inside | edge | **outside** |
+|---|---|---|---|
+| PostgreSQL, 596 k rows | 3 | 4 | **3** |
+| ClickHouse, 596 k rows | **10** | 0 | **0** |
+| PostgreSQL, 5.96 M rows | 2 | 2 | **6** |
+| ClickHouse, 5.96 M rows | 6 | 4 | **0** |
+
+**ClickHouse never leaves the budget, at either scale.** Postgres leaves it three
+times at today's size and six times at ten times that. And the two queries
+Postgres "wins" are inside the budget on **both** engines, so they are not an
+argument for either one — which is the correction: §5.4's "loses the two that
+matter most" was true as arithmetic and misleading as a conclusion.
+
+What survives from that paragraph is narrower and worth keeping. The 39× is not
+latency the user feels, it is **CPU per request**: 11.8 ms of database time
+against 0.3 ms is 39× the work per page open, which is a capacity ceiling rather
+than a delay. At the request rate this instance actually serves that is nowhere
+near binding — and **that rate was not measured** (Caddy logs no access lines to
+stdout here), so this stays a shape, not a number.
+
+### 5.7.1 Where production actually sits
+
+Interpolating from the sandbox was the wrong way to answer this, so it was
+measured on the live database instead — read-only, warm cache, 2026-08-18:
+
+| | production, 392,319 rows / 7 days |
+|---|---|
+| Log tail, 2 h | **1.34 ms** — inside |
+| Infrastructure roll-call | **70.4 ms** — edge |
+| Log search, 7 d | **318.5 ms** — **outside** |
+| Throughput chart, daily over 7 d | **371.6 ms** — **outside** |
+
+`logs` holds 392,319 rows in 144 MB — *smaller* than this section's 596 k corpus,
+because retention is 7 days. So production is not approaching the point where
+Postgres leaves the budget. **It is already past it, on two user-facing queries,
+at a fifteenth of the volume the earlier "revisit at 2-3 M rows" trigger named.**
+That trigger was wrong and is withdrawn.
+
+### 5.7.2 But two of those three are a missing rollup, not an engine limit
+
+Before "add a second database", the cheaper question: is Postgres being asked the
+right query?
+
+- **The throughput chart (371.6 ms) aggregates raw rows on every page load.**
+  The product already has this pattern and already runs it on the hot write
+  path — `event_buckets` folds events into per-minute counts inside the ingest
+  transaction (§`engine/pipeline.js`). **There is no equivalent for `logs`**;
+  `grep` for a logs rollup in `schema.sql` returns nothing. A `log_buckets` fold
+  of the same shape turns a full scan of 392 k rows into a read of ~10 k
+  pre-aggregated ones, and it scales with *retention* instead of with volume.
+- **The roll-call (70.4 ms) is `MAX(ts) GROUP BY device` over the whole table**
+  to answer "when was each device last heard from" — 24 rows out of 392 k. That
+  is a maintained column on a device table, not a scan.
+- **Full-text search (318.5 ms) is the one that genuinely wants a different
+  engine.** `LIKE '%…%'` cannot use a B-tree; §2.3 shows it is the scan itself.
+  Postgres's own answer is a `pg_trgm` GIN index, which costs write throughput on
+  the path §1.3 says is already CPU-bound — a real trade, not a free win.
+
+So the honest split of the three over-budget queries: **two are ours to fix in
+the database we already run, one is a genuine engine question.**
+
+### 5.8 The recommendation, and what was decided
+
+**Decided on 2026-08-19: adopt it, for log lines only.** The analysis below is
+kept as written rather than rewritten to match the outcome — it is the reasoning
+that produced the decision, including the part it got wrong.
+
+What shipped: `src/db/log-store.js`, one interface with two implementations,
+chosen at boot by `CLICKHOUSE_URL`. ClickHouse in the cloud edition, Postgres in
+the community edition, everything transactional in Postgres in both. See
+`docs/ARCHITECTURE.md` § Log storage.
+
+What the decision did NOT wait for: items 1 and 2 below — the missing
+`log_buckets` rollup and a maintained `last_seen` — are still worth doing and are
+still in `docs/BACKLOG.md`. They now serve the *community* edition, where the
+throughput chart still scans raw rows. That is the part of this recommendation
+that survived intact and it should not be lost because the third item was taken.
+
+---
+
+Revised after the budget analysis above, and it is no longer a flat "no".
+
+**Do these in order. Stop when the budget is met.**
+
+1. **Add a `log_buckets` rollup, folded in the ingest transaction like
+   `event_buckets`.** Removes the 371.6 ms chart — the single worst number
+   production has — without a second datastore, a second backup, or a byte of
+   new memory. This is the highest ratio of benefit to risk in the whole
+   comparison and it should not wait on the ClickHouse decision.
+2. **Give the roll-call a maintained `last_seen` per device.** Same argument,
+   smaller prize.
+3. **Then, and only then, decide about full-text search.** With 1 and 2 done,
+   exactly one query is outside the budget, and the choice is a narrow one
+   between `pg_trgm` (costs ingest CPU, no new component) and ClickHouse for the
+   `logs` table alone (17-25 ms, 14× less disk, and a second datastore to
+   operate).
+
+**What still argues against ClickHouse, once the ratios are set aside:** it is
+609 MB resident against 161 MB for the whole Postgres cluster, on a VM with
+3,819 MB — and it is a second system to back up, restore, keep consistent and be
+woken up by. **What argues for it** is no longer speed alone: it is that 22
+bytes/row against 301 is what decides how much retention fits on a 38 GB disk,
+and retention is a thing we sell.
+
+If it is adopted it is **not** a migration: ClickHouse beside Postgres for the
+`logs` table only, with Postgres keeping the tail queries, every transactional
+table, and the spine.
+
+### 5.9 Reproducing this section
+
+```sh
+# ClickHouse, no Docker needed — a single static binary
+curl https://builds.clickhouse.com/master/amd64/clickhouse -o clickhouse && chmod +x clickhouse
+./clickhouse server --config-file=ch-config.xml &
+
+node gen.js corpus.tsv 596500          # seeded; identical file every time
+psql "$PG" -c "\copy logs(...) FROM 'corpus.tsv' WITH (FORMAT text, NULL '\N')"
+./clickhouse client -q "INSERT INTO logs FORMAT TabSeparated" < corpus.tsv
+
+CH_MAX_THREADS=2 taskset -c 2,3 node bench.js 25    # both engines pinned to 0,1
+```
+
+`gen.js` and `bench.js` are scratchpad tooling, not repo files — the corpus is
+defined by the seed and the mix described in §5.1, and both scripts are short
+enough to rebuild from this section. What must not change if the numbers are to
+be comparable: the seed, the 3-warm-up/25-timed shape, the core pinning, and
+loading both engines from one file.
+
+---
+
+## 6. Claim sheet
 
 Each row is a sentence that is true **with the condition next to it attached**.
 Detaching the condition makes it false.
@@ -424,6 +745,14 @@ Detaching the condition makes it false.
 | App + Postgres idle at **283 MB** | fresh boot, empty database, bare metal, no Caddy/unbound/livekit | §3 |
 | App + Postgres at **347 MB** under full ingest load | 4 cores, c=4, Postgres counted as PSS | §3 |
 | **CPU-bound, not disk-bound** | `synchronous_commit=off` buys only 7% | §1.3 |
+| ClickHouse stores the same corpus in **1/14 of the disk** (22 vs 301 bytes/row) | `MergeTree`, `LowCardinality` device/source, indexes counted on the Postgres side | §5.3 |
+| ClickHouse answers log search and the charts **5-25× faster** at 596 k rows, **16-98× at 6 M** | both engines on 2 cores; the same SQL, not ClickHouse-idiomatic rewrites | §5.4, §5.5 |
+| Postgres is 5× / 39× faster on the log tail and the per-device tail | true, and **not a difference anyone can perceive** — both are inside the budget on both engines. It is 39× the CPU per request, i.e. capacity, not delay | §5.4, §5.7 |
+| **ClickHouse never leaves the 250 ms budget**; Postgres leaves it 3× at 596 k rows and 6× at 6 M | database time only, two cores, the ten statements the product runs | §5.7 |
+| **Production is already outside the budget** on log search (318 ms) and the throughput chart (372 ms) | live database, warm cache, 392,319 rows / 7 days retention — measured, not interpolated | §5.7.1 |
+| Two of those three are **a missing rollup, not an engine limit** | `event_buckets` folds events per minute on the ingest path; nothing equivalent exists for `logs`, so the chart scans every row on every page load | §5.7.2 |
+| ClickHouse costs **609 MB resident**, ~3.8× the whole Postgres cluster | at rest, PSS, after the 6 M-row run | §5.6 |
+| Postgres log search **stops being monotone** at 6 M rows: 24 h costs 916 ms, 7 d costs 51 ms | plan flip between seq scan and backward index scan; not reproduced at 596 k | §5.5 |
 
 ---
 
@@ -441,11 +770,14 @@ Detaching the condition makes it false.
   connections — measured throughput fell to **158 lines/s with 77% of batches
   rejected** (§4.1). Until that is fixed, any ingest claim needs the disjoint-
   sender condition or it is false for a common deployment.
-- **They do not say the product is fast at scale.** The corpus is 596,500 rows
-  over 7 days for one organisation. The three ~200 ms queries are full scans:
-  they scale linearly, so ten times the corpus is roughly ten times the number,
-  and nothing here measures ten times the corpus. Do not extrapolate to
-  "millions of lines" — measure it.
+- **They do not say the product is fast at scale** — but §5.5 now measures the
+  ten-times case that this bullet used to only warn about. The §1-§4 corpus is
+  596,500 rows over 7 days for one organisation. At 5,964,910 rows the shipped
+  throughput chart goes from 261 ms to **2,620 ms** and the roll-call from 97 ms
+  to 880 ms, so the linear prediction holds for the scans. What it does **not**
+  predict is the plan flip in §5.5, where the 24-hour log search becomes 18×
+  slower than the 7-day one. Extrapolation gets the scans right and misses the
+  cliff; measure it.
 - **They do not measure the network.** Every request was over loopback. Add real
   TLS, Caddy, and internet RTT for anything a customer's browser or agent will
   experience.
@@ -459,3 +791,16 @@ Detaching the condition makes it false.
   engine, SNMP polling, the alert delivery path, or the status page.
 - **They are single-instance.** There is no clustering or read-replica story
   behind any of these numbers.
+- **§5 does not say ClickHouse is slow at the tail queries in a deployment built
+  around it.** It says the SQL the product runs today, unchanged, is slower there.
+  A design that kept a hot recent window elsewhere, or used a much smaller
+  `index_granularity` for it, was not measured. What §5.4 does establish is that
+  the naive move — point the existing queries at ClickHouse — makes the two most
+  frequent ones worse, and that the obvious fix (a projection) does not work.
+- **§5 does not measure ingest through the product.** Its load figures are `COPY`
+  and `INSERT … FORMAT TabSeparated` straight into a table. OpsCat's write path
+  does dedupe, severity ratcheting and rollups per batch and tops out an order of
+  magnitude lower (§1.2). Nothing in §5.2 is a claim about OpsCat's ingest rate.
+- **§5 does not measure the two engines under concurrent load**, and the memory
+  figure in §5.6 is at rest. ClickHouse's per-query memory is taken from the same
+  process, so a busy instance is larger than 609 MB by an amount not measured here.

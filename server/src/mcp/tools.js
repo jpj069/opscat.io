@@ -18,6 +18,7 @@
 
 const { z } = require('zod');
 const q = require('../db/shim');
+const logs = require('../db/log-store');   // log LINES may not be in `q` — see db/log-store.js
 const { now, isStr, clampInt } = require('../util');
 const sec = require('../security');
 const incidents = require('../lib/incidents');
@@ -140,8 +141,7 @@ const TOOLS = [
     handler: async (a, p) => {
       const e = await q.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(a.id, p.orgId);
       if (!e) return fail(`No event ${a.id} in this organization.`);
-      const recentLogs = await q.prepare(`SELECT ts, device, line, sev FROM logs
-        WHERE org_id = ? AND device = ? ORDER BY ts DESC LIMIT 20`).all(p.orgId, e.device);
+      const recentLogs = await logs.deviceTail({ orgId: p.orgId, device: e.device, limit: 20 });
       const c = await q.prepare(`SELECT id, status FROM cases WHERE org_id = ? AND event_id = ?
         ORDER BY id DESC LIMIT 1`).get(p.orgId, e.id);
       return ok({
@@ -208,13 +208,16 @@ const TOOLS = [
     handler: async (a, p) => {
       const since = now() - (a.sinceMinutes || 60) * 60000;
       const limit = Math.min(a.limit || 50, 200);
-      const where = ['org_id = ?', 'ts >= ?'];
-      const args = [p.orgId, since];
-      if (a.device) { where.push('device = ?'); args.push(a.device); }
-      if (a.query) { where.push('lower(line) LIKE lower(?)'); args.push(`%${a.query}%`); }
-      const logs = await q.prepare(`SELECT ts, device, line, sev, source FROM logs
-        WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
-      return ok({ logs, count: logs.length });
+      /* `query` now matches the DEVICE name as well as the line, which is what
+       * the web Logs page has always done. It is a deliberate widening: keeping
+       * the old line-only behaviour would have meant a second search
+       * implementation in the log store, and `device` is still available as an
+       * exact filter for an agent that wants precision. */
+      const rows = await logs.search({
+        orgId: p.orgId, since, until: Number.MAX_SAFE_INTEGER,
+        term: a.query || '', device: a.device || null, limit,
+      });
+      return ok({ logs: rows, count: rows.length });
     },
   },
 

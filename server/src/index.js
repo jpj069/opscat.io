@@ -147,6 +147,24 @@ app.use((err, req, res, next) => {
  */
 async function boot() {
   await db.init();
+  /* ClickHouse holds the log LINES when it is configured, and nothing else
+   * (src/db/log-store.js). Configured-but-unreachable is a HARD FAILURE, not a
+   * fallback: silently serving logs from Postgres instead would split one
+   * organisation's lines across two stores with no error anywhere, and the
+   * split is invisible until someone searches for a line that is in the other
+   * one. Unset is a supported configuration and skips this entirely — the
+   * community edition runs that way.
+   *
+   * `depends_on: service_healthy` in both compose files means the ordinary
+   * start-up race does not reach here; what does reach here is a wrong URL, a
+   * wrong password, or a ClickHouse that died. All three are worth a
+   * non-zero exit and a restart rather than a half-working install. */
+  const clickhouse = require('./db/clickhouse');
+  if (await clickhouse.init()) {
+    console.log(`log store: clickhouse (${config.clickhouseUrl}, db=${config.clickhouseDatabase})`);
+  } else {
+    console.log('log store: postgres (CLICKHOUSE_URL unset)');
+  }
   await seed();
   require('./engine/alerts').start();
   require('./engine/automations').start();

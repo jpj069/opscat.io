@@ -169,8 +169,20 @@ async function pollUrl(feedUrl, vendors) {
   }
 }
 
+/**
+ * One sweep over every due vendor.
+ *
+ * @returns {Promise<boolean>} false when another tick was already in flight and
+ *   this call did nothing. `start()`'s interval ignores it — a skipped tick is
+ *   the guard working, not an error — but a CALLER that needs the sweep to have
+ *   actually happened cannot otherwise tell. `e2e-vendors` stages a tick racing
+ *   a "check now" to prove they take the same per-vendor lock, and without this
+ *   it could only guess whether its own tick took part: it retried blindly and
+ *   went red on a loaded CI runner, where the background sweep over 222 catalog
+ *   subscriptions holds `running` for longer and swallowed every attempt.
+ */
 async function tick() {
-  if (running) return;
+  if (running) return false;
   running = true;
   try {
     const t = now();
@@ -186,6 +198,7 @@ async function tick() {
   } catch (e) {
     console.error('vendor tick error', e.message);
   } finally { running = false; }
+  return true;
 }
 
 // Poll one vendor immediately (UI "check now" + right after create).

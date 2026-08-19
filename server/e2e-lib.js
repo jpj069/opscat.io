@@ -77,6 +77,40 @@ function harness() {
     }
   };
 
+  /* The async sibling of `until`, and the reason there are two.
+   *
+   * `until` THROWS on a thenable by design: an async predicate returns a
+   * Promise, a Promise is truthy, and the wait would be satisfied on the first
+   * poll having proven nothing. That guard is right and must stay — but it also
+   * means `until` cannot express "wait for a database row", which is what a
+   * harness needs whenever the effect it is checking is written after the
+   * response.
+   *
+   * The case that keeps coming up is `audit()`, which keeps a SYNCHRONOUS call
+   * shape with an internal .catch on purpose (CLAUDE.md: the write it describes
+   * has already happened, so failing the request because the audit row failed
+   * reports an error for work that succeeded). The row therefore lands after the
+   * handler answered, and reading audit_log on the next line is a bet on
+   * scheduling — one this suite lost in two different harnesses on the first CI
+   * run where a second service container competed for the runner's cores.
+   *
+   * This existed as a private copy in e2e-mcp.js. It is here because the third
+   * harness to need it was about to write a third spelling.
+   *
+   * Returns the resolved value, or null once the deadline passes: a timeout must
+   * FAIL the check that asked rather than throw past it, so a real regression
+   * still reads as a failed assertion and not as a crashed harness.
+   */
+  const untilAsync = async (fn, ms = 4000) => {
+    const t0 = Date.now();
+    for (;;) {
+      const v = await fn();
+      if (v) return v;
+      if (Date.now() - t0 > ms) return null;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+
   // Prints the log and the summary, runs the cleanups, and exits with the right
   // code. Cleanups run before exit and are best-effort: a harness that leaks a
   // temp directory is a nuisance, but one that fails to REPORT because cleanup
@@ -125,7 +159,7 @@ function harness() {
     process.exit(1);
   };
 
-  return { chk, until, report, onExit, die };
+  return { chk, until, untilAsync, report, onExit, die };
 }
 
 /* Wait for the app to answer /api/health.

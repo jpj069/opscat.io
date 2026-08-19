@@ -74,7 +74,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — config.js and db.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-vendors-'));
@@ -219,6 +219,15 @@ const evs = (orgId, name) => q.prepare(
 const compStatus = async (id) => (await q.prepare('SELECT status FROM components WHERE id = ?').get(id))?.status;
 const nodeRow = (id) => q.prepare('SELECT * FROM sensor_nodes WHERE id = ?').get(id);
 const audits = (action) => q.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action);
+/* `audit()` is fire-and-forget by design (CLAUDE.md: the write it describes has
+ * already happened), so the row lands AFTER the response and reading it on the
+ * next line is a bet on scheduling. "…the delete is audited" lost that bet on a
+ * loaded runner. Every POSITIVE audit assertion below waits for the row; the
+ * deadline inside `untilAsync` keeps a genuine regression a FAIL. */
+const auditsAtLeast = async (action, n = 1) => {
+  await untilAsync(async () => (await audits(action)).length >= n);
+  return audits(action);
+};
 // A 500 answers an object, not a list, so every map/every over a response body
 // goes through arr() — otherwise a broken route ends the harness with a stack
 // trace instead of a FAIL naming what broke.
@@ -388,7 +397,7 @@ async function main() {
     (await evs(ACME, 'vendor_incident'))[0]?.device === '1Password', (await evs(ACME, 'vendor_incident'))[0]?.device);
   chk('…while a first reading of "unknown → major" raises NO vendor_recovered',
     (await evs(ACME, 'vendor_recovered')).length === 0);
-  chk('…and the create is audited', (await audits('vendor_create')).some((a) => a.org_id === ACME));
+  chk('…and the create is audited', (await auditsAtLeast('vendor_create')).some((a) => a.org_id === ACME));
 
   r = await call(lead, 'POST', '/api/vendors', { slug: 'onepassword' });
   chk('a duplicate slug is 409, decided by the WRITE (ON CONFLICT DO NOTHING)', r.status === 409,
@@ -493,7 +502,7 @@ async function main() {
   chk('…and the mapping stayed empty', (await vrow(V1))?.component_id === null);
   chk('PATCH on an unknown vendor is 404', (await call(lead, 'PATCH', '/api/vendors/999999', {})).status === 404);
   chk('PATCH on another org\'s vendor is 404', (await call(other, 'PATCH', `/api/vendors/${V1}`, {})).status === 404);
-  chk('…and the update is audited', (await audits('vendor_update')).length > 0);
+  chk('…and the update is audited', (await auditsAtLeast('vendor_update')).length > 0);
 
   // ── custom vendors: validation and the SSRF guard
   r = await call(lead, 'POST', '/api/vendors', { feedType: 'statuspage', feedUrl: 'https://203.0.113.9/s.json' });
@@ -564,8 +573,9 @@ async function main() {
   chk('…another org is untouched by it',
     (await q.prepare('SELECT COUNT(*) c FROM vendors WHERE org_id = ?').get(GLOBEX)).c === 1
     && !!(await vrow(GHOST)));
-  chk('…and it is audited with the count', (await audits('vendor_subscribe_catalog'))
-    .some((a) => a.detail === `${expectAdd} vendors`), JSON.stringify((await audits('vendor_subscribe_catalog'))[0]));
+  const subAudits = await auditsAtLeast('vendor_subscribe_catalog');
+  chk('…and it is audited with the count',
+    subAudits.some((a) => a.detail === `${expectAdd} vendors`), JSON.stringify(subAudits[0]));
 
   r = await call(lead, 'GET', '/api/vendors');
   chk('GET / lists them all', r.status === 200 && arr(r.j).length === before + expectAdd, `${r.j && r.j.length}`);
@@ -581,7 +591,7 @@ async function main() {
   chk('…and the row is gone', !(await vrow(V2)));
   chk('…with its components and incidents cascaded away',
     (await comps(V2)).length === 0 && (await incs(V2)).length === 0, `${(await comps(V2)).length}/${(await incs(V2)).length}`);
-  chk('…the delete is audited', (await audits('vendor_delete')).length === 1);
+  chk('…the delete is audited', (await auditsAtLeast('vendor_delete')).length === 1);
   chk('DELETE of an unknown vendor is 404', (await call(lead, 'DELETE', '/api/vendors/999999')).status === 404);
   chk('DELETE of another org\'s vendor is 404', (await call(other, 'DELETE', `/api/vendors/${V1}`)).status === 404);
   chk('…and it is still there', !!(await vrow(V1)));
@@ -781,17 +791,28 @@ async function main() {
   };
   await q.prepare('UPDATE vendors SET interval_s = 0 WHERE id = ?').run(L);
   setFeed(LOCK_URL, snap('major', [{ name: 'P', status: 'major' }, { name: 'Q', status: 'major' }], []));
-  /* `tick()` returns immediately while another tick holds `running`, and the app
-   * boots its own 15s interval this harness cannot cancel — so OUR tick can be a
-   * no-op and the contention never happens at all. That is the same problem
-   * `tickUntil` exists for, and it only bites here on Postgres, where a
-   * background tick over the 222 catalog subscriptions lasts long enough to
-   * overlap (measured: one run in three, `observed2` holding the "check now"
-   * pass alone). Re-staged until the tick really took part, with the row put
-   * back to the state the attempt describes. A lock that genuinely does not
-   * serialise never converges, so the two checks below still go red — the retry
-   * buys determinism, not tolerance, exactly like `measured()` above. */
-  for (let attempt = 0; attempt < 5 && observed2.length < 2; attempt++) {
+  /* `tick()` does nothing while another tick holds `running`, and the app boots
+   * its own 15s interval this harness cannot cancel — so OUR tick can be a
+   * no-op and the contention never happens at all.
+   *
+   * This used to retry five times and hope. It went red on CI the first run
+   * after a second service container joined the runner: a slower box makes the
+   * background sweep over the 222 catalog subscriptions last longer, so it holds
+   * `running` across more of our attempts and all five were swallowed
+   * (`observed2` held the "check now" pass alone, exactly as the old comment
+   * predicted it would one run in three).
+   *
+   * Hoping harder is not the fix. `tick()` now REPORTS whether it ran, so an
+   * attempt where our tick was skipped is not an attempt at all: it does not
+   * count, it waits for the background sweep to finish, and it tries again. The
+   * bound is wall-clock rather than a count, because what we are waiting for is
+   * an idle window and its length is the runner's business, not ours.
+   *
+   * A lock that genuinely does not serialise still never converges, so the two
+   * checks below still go red for the reason they exist — this buys determinism,
+   * not tolerance. */
+  const stageDeadline = Date.now() + 20000;
+  for (let staged = 0; staged < 5 && observed2.length < 2 && Date.now() < stageDeadline;) {
     observed2.length = 0;
     // eslint-disable-next-line no-await-in-loop
     await q.prepare("UPDATE vendors SET status = 'degraded' WHERE id = ?").run(L);
@@ -799,8 +820,12 @@ async function main() {
     const tickPass = vendorEngine.tick();
     const nowPass = vendorEngine.pollNow(L, ACME);
     // eslint-disable-next-line no-await-in-loop
-    await Promise.all([tickPass, nowPass]);
+    const [tickRan] = await Promise.all([tickPass, nowPass]);
     feedDelayMs = 0;
+    if (tickRan) { staged++; continue; }
+    // The background sweep owns the lock. Let it finish rather than spinning.
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 100));
   }
   feeds.fetchFeed = realFetch2;
   chk('a tick and a "check now" over one vendor both run', observed2.length >= 2,

@@ -115,9 +115,24 @@ for (const f of files) {
     cwd: HERE,
     encoding: 'utf8',
     timeout: 5 * 60 * 1000,
-    // NODE_ENV=test makes index.js exit non-zero on an unhandled rejection
-    // instead of logging it. See the handler at the bottom of src/index.js.
-    env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: dbUrl },
+    /* NODE_ENV=test makes index.js exit non-zero on an unhandled rejection
+     * instead of logging it. See the handler at the bottom of src/index.js.
+     *
+     * CLICKHOUSE_URL is deliberately REMOVED and handed on under another name.
+     * The child env is inherited wholesale, so a developer (or CI) with
+     * ClickHouse configured would otherwise switch the log store for ALL 24
+     * harnesses at once — silently, and only on machines that happen to have
+     * it. Every harness but one asserts against the Postgres log store, which
+     * is what the community edition runs and therefore what must stay covered;
+     * `e2e-logstore` is the one that wants ClickHouse and reads OPSCAT_CH_URL
+     * to get it. Opting in by name beats inheriting by accident. */
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      DATABASE_URL: dbUrl,
+      CLICKHOUSE_URL: '',
+      OPSCAT_CH_URL: process.env.OPSCAT_CH_URL || process.env.CLICKHOUSE_URL || '',
+    },
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   const out = `${r.stdout || ''}${r.stderr || ''}`;
@@ -130,7 +145,20 @@ for (const f of files) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label(f).padEnd(width)}  `
     + `${(m ? `${m[1]}/${m[2]}` : 'no summary').padStart(9)}  ${secs}s`);
 
-  // A passing harness's output is noise; a failing one's is the whole point.
+  /* A NOTICE survives a pass, and that is the one exception to the rule below.
+   *
+   * A harness that quietly covers less than it claims is the failure mode
+   * CLAUDE.md keeps naming — "a check that skips itself when no database is
+   * present is a check nobody notices has stopped running". `e2e-logstore`
+   * covers 98 checks with ClickHouse configured and 40 without it, and both
+   * exit 0; without this, the only evidence is a number in a column nobody
+   * has a baseline for. Any harness may print a line starting with `!!` to
+   * say what it did NOT do, and it is echoed even on a pass. */
+  for (const line of out.split('\n')) {
+    if (line.startsWith('!!')) console.log(`      ${line}`);
+  }
+
+  // Otherwise: a passing harness's output is noise; a failing one's is the whole point.
   if (!ok) {
     console.log(out.split('\n').filter((l) => l.startsWith('FAIL') || /Error|error:/.test(l))
       .map((l) => `      ${l}`).join('\n') || `      (no FAIL lines — exited ${r.status})`);

@@ -26,7 +26,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-invite-'));
@@ -196,10 +196,13 @@ async function main() {
   const replay = await anon('POST', '/api/auth/magic-login', { token });
   chk('the activation link is single-use', replay.status === 401, String(replay.status));
 
+  /* Waited, not read straight: `audit()` is fire-and-forget by design, so the
+   * row lands after the response. The deadline keeps a missing row a FAIL. */
   chk('the acceptance is audited',
-    !!await q.prepare("SELECT 1 FROM audit_log WHERE action = 'invite_accepted' AND user_id = ?").get(nb.id));
+    !!await untilAsync(() => q.prepare(
+      "SELECT 1 FROM audit_log WHERE action = 'invite_accepted' AND user_id = ?").get(nb.id)));
   chk('the invitation itself is audited',
-    !!await q.prepare("SELECT 1 FROM audit_log WHERE action = 'user_invited'").get());
+    !!await untilAsync(() => q.prepare("SELECT 1 FROM audit_log WHERE action = 'user_invited'").get()));
 
   // ── 3. setting the first password needs no current one ────────────────────
   const NEW = 'chosen-by-the-user-1';

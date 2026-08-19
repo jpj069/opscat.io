@@ -17,6 +17,19 @@ module.exports = {
   // src/db/shim.js refuses to load without it rather than falling back to
   // anything.
   databaseUrl: process.env.DATABASE_URL || null,
+  /* ClickHouse — the LOG LINE store, and only that (src/db/log-store.js).
+   *
+   * Unset is a supported configuration, not a degraded one: the community
+   * edition serves log lines from PostgreSQL, which is what keeps the
+   * "whole stack idles under 350 MB" claim true and what stops an existing
+   * self-hoster's next `docker compose up` from needing a new container.
+   * Set it and log lines move; everything transactional stays in Postgres
+   * either way.
+   */
+  clickhouseUrl: (process.env.CLICKHOUSE_URL || '').trim() || null,
+  clickhouseDatabase: process.env.CLICKHOUSE_DB || 'opscat',
+  clickhouseUser: process.env.CLICKHOUSE_USER || 'opscat',
+  clickhousePassword: process.env.CLICKHOUSE_PASSWORD || '',
   publicDir: process.env.OPSCAT_PUBLIC_DIR || path.join(__dirname, '..', 'public'),
   wwwDir: process.env.OPSCAT_WWW_DIR || path.join(__dirname, '..', 'public-www'),
   // host that serves the public vendor-status grid at / (see routes/public.js);

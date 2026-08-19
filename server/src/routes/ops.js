@@ -7,6 +7,10 @@ const crypto = require('crypto');
 // local `q` (the search term), and a module-scope statement table shadowed by a
 // local would turn a statement lookup into a query-parameter lookup silently.
 const store = require('../db/shim');
+/* Log LINES do not necessarily live in `store`. Which engine answers is decided
+ * once at boot and this module is the only thing that knows — see
+ * src/db/log-store.js. Everything else in this file is Postgres. */
+const logs = require('../db/log-store');
 const { now, sha256, clampInt, isStr, optStr, httpError, SseHub, RateLimiter, isId, utcDaySql, utcDayLabel } = require('../util');
 const config = require('../config');
 const sec = require('../security');
@@ -176,11 +180,10 @@ async function appendCaseNote(orgId, eventId, note) {
 router.get('/events/:id', async (req, res) => {
   const e = await store.prepare('SELECT * FROM events WHERE id = ? AND org_id = ?').get(req.params.id, req.orgId);
   if (!e) return httpError(res, 404, 'event not found');
-  const logs = await store.prepare(`SELECT ts, device, line, sev FROM logs
-    WHERE device = ? AND org_id = ? ORDER BY ts DESC LIMIT 20`).all(e.device, req.orgId);
+  const recentLogs = await logs.deviceTail({ orgId: req.orgId, device: e.device, limit: 20 });
   const caseRow = await store.prepare('SELECT id, status FROM cases WHERE event_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1')
     .get(e.id, req.orgId);
-  res.json({ ...(await publicEvent(e)), spark: (await sparksFor([e])).get(e.id), recentLogs: logs,
+  res.json({ ...(await publicEvent(e)), spark: (await sparksFor([e])).get(e.id), recentLogs,
     timeline: await timelineFor(e),
     case: caseRow ? { label: `C-${1000 + caseRow.id}`, id: caseRow.id, status: caseRow.status } : null });
 });
@@ -350,15 +353,8 @@ router.get('/logs', async (req, res) => {
   const to = clampInt(req.query.to, 0, Number.MAX_SAFE_INTEGER, 0);
   const since = from || t - clampInt(req.query.hours, 1, 720, 2) * 3600000;
   const until = to || Number.MAX_SAFE_INTEGER;
-  const where = 'ts >= ? AND ts <= ? AND org_id = ?';
-  const args = [since, until, req.orgId];
-  const rows = q
-    // plain substring match (safe); regex filtering happens client-side
-    ? await store.prepare(`SELECT ts, device, line, sev FROM logs
-        WHERE ${where} AND (lower(line) LIKE lower(?) OR lower(device) LIKE lower(?)) ORDER BY ts DESC LIMIT ?`)
-      .all(...args, `%${q}%`, `%${q}%`, limit)
-    : await store.prepare(`SELECT ts, device, line, sev FROM logs
-        WHERE ${where} ORDER BY ts DESC LIMIT ?`).all(...args, limit);
+  // plain substring match (safe); regex filtering happens client-side
+  const rows = await logs.search({ orgId: req.orgId, since, until, term: q, limit });
   res.json(rows);
 });
 
@@ -374,7 +370,7 @@ router.get('/dashboard', async (req, res) => {
   const openCases = (await store.prepare("SELECT COUNT(*) c FROM cases WHERE status != 'closed' AND org_id = ?").get(req.orgId)).c;
   const mttr = (await store.prepare(`SELECT AVG(closed_at - opened_at) v FROM cases
     WHERE status = 'closed' AND closed_at >= ? AND org_id = ?`).get(t - 7 * 86400000, req.orgId)).v;
-  const logs24 = (await store.prepare('SELECT COUNT(*) c FROM logs WHERE ts >= ? AND org_id = ?').get(t - 86400000, req.orgId)).c;
+  const logs24 = await logs.countSince({ orgId: req.orgId, since: t - 86400000 });
   const events24 = (await store.prepare('SELECT COUNT(*) c FROM events WHERE last_seen >= ? AND org_id = ?').get(t - 86400000, req.orgId)).c;
   const casesByAnalyst = (await store.prepare(`SELECT u.id, u.name, u.color, COUNT(*) c FROM cases
     JOIN users u ON u.id = cases.assigned_user_id
@@ -387,16 +383,11 @@ router.get('/analytics', async (req, res) => {
   const range = { '24h': 1, '7d': 7, '30d': 30 }[req.query.range] || 7;
   const t = now();
   const since = t - range * 86400000;
-  // The bucket is integer arithmetic, not a date function — see utcDaySql in
-  // util.js for why neither engine gets to decide what a day is. Pinned by
-  // e2e-pipeline, which puts a row 30 minutes either side of midnight UTC.
-  const volume = (await store.prepare(`SELECT ${utcDaySql('ts')} bucket,
-      SUM(CASE WHEN sev <= 2 THEN 1 ELSE 0 END) c,
-      SUM(CASE WHEN sev = 3 THEN 1 ELSE 0 END) h,
-      SUM(CASE WHEN sev = 4 THEN 1 ELSE 0 END) m,
-      SUM(CASE WHEN sev >= 5 THEN 1 ELSE 0 END) l
-    FROM logs WHERE ts >= ? AND org_id = ? GROUP BY bucket ORDER BY bucket`)
-    .all(since, req.orgId))
+  // Day bucketing is integer arithmetic in BOTH log stores — see the note on
+  // dailyBuckets in db/log-store.js. It matters more now than it did with one
+  // engine: ClickHouse's toStartOfDay renders in the server's timezone and
+  // would disagree with the Postgres implementation by up to a day.
+  const volume = (await logs.dailyBuckets({ orgId: req.orgId, since }))
     .map((r) => ({ d: utcDayLabel(r.bucket), c: r.c, h: r.h, m: r.m, l: r.l }));
   // The bucket is integer arithmetic, not a date function — see utcDaySql in
   // util.js for why neither engine gets to decide what a day is. Pinned by
@@ -719,7 +710,7 @@ router.get('/assets', async (req, res) => {
       lastSeen: v.last_checked_at || null });
   }
   const sources = new Map();
-  for (const r of await store.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device').all(req.orgId)) {
+  for (const r of await logs.lastSeenByDevice({ orgId: req.orgId })) {
     sources.set(r.device, r.ls);
   }
   for (const r of await store.prepare('SELECT device, MAX(last_seen) AS ls FROM events WHERE org_id = ? GROUP BY device').all(req.orgId)) {

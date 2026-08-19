@@ -20,7 +20,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-bridge-'));
@@ -168,9 +168,10 @@ async function main() {
   const feed0 = await call(M, 'GET', `/api/room/${roomId}/feed`);
   chk('exactly one "opened the Bridge" feed line',
     feed0.j?.items.filter((i) => /opened the Bridge/.test(i.body)).length === 1);
+  /* Waited: `audit()` is fire-and-forget, so the row lands after the response. */
   chk('audit row bridge_open names the incident',
-    !!await q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_open'
-      AND detail LIKE ?`).get(DEFAULT_ORG_ID, lead.id, `%INC-${2000 + incId}%`));
+    !!await untilAsync(() => q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_open'
+      AND detail LIKE ?`).get(DEFAULT_ORG_ID, lead.id, `%INC-${2000 + incId}%`)));
 
   const peek = await call(M, 'GET', `/api/incidents/${incId}/room`);
   chk('member peek sees the room', peek.j?.room?.id === roomId);
@@ -392,8 +393,8 @@ async function main() {
   chk('close is idempotent (one feed line)',
     feed.j.items.filter((i) => /closed the Bridge/.test(i.body)).length === 1);
   chk('audit row bridge_close exists',
-    !!await q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_close'`)
-      .get(DEFAULT_ORG_ID, lead.id));
+    !!await untilAsync(() => q.prepare(`SELECT 1 FROM audit_log WHERE org_id = ? AND user_id = ? AND action = 'bridge_close'`)
+      .get(DEFAULT_ORG_ID, lead.id)));
 
   // ── browser-side headers: CSP + Permissions-Policy must carry the Bridge ──
   // The class of bug nothing else catches: server green, browser refuses the

@@ -15,24 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
-
-/* `until` (e2e-lib.js) throws on a thenable by design — a Promise is truthy, so
- * `while (!fn())` would be satisfied on the first poll and the wait would be no
- * wait at all. That guard also means it cannot take an async predicate, and the
- * effect waited for below is a database row. This variant AWAITS its predicate,
- * so the value is resolved before it is tested and can never be mistaken for
- * `true`. Returns the value, or null once the deadline passes — a timeout must
- * fail the check that asked, not throw past it. */
-const untilAsync = async (fn, ms = 4000) => {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await fn();
-    if (v) return v;
-    if (Date.now() - t0 > ms) return null;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-};
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — config.js and db.js are singletons, so
 // the first require freezes the data directory for the whole process.

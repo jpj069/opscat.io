@@ -6,6 +6,7 @@
 // stays synchronous (docs/POSTGRES-MIGRATION-PLAN.md § the spine), which is what
 // keeps `classify()` — called once per ingested line — a plain function.
 const q = require('../db/shim');
+const logs = require('../db/log-store');   // log LINES may not be in `q` — see db/log-store.js
 const { getOrgSetting } = require('../db');
 const { now, DEFAULT_ORG_ID } = require('../util');
 
@@ -105,16 +106,10 @@ function listClassifiers(orgId) {
   };
 }
 
-/* The log write is BATCHED — one statement per LOG_BATCH lines, not one per
- * line. An agent posts up to 500 lines at a time, and awaited singly that is 500
- * sequential round trips with a write transaction held open across all of them:
- * cheap on better-sqlite3's in-process call, the dominant cost under
- * node-postgres. The tuple text is generated, so the statement is built once per
- * distinct row count and reused; the column list is written ONCE, here, because
- * a second spelling of it is how the parameter order drifts.
+/* The log write moved to src/db/log-store.js when a second engine could hold it
+ * — with the batching and the reasoning behind it. What stayed here is the
+ * bucket rollup below, which is Postgres either way.
  */
-const LOG_TUPLE = '(?, ?, ?, ?, ?, ?, ?)';
-const LOG_BATCH = 100;   // 700 bound parameters — well inside both engines' limits
 const sqlCache = new Map();
 function batchSql(kind, n, build) {
   const key = `${kind}:${n}`;
@@ -122,9 +117,6 @@ function batchSql(kind, n, build) {
   if (sql === undefined) { sql = build(n); sqlCache.set(key, sql); }
   return sql;
 }
-const logInsertSql = (n) => batchSql('log', n, (rows) => (
-  `INSERT INTO logs (org_id, ts, device, line, sev, source, meta) VALUES ${
-    new Array(rows).fill(LOG_TUPLE).join(', ')}`));
 // THE dedupe write. It was SELECT-then-INSERT-or-UPDATE, racing the partial
 // unique index `idx_events_dedupe_active` instead of cooperating with it: under
 // Postgres the loser of that race raises 23505, and the abort takes the whole
@@ -243,8 +235,8 @@ async function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
     let ts = Number.isFinite(e.ts) ? e.ts : t;
     if (ts < 1e12) ts *= 1000; // seconds → ms
     if (ts > t + 5 * 60 * 1000 || ts < t - 30 * 24 * 3600 * 1000) ts = t; // reject silly timestamps
-    logRows.push([orgId, ts, device, line, sev, source,
-      e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null]);
+    logRows.push({ orgId, ts, device, line, sev, source,
+      meta: e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null });
     bytes += Buffer.byteLength(line);
     const cls = classify(line, sev, orgId);
     // `matched` lets Scout mine only lines no classifier knows
@@ -260,13 +252,38 @@ async function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
   const accepted = logRows.length;
 
   if (accepted) {
+    /* THE LINES GO FIRST WHEN THEY ARE NOT IN POSTGRES, AND THE ORDER IS THE
+     * WHOLE DESIGN OF THIS BRANCH.
+     *
+     * With one engine this was a single transaction: lines and the events
+     * derived from them committed together or not at all. ClickHouse has no
+     * transaction the Postgres one can join, so that guarantee is gone and what
+     * replaces it is a choice about WHICH failure we prefer. There are two:
+     *
+     *   lines first  — if the transaction then fails, the sender gets an error
+     *                  and retries, so the lines are written TWICE and the
+     *                  events once. Visible duplication, nothing lost.
+     *   lines after  — if the write then fails, the sender was already told
+     *                  `accepted: 500` and the lines are simply gone. Silent
+     *                  loss, and undetectable from the outside.
+     *
+     * Lines first. This codebase treats a silent wrong answer as the worst
+     * outcome available, and "we said we accepted 500 lines and kept none" is
+     * exactly that — a customer would find it by noticing an event whose
+     * evidence is missing, weeks later, with no error anywhere to explain it.
+     * Duplicated lines are noise a reader can see, they do not affect event
+     * dedupe (which keys on the classifier result, not on the line), and
+     * retention removes them on the same schedule as everything else.
+     *
+     * It also shortens the transaction by the length of a network round trip,
+     * which is the opposite of the usual cost of moving work out of one.
+     *
+     * On Postgres `logs.transactional` is true and none of this applies: the
+     * insert joins the transaction below exactly as it always did. */
+    if (!logs.transactional) await logs.insert(logRows);
+
     await q.withTx(async () => {
-      for (let i = 0; i < logRows.length; i += LOG_BATCH) {
-        const chunk = logRows.slice(i, i + LOG_BATCH);
-        const args = [];
-        for (const row of chunk) args.push(...row);
-        await q.run(logInsertSql(chunk.length), ...args);
-      }
+      if (logs.transactional) await logs.insert(logRows);
       // The rollup is folded here and written once below — see writeBuckets.
       /* Upserted in DEDUPE-KEY order, not arrival order — this is a lock-ordering
        * fix, not a tidy-up.
@@ -379,15 +396,14 @@ async function ingestEvent({ name, device, target, description, severity, ip, ts
 const DRYRUN_MAX_LINES = 20000;
 const DRYRUN_BUDGET_MS = 2000;
 
-const recentLines = q.prepare(`SELECT ts, device, line, sev FROM logs
-  WHERE org_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`);
+
 
 async function backtest({ orgId = DEFAULT_ORG_ID, pattern, flags = 'i', name = 'rule', severity = 50,
   targetGroup = null, hours = 24 }) {
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { throw new Error(`invalid pattern: ${e.message}`); }
   const since = now() - Math.min(720, Math.max(1, hours)) * 3600000;
-  const rows = await recentLines.all(orgId, since, DRYRUN_MAX_LINES);
+  const rows = await logs.recent({ orgId, since, limit: DRYRUN_MAX_LINES });
 
   const out = {
     hours, scanned: 0, matched: 0, shadowed: 0, takeover: 0, fresh: 0,

@@ -51,7 +51,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { chk, report, onExit, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, onExit, die } = require('./e2e-lib').harness();
 const { waitForServer } = require('./e2e-lib');
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
@@ -131,6 +131,16 @@ async function get(sess, p, org, { viaHeader = false } = {}) {
 const rows = (orgId, action = 'superadmin_org_access') => q.prepare(
   'SELECT * FROM audit_log WHERE org_id = ? AND action = ? ORDER BY id').all(orgId, action);
 const rowCount = async (orgId, action) => (await rows(orgId, action)).length;
+/* Positive counts are WAITED for: `audit()` is fire-and-forget by design, so the
+ * row lands after the response and reading it on the next line is a bet on
+ * scheduling — one this suite lost twice on a loaded CI runner. A NEGATIVE
+ * ("no row anywhere") cannot be waited for and does not need to be: absence is
+ * only ever provable by looking, and every one below follows a positive check
+ * that has already settled the trail. */
+const rowCountAtLeast = async (orgId, n = 1, action = 'superadmin_org_access') => {
+  await untilAsync(async () => (await rowCount(orgId, action)) >= n);
+  return rowCount(orgId, action);
+};
 
 async function main() {
   chk('server boots and answers /api/health', await waitForServer(BASE));
@@ -148,6 +158,7 @@ async function main() {
   const ev = await get(op, '/api/events?limit=1', ACME);
   chk('a super-admin may read a foreign org', ev.status === 200, `got ${ev.status}`);
 
+  await rowCountAtLeast(ACME, 1);   // the row is written after the response
   const first = await rows(ACME);
   chk('entering it wrote exactly one audit row', first.length === 1, `${first.length} rows`);
   chk('…in the TARGET org, not the operator’s', first[0]?.org_id === ACME);
@@ -161,18 +172,18 @@ async function main() {
   // ── one row per entry, not per request ────────────────────────────────────
   for (const p of ['/api/events?limit=1', '/api/logs?hours=1&limit=1', '/api/dashboard',
     '/api/admin/settings', '/api/team']) await get(op, p, ACME);
-  chk('further requests in the same org add nothing', await rowCount(ACME) === 1,
+  chk('further requests in the same org add nothing', await rowCountAtLeast(ACME, 1) === 1,
     `${await rowCount(ACME)} rows`);
 
   // ── a second org is its own record ────────────────────────────────────────
   await get(op, '/api/events?limit=1', GLOBEX);
-  chk('a different org gets its own row', await rowCount(GLOBEX) === 1, `${await rowCount(GLOBEX)} rows`);
+  chk('a different org gets its own row', await rowCountAtLeast(GLOBEX, 1) === 1, `${await rowCount(GLOBEX)} rows`);
   chk('…and the first org still has exactly one', await rowCount(ACME) === 1);
 
   // ── the header door ───────────────────────────────────────────────────────
   const viaHeader = await get(op, '/api/events?limit=1', GLOBEX, { viaHeader: true });
   chk('the header door works too', viaHeader.status === 200, `got ${viaHeader.status}`);
-  chk('…and is deduplicated with the link door', await rowCount(GLOBEX) === 1,
+  chk('…and is deduplicated with the link door', await rowCountAtLeast(GLOBEX, 1) === 1,
     `${await rowCount(GLOBEX)} rows`);
 
   // ── the operator's OWN org is not cross-org ───────────────────────────────
@@ -185,7 +196,7 @@ async function main() {
   const stolen = await get(tenant, '/api/events?limit=1', GLOBEX);
   chk('a tenant admin naming another org is answered from their OWN org',
     stolen.status === 200, `got ${stolen.status}`);
-  chk('…and it leaves no cross-org row', await rowCount(GLOBEX) === 1, `${await rowCount(GLOBEX)} rows`);
+  chk('…and it leaves no cross-org row', await rowCountAtLeast(GLOBEX, 1) === 1, `${await rowCount(GLOBEX)} rows`);
   const tenantId = (await q.prepare('SELECT id FROM users WHERE email = ?').get('tenant@e2e.test')).id;
   const audits = (await q.prepare('SELECT COUNT(*) c FROM audit_log WHERE user_id = ? AND action = ?')
     .get(tenantId, 'superadmin_org_access')).c;
@@ -250,7 +261,7 @@ async function main() {
   chk('…and the fallback is written back to the session row',
     await activeOrgOf(driftedSid) === ACME, String(await activeOrgOf(driftedSid)));
   chk('…and no cross-org audit row is written for an ordinary member',
-    await rowCount(ACME) === 1, `${await rowCount(ACME)} rows`);
+    await rowCountAtLeast(ACME, 1) === 1, `${await rowCount(ACME)} rows`);
 
   // 3b. The other arm of the same fallback: the HOME org is no good either, so
   //     the answer has to come from `anyMembership`. Both reads sit in one `||`

@@ -2,6 +2,7 @@
 // Retention + housekeeping: prune old rows, roll up component uptime days,
 // mark agents offline, expire stale sessions.
 const q = require('../db/shim');
+const logs = require('../db/log-store');   // log LINES may not be in `q` — see db/log-store.js
 const config = require('../config');
 const plans = require('../plans');
 const { now } = require('../util');
@@ -108,6 +109,18 @@ async function markStaleAgents() {
  * Now each org is pruned with its own effective retention (`plans.retentionDaysFor`
  * — the plan's ceiling, which the org may only shorten). Orgs are counted in
  * dozens, not thousands, and each DELETE is indexed on (org_id, ts).
+ *
+ * The delete goes through the log store, because the lines may not be in
+ * Postgres. On ClickHouse it is a lightweight DELETE, which is applied as an
+ * asynchronous mutation — so rows are gone from query results promptly but the
+ * disk they occupy is reclaimed on the next merge. That is the right shape for
+ * a sweep that runs once a day, and the table also carries a 400-day TTL as the
+ * backstop for the case this loop stops running at all (src/clickhouse-schema.sql).
+ *
+ * What did NOT change: per-org retention stays a plan ceiling enforced here, in
+ * one place, for both engines. A table-level TTL cannot express "each tenant may
+ * shorten but not raise its own", so moving this into the schema was never an
+ * option.
  */
 async function pruneLogs(t) {
   for (const { id } of await q.prepare('SELECT id FROM organizations').all()) {
@@ -116,7 +129,7 @@ async function pruneLogs(t) {
     // is NaN, `ts < NaN` matches no row, and the table grows unnoticed. The helper
     // already falls back, this is the second line of defence.
     if (!Number.isFinite(days) || days <= 0) continue;
-    await q.prepare('DELETE FROM logs WHERE org_id = ? AND ts < ?').run(id, t - days * 86400000);
+    await logs.purge({ orgId: id, before: t - days * 86400000 });
   }
 }
 

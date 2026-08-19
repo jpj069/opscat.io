@@ -22,9 +22,18 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
                         │     snmp · vendors · retention             │
                         └───────────────┬────────────────────────────┘
                                         │
-                        ┌───────────────▼───────────────┐
-                        │ PostgreSQL 16 (docker volume) │
-                        └───────────────────────────────┘
+                        ┌───────────────┴───────────────┐
+                        │                               │
+            ┌───────────▼───────────┐   ┌───────────────▼───────────────┐
+            │ PostgreSQL 16         │   │ ClickHouse 24.8               │
+            │ everything            │   │ raw log LINES only            │
+            │ transactional:        │   │  • 22 B/row vs 301            │
+            │ events · cases ·      │   │  • search 17-25 ms vs 435     │
+            │ incidents · users ·   │   │ cloud: required               │
+            │ settings · the spine  │   │ community: opt-in profile     │
+            └───────────────────────┘   └───────────────────────────────┘
+                        (docker volumes)   selected once at boot by
+                                           CLICKHOUSE_URL — src/db/log-store.js
 
  Feeders:  @opscat/sdk (apps) ── HTTPS ──► /v1/ingest/logs
            opscat-agent (servers) ───────► /v1/agents/* (+ probe mode ► /v1/synthetics/report)
@@ -38,6 +47,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 |---|---|
 | Express 5 + Node 22 | Tiny footprint on the 2-vCPU VPS, and async handlers forward rejections to the error middleware on their own. Upgraded from 4 in one line: path-to-regexp v8 needs NAMED wildcards, so the SPA catch-all is `/app/*splat`, not `/app/*` — a bare `*` throws at registration. Nothing else in the codebase used the removed APIs (`req.param()`, `app.del()`, `res.sendfile()`, `res.json(obj, status)`) or mutated `req.query`, which is a getter now. |
 | PostgreSQL 16 (node-postgres) | The only engine, in both editions (decision D6). Every statement in `server/src` goes through the async shim (`src/db/shim.js`); `src/schema.sql` is PostgreSQL DDL and is the only description of the shape. It replaced SQLite, which was genuinely good at this write pattern and gave a one-file backup — what it cost was a second SQL dialect over ~770 statements, with `int8`-as-string, `CAST` disagreements, case-sensitivity of `LIKE`, `lastInsertRowid` and a `withTx` serialisation lock all differing per engine, and no product benefit on the other side. See `docs/POSTGRES-MIGRATION-PLAN.md`. |
+| ClickHouse for log LINES only | The one table that is append-only, never updated, read by scanning, and large. Measured (`docs/BENCHMARKS.md` § 5): 22 bytes/row against Postgres's 301, log search 17-25 ms against 435 ms, the throughput chart 26 ms against 261 — and production was already OUTSIDE a 250 ms budget on two user-facing queries at 392,319 rows. Nothing transactional moved and nothing is joined across the two. It is **optional**: the community edition serves lines from Postgres, because ClickHouse alone is ~600 MB resident and the self-hosted stack idles at 283 MB. See § Log storage. |
 | In-process schedulers | No queue infra needed at this load. Engine modules are already isolated so they can be split into separate probe/worker processes when scaling out. |
 | API-key ingest, session UI auth | Open "drop your logs here" endpoints stay decoupled from human auth. Keys are hashed (SHA-256) — plaintext is shown once at creation. |
 | SSE (not WebSocket) | One-directional live streams (logs/events) through Caddy with zero extra dependencies. |
@@ -560,6 +570,113 @@ and table rebuilds through `sqlite_master`. It was SQLite's history and was neve
 on Postgres, so it went with SQLite; `schema_migrations` keeps the number it recorded
 (25) as the baseline, which is what makes an existing production database
 indistinguishable from a fresh one.
+
+## Log storage (why there are two databases)
+
+Everything in this product is transactional and lives in PostgreSQL. **Raw log
+lines are the single exception**, and they are the exception for reasons that
+were measured before anything moved (`docs/BENCHMARKS.md` § 5).
+
+`logs` is the only table that is **append-only, never updated, read by scanning,
+and large**. Nothing joins it to anything — the pipeline derives `events` from
+lines at write time and every screen afterwards reads the derived rows. So it is
+the one table that can leave without taking a foreign key with it.
+
+### What the numbers said
+
+| | PostgreSQL | ClickHouse |
+|---|---|---|
+| bytes per row | ~301 | **22** |
+| 596 k lines on disk | 172 MB | **12.68 MiB** |
+| log search, 7 days | 435 ms | **17-25 ms** |
+| throughput chart, 7 days | 261 ms | **26 ms** |
+| the same chart at 6 M rows | 2,620 ms | **134 ms** |
+| log tail, 300 lines | **1.2 ms** | 6.6 ms |
+| one device's last 20 lines | **0.3 ms** | 11.8 ms |
+| resident memory | 161 MB (whole cluster) | 609 MB |
+
+Postgres wins the last two and it does not matter: **both are inside a 50 ms
+budget on both engines**, and a ratio between two numbers nobody can perceive is
+not a finding. What decided it is that Postgres was already OUTSIDE a 250 ms
+budget on log search (318 ms) and the throughput chart (372 ms) **in production,
+at 392,319 rows** — measured on the live database, not interpolated.
+
+ClickHouse cannot serve the tail queries as fast because `index_granularity` is
+8,192 rows: a sparse index finds the right place efficiently and then reads a
+granule. That is structural, not a misconfiguration — a projection ordered like
+Postgres's second index was tried and left the 20-row lookup at 11.6 ms while
+doubling storage.
+
+### The seam
+
+One module, `src/db/log-store.js`, with two implementations of one interface. The
+choice is made **once at boot** from `CLICKHOUSE_URL`:
+
+- **set** → ClickHouse. The cloud edition. Unreachable is a hard boot failure,
+  never a fallback: serving from Postgres instead would split an organisation's
+  lines across two stores with no error anywhere.
+- **unset** → Postgres. The community default, and a supported configuration.
+  ClickHouse alone is more resident memory than the entire self-hosted stack
+  idles at, so making it mandatory would both falsify a published claim and break
+  every existing self-hoster's next `docker compose up`.
+
+Fourteen call sites go through it and **nothing else in `server/src` names the
+`logs` table**. There is deliberately no query builder: each method answers one
+question the product asks, because a `where` parameter would put SQL back at the
+call sites and give up the only property that makes two implementations
+survivable. `e2e-logstore.js` runs the same 40 assertions against both stores in
+one process, so a behaviour that differs fails the build.
+
+### What was given up, and what replaced it
+
+With one engine, a batch was **one transaction**: log lines and the events
+derived from them committed together or not at all. ClickHouse has no transaction
+the Postgres one can join, so that guarantee is gone. What replaced it is a
+choice about which failure to prefer, and `engine/pipeline.js` writes the **lines
+first**:
+
+- lines first → a failing transaction means the sender retries: lines land twice,
+  events once. Visible duplication, nothing lost.
+- lines after → a failing write means the sender was already told `accepted: 500`
+  and the lines are gone. Silent loss, undetectable from outside.
+
+Duplicate lines are noise a reader can see, they do not disturb event dedupe
+(which keys on the classifier result, not the line text), and retention removes
+them on the usual schedule. It also shortens the transaction by a network round
+trip. On Postgres `logs.transactional` is true and the insert joins the
+transaction exactly as before.
+
+### Retention
+
+Per-org retention stays a **plan ceiling enforced in `engine/retention.js`**, in
+one place, for both engines — a table-level TTL cannot express "each tenant may
+shorten but not raise". On ClickHouse the sweep is a lightweight `DELETE`, which
+is an asynchronous mutation: rows leave query results promptly and the disk comes
+back on the next merge. `clickhouse-schema.sql` also carries a 400-day TTL, above
+the largest plan (365), purely as the backstop for the day the sweep stops
+running.
+
+### Two things that look like oversights and are not
+
+- **No skip index on `line`.** A `tokenbf_v1` index was written, shipped and then
+  EXPLAINed: ClickHouse never consults it, correctly — a token bloom filter cannot
+  answer a substring question, because `%timeout%` must also match "timeouts". It
+  cost 669 KiB written on every insert. The scan runs at 12.6 ms p50 over 596,491
+  rows without it.
+- **The day bucket is `ts - ts % 86400000` in both stores**, not
+  `toStartOfDay`/`date_trunc`. A date function renders in the server's timezone,
+  and the two engines would then disagree about what a day is by up to a day.
+  Same reasoning that retired `strftime` from the prepare sweep's deferral list.
+
+### What did NOT move
+
+`events`, `cases`, `incidents`, `event_buckets`, `event_timeline`, users,
+memberships, settings, api keys, alert state, on-call schedules — all of it. There
+is no join across the two databases anywhere, and there must never be one: it is
+not expressible, and a helper that tried would be a table scan of one engine fed
+into the other.
+
+---
 
 ## Scaling / HA path (documented now, executed when load demands)
 

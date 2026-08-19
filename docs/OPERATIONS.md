@@ -47,9 +47,16 @@ Log in at `https://<your-domain>/app`, then change the password.
 
 ## Data & backups
 
-All state lives in PostgreSQL, in the `opscat_pgdata` volume. There is one
-engine and no switch: `DATABASE_URL` is required and the app refuses to start
-without it.
+All state lives in PostgreSQL, in the `opscat_pgdata` volume. `DATABASE_URL` is
+required and the app refuses to start without it.
+
+If you have enabled the optional ClickHouse log store (see *Faster log search*
+below), raw log LINES live in `opscat_chdata` instead. Everything else — events,
+cases, incidents, users, settings — is still in PostgreSQL, so the `pg_dump`
+below remains the backup that matters. A lost ClickHouse volume costs the raw
+lines behind events that already exist, for as long as your retention would have
+kept them; the instance comes back working with an empty Logs page that refills
+as agents ship.
 
 If you are coming from a build that ran on SQLite, note that the file-copy
 backup is gone with the file. `pg_dump` in a cron is more to set up than
@@ -119,6 +126,60 @@ a backup first.
 Retention defaults are configurable under **Settings** in the UI; the retention
 engine prunes old logs/events on an interval. Community edition has no plan
 limits — retention is whatever you configure.
+
+## Faster log search (optional ClickHouse)
+
+By default log lines live in PostgreSQL along with everything else, and for most
+self-hosted installs that is the right answer: the whole stack idles under
+350 MB and the Logs page opens in about a millisecond.
+
+Two things get slow as an instance grows, and both are full scans: **full-text
+log search** and the **throughput chart** on the Analytics page. Moving raw log
+lines to ClickHouse fixes both and shrinks them on disk. Measured on 596,491
+lines over 7 days, two cores (`docs/BENCHMARKS.md`):
+
+| | PostgreSQL | ClickHouse |
+|---|---|---|
+| disk per log line | ~301 bytes | **22 bytes** |
+| log search, 7 days | 435 ms | **17-25 ms** |
+| throughput chart, 7 days | 261 ms | **26 ms** |
+| the same chart at 6 M lines | 2,620 ms | **134 ms** |
+
+**The cost is memory: ClickHouse is ~600 MB resident on its own**, which is more
+than this entire stack idles at. That is why it is off by default. If your box
+has the RAM and your Logs page feels slow, turn it on:
+
+```bash
+# in .env
+CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)
+CLICKHOUSE_URL=http://clickhouse:8123
+
+docker compose --profile clickhouse up -d
+```
+
+Then copy the lines you already have. Reads switch to ClickHouse the moment the
+app restarts, so without this step your existing logs stay in PostgreSQL and
+stop being displayed:
+
+```bash
+docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --dry-run
+docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js
+```
+
+It verifies the row counts agree, does **not** delete the PostgreSQL rows, and
+refuses to run twice (there is no key to deduplicate on, so a second pass would
+double every line). Once the Logs page looks right you can reclaim the space
+with `TRUNCATE logs;` in PostgreSQL.
+
+Notes worth knowing before you switch:
+
+- **If `CLICKHOUSE_URL` is set and ClickHouse cannot be reached, the app exits.**
+  It does not fall back to PostgreSQL — that would split your lines across two
+  stores with no error anywhere.
+- `docker compose logs app | grep '^log store:'` says which one is serving.
+- Retention still works exactly as configured, per organisation.
+- Turning it back off means setting `CLICKHOUSE_URL=` empty; the lines already in
+  ClickHouse are not copied back.
 
 ## Agents & probes
 

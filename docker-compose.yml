@@ -31,6 +31,28 @@ services:
       # the app refuses to start without it. Backups are `pg_dump`, not a file
       # copy; see OPERATIONS.md § Data & backups.
       - DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-opscat}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opscat}}
+      #
+      # ClickHouse is OPTIONAL here, and unset by default on purpose. It stores
+      # log LINES about 14x more compactly than Postgres and answers log search
+      # and the throughput chart an order of magnitude faster
+      # (docs/BENCHMARKS.md § 5) — but it is ~600 MB resident on its own, which
+      # is more than this entire stack idles at. A single-box install with a few
+      # hundred thousand log lines does not need it and should not pay for it.
+      #
+      # Turn it on when log search or the analytics charts start feeling slow:
+      #   CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)  # in .env
+      #   CLICKHOUSE_URL=http://clickhouse:8123        # in .env
+      #   docker compose --profile clickhouse up -d
+      #
+      # Note it does NOT migrate the lines already in Postgres: reads go to
+      # ClickHouse from that moment, so older lines stay visible only until
+      # retention would have removed them anyway. Switch it on early or accept
+      # the gap — there is deliberately no silent dual-read that would hide
+      # which store answered.
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-opscat}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-opscat}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
       - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
       - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
       - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
@@ -171,6 +193,37 @@ services:
       - "50100-50200:50100-50200/udp"
     restart: always
 
+  # ClickHouse — OPTIONAL log-line store, off unless you ask for it:
+  #   docker compose --profile clickhouse up -d
+  # See the CLICKHOUSE_URL comment on `app` for when it is worth it. Without the
+  # profile this block is inert and the stack is exactly what it was.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ["clickhouse"]
+    environment:
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-opscat}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-opscat}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=0
+    volumes:
+      # ClickHouse's defaults assume a machine far bigger than a self-hosted box
+      # — mark_cache alone defaults to 5 GiB. This file caps the four that
+      # matter and records which two knobs broke the server when they were tried.
+      - ./ch-config/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      - opscat_chdata:/var/lib/clickhouse
+    expose:
+      - "8123"
+    mem_limit: 1g
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8123/?database=${CLICKHOUSE_DB:-opscat}&query=SELECT%201' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: always
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -188,6 +241,7 @@ services:
 
 volumes:
   opscat_pgdata:
+  opscat_chdata:
   opscat_data:
   caddy_data:
   caddy_config:
