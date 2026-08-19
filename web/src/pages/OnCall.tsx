@@ -3,7 +3,7 @@
 // is ringing, who was reached, who acknowledged) and My on-call (a person's own
 // contact methods — the only place an address is ever shown).
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useApp, useTab } from '../state';
+import { useApp, useTab, useOverlayParam, useQueryState } from '../state';
 import { api, ApiError } from '../api';
 import {
   SEV, fmtDateTime, fmtHistory, initials, relTime, sevColor,
@@ -20,6 +20,8 @@ import type {
   EscalationPolicy, EscalationTargetKind, AlertRow, MyOnCall, ContactMethodKind,
 } from '../types';
 
+// Module scope: useQueryState memoises on this array.
+const ONCALL_KEYS = ['alerts'] as const;
 const TABS = [['schedules', 'Schedules'], ['policies', 'Policies'], ['alerts', 'Alerts'],
   ['me', 'My on-call'], ['teams', 'Teams']] as const;
 type Tab = typeof TABS[number][0];
@@ -62,12 +64,16 @@ export default function OnCall() {
   const [teams, setTeams] = useState<OnCallTeam[] | null>(null);
   const [editing, setEditing] = useState<OnCallSchedule | 'new' | null>(null);
   const [editingTeam, setEditingTeam] = useState<OnCallTeam | 'new' | null>(null);
-  const [detail, setDetail] = useState<number | null>(null);
+  const [detail, setDetail] = useOverlayParam('schedule');
   const [policies, setPolicies] = useState<EscalationPolicy[] | null>(null);
   const [editingPolicy, setEditingPolicy] = useState<EscalationPolicy | 'new' | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
-  const [alertFilter, setAlertFilter] = useState('live');
-  const [openAlert, setOpenAlert] = useState<number | null>(null);
+  // A refinement of the alerts tab — it drives the fetch, so "show me the live ones"
+  // is exactly the link somebody pastes into a handover. Query, replacing not pushing.
+  const [q, setQ] = useQueryState(ONCALL_KEYS);
+  const alertFilter = q.alerts || 'live';
+  const setAlertFilter = (v: string) => setQ({ alerts: v === 'live' ? null : v });
+  const [openAlert, setOpenAlert] = useOverlayParam('alert');
 
   const load = useCallback(() => {
     api.get<OnCallSchedule[]>('/api/oncall/schedules').then(setSchedules).catch(() => setSchedules([]));

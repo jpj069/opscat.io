@@ -3,10 +3,10 @@
 // custom feed URL); vendor incidents raise events through the normal pipeline
 // and can mirror onto an own status-page component.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useOverlayParam } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput, COL} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput, Skeleton, Tabs, COL} from '../ui';
 import { Select } from '../Select';
 import {
   CheckIcon,
@@ -40,7 +40,7 @@ export default function Vendors() {
   const canEdit = app.user ? app.user.role !== 'analyst' : false;
   const [rows, setRows] = useState<VendorRow[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailId, setDetailId] = useOverlayParam('vendor');
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = () => api.get<VendorRow[]>('/api/vendors').then(setRows).catch(() => setRows([]));
@@ -60,7 +60,10 @@ export default function Vendors() {
     load();
   };
 
-  const disrupted = rows?.filter((r) => ['degraded', 'partial', 'major'].includes(r.status)).length ?? 0;
+  // null while loading — `?? 0` would have made the summary read "all operational"
+  // the moment the line rendered before the rows arrived.
+  const disrupted = rows === null ? null
+    : rows.filter((r) => ['degraded', 'partial', 'major'].includes(r.status)).length;
 
   return (
     <div className="page">
@@ -69,7 +72,14 @@ export default function Vendors() {
         {canEdit && <Button variant="primary" onClick={() => setAdding(true)}><PlusIcon size={13} /> Add vendor</Button>}
       </div>
 
-      {rows && rows.length > 0 && (
+      {/* The row is reserved while loading instead of appearing afterwards: it used to
+          render only once rows existed, so the header, this line and the table all
+          shifted down the moment the fetch returned. */}
+      {rows === null ? (
+        <div className="row" style={{ gap: 8 }}>
+          <Skeleton w={92} h={11} /><Skeleton w={104} h={11} />
+        </div>
+      ) : rows.length > 0 && (
         <div className="row text-sm text-text2" style={{ gap: 6, flexWrap: 'wrap'}}>
           <span className="mono">{rows.length} monitored</span>
           <span>·</span>
@@ -191,16 +201,14 @@ function AddVendorModal({ existing, onClose, onAdded }:
 
   return (
     <Modal title="Add vendor" onClose={onClose} width={480}>
-      <div className="row" style={{ gap: 0, marginBottom: 12, borderBottom: '1px solid var(--bg3)' }}>
-        {([['catalog', 'Catalog'], ['custom', 'Custom feed']] as const).map(([key, label]) => (
-          <button key={key} type="button" onClick={() => { setCustom(key === 'custom'); setErr(''); }}
-            style={{ padding: '6px 12px', fontSize: 'var(--t-sm)', fontWeight: 600,
-              color: custom === (key === 'custom') ? 'var(--text0)' : 'var(--text2)',
-              borderBottom: custom === (key === 'custom') ? '2px solid #388bfd' : '2px solid transparent' }}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* The last hand-rolled tab bar in the app: five inline styles that restated
+          .tab, one of them the literal #388bfd instead of var(--low) — so this bar
+          alone would have kept the old accent through a palette change. No useTab
+          here on purpose: a modal is not a place, so its tab does not belong in the
+          URL (see Tabs' own note). */}
+      <Tabs value={custom ? 'custom' : 'catalog'}
+        onChange={(k) => { setCustom(k === 'custom'); setErr(''); }}
+        tabs={[['catalog', 'Catalog'], ['custom', 'Custom feed']] as const} />
       {!custom ? (
         <>
           <div className="row" style={{ gap: 8, marginBottom: 10, background: 'var(--bg2)',

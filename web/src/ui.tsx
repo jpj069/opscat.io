@@ -220,10 +220,18 @@ export function Spark({ data, w = 56, h = 18, color = SEV.low, fill = true, dot 
 
 // value/sub = null → the card renders itself in loading state (same chrome,
 // placeholder where the number goes). Pass the value only once it is known.
-export function KpiCard({ label, value, color, spark, sub }:
-  { label: string; value: string | null; color: string; spark?: number[] | null; sub?: string | null }) {
+export function KpiCard({ label, value, color, spark, sub, active, onClick }:
+  { label: string; value: string | null; color: string; spark?: number[] | null; sub?: string | null;
+    /** With `onClick` the card BECOMES the control (see KpiTabs) — it renders a
+     *  real <button role="tab"> rather than a div, so the active state, the focus
+     *  ring and the a11y role come from the element instead of a wrapper. Wrapping
+     *  the card in a button would paint the selection ring outside the card border. */
+    active?: boolean; onClick?: () => void }) {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className="card" style={{ flex: 1, minWidth: 150 }}>
+    <Tag className={`card${onClick ? ' kpi-tab' : ''}${active ? ' active' : ''}`}
+      style={{ flex: 1, minWidth: 150 }}
+      {...(onClick ? { type: 'button' as const, onClick, role: 'tab', 'aria-selected': !!active } : {})}>
       <div className="micro text-2xs">{label}</div>
       <div className="row" style={{ justifyContent: 'space-between', marginTop: 6 }}>
         {value == null
@@ -235,6 +243,39 @@ export function KpiCard({ label, value, color, spark, sub }:
       {sub === null
         ? <Skeleton w={54} h={9} style={{ marginTop: 7 }} />
         : sub && <div className="text-xs text-text2" style={{ marginTop: 4 }}>{sub}</div>}
+    </Tag>
+  );
+}
+
+/**
+ * THE filter shown as KPI cards — `Tabs` where the NUMBER is the content.
+ *
+ * It is `Tabs` and `KpiCard` married, which is what Synthetics had been drawing
+ * by hand out of six inline styles. Built on KpiCard so the `null` placeholder is
+ * inherited rather than re-implemented: a second copy of "reserve the box, shimmer
+ * until it arrives" is how the two drift apart.
+ *
+ * The name ends in Tabs deliberately. These ARE tabs — mutually exclusive, one
+ * place each — so they take `useTab` and land in the URL like any other tab bar.
+ * Called `FilterCards` it would read as presentation, and the next person builds
+ * it with useState; that is exactly how the Assets filter came to be unlinkable.
+ *
+ * Reach for it only when the count is the point AND the list it filters is
+ * directly below it: a KPI row that summarises without filtering stays KpiCard
+ * (Dashboard). Cards run out at about five — more sub-views are a plain `Tabs`.
+ */
+export function KpiTabs<T extends string>({ value, onChange, items }: {
+  value: T;
+  onChange: (t: T) => void;
+  items: readonly { id: T; label: string; count: number | null; color?: string }[];
+}) {
+  return (
+    <div className="row row-wrap" role="tablist" style={{ gap: 12 }}>
+      {items.map((it) => (
+        <KpiCard key={it.id} label={it.label} color={it.color ?? 'var(--text0)'}
+          value={it.count === null ? null : String(it.count)}
+          active={value === it.id} onClick={() => onChange(it.id)} />
+      ))}
     </div>
   );
 }
@@ -463,6 +504,63 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
 }
 
 /**
+ * THE count that sits next to a label — a tab's "Open 12", a chip's "critical 2".
+ *
+ * `null` means UNKNOWN, not zero, and that distinction is the whole component.
+ * The call sites used to write `rows?.length ?? 0` / `(cases || [])`, which
+ * collapses it one line before anything renders — so a page announced
+ * "Failing 0" while it was still fetching. On a NOC screen that is not an
+ * imprecise placeholder, it is the best news of the day, delivered by nobody.
+ * The table two centimetres below already keeps `null` and `[]` apart (that is
+ * what its TableSkeleton is for); the count had the same source and lost it.
+ *
+ * KpiCard has done exactly this since it was written — `value == null` renders a
+ * Skeleton. This is that rule at label scale, so a page's head and its body load
+ * in ONE movement instead of two.
+ *
+ * The width is reserved BEFORE the number arrives (`min-width` + tabular-nums):
+ * a head that grows on load shifts the tab the thumb is already aiming at.
+ */
+export function Count({ value, digits = 2 }: { value: number | null; digits?: number }) {
+  return (
+    <span className="cnt" style={{ minWidth: `${digits}ch` }}
+      aria-label={value === null ? 'loading' : undefined}>
+      {value === null ? <Skeleton h={9} w="100%" /> : value}
+    </span>
+  );
+}
+
+/**
+ * THE filter chip — a refinement WITHIN the current view (Monitor's severity
+ * filter), not a place of its own. Mutually exclusive sub-views are `Tabs`, two
+ * to four fixed modes are `Segmented`; reach for a chip when the thing is
+ * ephemeral and narrows what a list shows.
+ *
+ * It exists because `.chip` was a CSS class with no component behind it, used
+ * with a bare `<button>` in seven places — so none of them carried
+ * `aria-pressed` and a screen reader met seven identical buttons with no state.
+ * The other half of the app's filter chips were `<Button size="sm">` with the
+ * active state written inline at each call site, where no media query can reach
+ * it.
+ */
+export function Chip({ active, count, color, onClick, title, children }: {
+  active?: boolean; count?: number | null; onClick?: () => void;
+  /** Tints the chip while it is ACTIVE only — a severity filter says which band it
+   *  selects (Monitor). Inactive chips stay neutral on purpose: five coloured chips
+   *  side by side read as five states of something rather than one choice. */
+  color?: string;
+  title?: string; children: React.ReactNode;
+}) {
+  return (
+    <button type="button" aria-pressed={!!active} title={title}
+      className={`chip${active ? ' active' : ''}`} onClick={onClick}
+      style={active && color ? { color, borderColor: alpha(color, 0.5) } : undefined}>
+      {children}{count !== undefined && <Count value={count} />}
+    </button>
+  );
+}
+
+/**
  * THE tab bar for a page's sub-views.
  *
  * Pair it with `useTab` (state.tsx), which keeps the active tab in the URL as
@@ -474,16 +572,21 @@ export function HBars({ items, color = SEV.low, max: maxOverride }:
  * that pushes the page sideways is worse than one that wraps.
  */
 export function Tabs<T extends string>({ tabs, value, onChange }: {
-  tabs: readonly (readonly [T, string])[];
+  /** `[id, label]`, or `[id, label, count]` where count is `number | null` —
+   *  null being "not known yet", which renders a Skeleton rather than a 0.
+   *  The count is a THIRD ELEMENT and not part of the label string on purpose:
+   *  baked into the label it cannot be aligned, cannot use tabular figures and
+   *  has no way to say "still loading". */
+  tabs: readonly (readonly [T, string, (number | null)?])[];
   value: T;
   onChange: (t: T) => void;
 }) {
   return (
     <div className="row row-wrap tabs" role="tablist">
-      {tabs.map(([id, label]) => (
+      {tabs.map(([id, label, count]) => (
         <button key={id} role="tab" aria-selected={value === id}
           className={`tab${value === id ? ' active' : ''}`} onClick={() => onChange(id)}>
-          {label}
+          {label}{count !== undefined && <Count value={count} />}
         </button>
       ))}
     </div>
@@ -502,13 +605,18 @@ export function Tabs<T extends string>({ tabs, value, onChange }: {
 export function Segmented<T extends string>({ value, onChange, options, label }: {
   value: T;
   onChange: (v: T) => void;
-  options: readonly (readonly [T, string])[];
+  /** `[id, text]`, or `[id, node, title]` when the segment is an icon. An icon-only
+   *  button has no accessible name of its own, so the third element supplies both
+   *  the tooltip and the aria-label — without it the switch is three unlabelled
+   *  buttons to a screen reader. */
+  options: readonly (readonly [T, React.ReactNode, string?])[];
   label?: string;
 }) {
   return (
     <div className="seg" role="group" aria-label={label}>
-      {options.map(([id, text]) => (
+      {options.map(([id, text, title]) => (
         <button key={id} type="button" aria-pressed={value === id}
+          title={title} aria-label={title}
           className={`seg-btn${value === id ? ' active' : ''}`} onClick={() => onChange(id)}>
           {text}
         </button>

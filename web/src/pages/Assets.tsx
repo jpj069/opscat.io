@@ -2,10 +2,10 @@
 // targets, synthetic checks and implicit log/event sources (applications),
 // with a single "+ Add" entry point that routes to the right flow.
 import React, { useEffect, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useTab } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
-import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Input, COL} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, COL} from '../ui';
 import {
   AppWindowIcon,
   HeartPulseIcon,
@@ -35,6 +35,13 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   reputation: { label: 'reputation', color: '#f85149' },
 };
 
+// Every kind in KIND_UI gets a tab, in the order the list reads best. `reputation`
+// was missing from the old filter row while its rows were in the table — the one
+// asset kind nobody could narrow to.
+const ASSET_TABS = ['all', 'agent', 'container', 'snmp', 'check', 'heartbeat',
+  'vendor', 'reputation', 'source'] as const;
+type AssetTab = typeof ASSET_TABS[number];
+
 function statusColor(s: string): string {
   if (s === 'online' || s === 'ok' || s === 'active' || s === 'running') return SEV.green;
   // `unknown` = a reputation run that could not complete. Amber, not red: there
@@ -49,7 +56,11 @@ export default function Assets() {
   const app = useApp();
   const canEdit = app.user ? app.user.role !== 'analyst' : false;
   const [rows, setRows] = useState<AssetRow[] | null>(null);
-  const [filter, setFilter] = useState<AssetRow['kind'] | 'all'>('all');
+  // In the path, not in useState: these are eight mutually exclusive lists, each of
+  // them a place worth linking to. Held in state, "look at the containers" could not
+  // be sent to anyone, Back left the page entirely and a reload dropped the reader
+  // on `all` — the one view they had just navigated away from.
+  const [filter, setFilter] = useTab(ASSET_TABS);
   const [adding, setAdding] = useState(false);
   const [modal, setModal] = useState<'key' | 'agent' | 'target' | 'heartbeat' | null>(null);
   const [secret, setSecret] = useState<SecretInfo | null>(null);
@@ -58,7 +69,9 @@ export default function Assets() {
   useEffect(() => { load(); }, []);
 
   const shown = rows?.filter((r) => filter === 'all' || r.kind === filter);
-  const counts = (k: AssetRow['kind']) => rows?.filter((r) => r.kind === k).length ?? 0;
+  // null, not 0, while the rows are still on their way — see ui.tsx <Count>.
+  const counts = (k: AssetTab) => (rows === null ? null
+    : k === 'all' ? rows.length : rows.filter((r) => r.kind === k).length);
 
   const pick = (m: 'key' | 'agent' | 'target' | 'heartbeat' | 'synthetics') => {
     setAdding(false);
@@ -78,15 +91,13 @@ export default function Assets() {
         {canEdit && <Button variant="primary" onClick={() => setAdding(true)}><PlusIcon size={13} /> Add</Button>}
       </PageHeader>
 
-      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        {(['all', 'agent', 'container', 'snmp', 'check', 'heartbeat', 'vendor', 'source'] as const).map((k) => (
-          <Button size="sm" key={k} onClick={() => setFilter(k)}
- style={{ background: filter === k ? 'var(--bg3)' : undefined,
- color: filter === k ? 'var(--text0)' : 'var(--text2)' }}>
-            {k === 'all' ? `all (${rows?.length ?? 0})` : `${KIND_UI[k].label} (${counts(k)})`}
-          </Button>
-        ))}
-      </div>
+      {/* Was a row of <Button size="sm"> with the active state written inline at each
+          call site — the look of the "+ Add" CTA one line above, for eight things
+          that command nothing. Tabs also puts the choice in the URL. */}
+      <Tabs value={filter} onChange={setFilter} tabs={ASSET_TABS.map((k) => {
+        const label = k === 'all' ? 'All' : KIND_UI[k].label;
+        return [k, `${label[0].toUpperCase()}${label.slice(1)}`, counts(k)] as const;
+      })} />
 
       <Card style={{ padding: 0 }}>
         <TableScroll cols={COLS} stickyFirst minWidth={700}>

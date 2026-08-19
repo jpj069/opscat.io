@@ -2,13 +2,14 @@
 // check flyout) + Sensor Agents tab (fleet cards, traceroute, self-hosted
 // deploy with one-time probe key). See docs/SENSOR-AGENTS.md for the concept.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp, useTab } from '../state';
+import { useApp, useTab, useQueryState, useOverlayParam } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
 import { Card, Button,
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, Input, HostInput, Textarea, COL} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, KpiTabs, Chip,
+  Segmented, Input, HostInput, Textarea, COL} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -40,6 +41,14 @@ const RANGES = [
   { k: '30d', minutes: 43200, buckets: 30 },
 ] as const;
 type RangeKey = typeof RANGES[number]['k'];
+// Module scope so the reference is stable across renders — useQueryState memoises on it.
+const SYN_KEYS = ['status'] as const;
+const CHECK_FILTERS = ['all', 'passing', 'degraded', 'failing', 'paused'] as const;
+const CHECK_CARDS = [
+  ['all', 'All checks', 'var(--text0)'], ['passing', 'Passing', SEV.green],
+  ['degraded', 'Degraded', SEV.medium], ['failing', 'Failing', SEV.critical],
+  ['paused', 'Paused', SEV.info],
+] as const;
 
 type CheckStatus = 'passing' | 'degraded' | 'failing' | 'paused';
 const STATUS_COLOR: Record<CheckStatus, string> = {
@@ -67,8 +76,16 @@ export default function Synthetics() {
   const [history, setHistory] = useState<Map<number, SynthHistoryEntry>>(new Map());
   const [histMeta, setHistMeta] = useState<{ since: number; bucketMs: number } | null>(null);
   const [range, setRange] = useState<RangeKey>('24h');
-  const [filter, setFilter] = useState<'all' | CheckStatus>('all');
-  const [flyId, setFlyId] = useState<number | null>(null);
+  // The status filter refines the Checks tab; the path's tab segment is already
+  // taken by checks/agents, so it is a query parameter — `/app/synthetics/checks
+  // ?status=failing`. Held in useState it could not be sent to the colleague who
+  // asked which checks are red, which is the only question this filter answers.
+  const [q, setQ] = useQueryState(SYN_KEYS);
+  const rawStatus = q.status ?? 'all';
+  const filter = (CHECK_FILTERS as readonly string[]).includes(rawStatus)
+    ? (rawStatus as 'all' | CheckStatus) : 'all';
+  const setFilter = (f: 'all' | CheckStatus) => setQ({ status: f === 'all' ? null : f });
+  const [flyId, setFlyId] = useOverlayParam('check');
   const [running, setRunning] = useState(false);
   const [showAddCheck, setShowAddCheck] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -175,9 +192,12 @@ export default function Synthetics() {
     });
   };
 
+  // null while `checks` is null: "Failing 0" is the best news a NOC screen can carry
+  // and it was being printed before anything had been fetched.
   const counts = useMemo(() => {
+    if (!checks) return null;
     const c = { all: 0, passing: 0, degraded: 0, failing: 0, paused: 0 };
-    for (const ch of checks ?? []) { c.all += 1; c[statusOf(ch)] += 1; }
+    for (const ch of checks) { c.all += 1; c[statusOf(ch)] += 1; }
     return c;
   }, [checks, results]);
 
@@ -194,12 +214,10 @@ export default function Synthetics() {
       <PageHeader title="Synthetics">
         <div className="row row-wrap" style={{ gap: 10 }}>
           {tab === 'checks' && (
-            <span className="row" style={{ gap: 4 }}>
-              {RANGES.map((r) => (
-                <button key={r.k} className={`chip ${range === r.k ? 'active' : ''}`}
-                  onClick={() => setRange(r.k)}>{r.k}</button>
-              ))}
-            </span>
+            /* The exact case Segmented was written for — the component's own note
+               names 24h/7d/30d — and it was still being hand-drawn here. */
+            <Segmented value={range} onChange={setRange} label="History range"
+              options={RANGES.map((r) => [r.k, r.k] as const)} />
           )}
           {canWrite && (
             <Button onClick={runChecks} disabled={running}>
@@ -215,29 +233,20 @@ export default function Synthetics() {
         </div>
       </PageHeader>
 
+      {/* `?? ''` grew the label when the number landed, so the whole bar shifted and
+          "Sensor Agents" moved out from under a thumb already travelling towards it.
+          Count reserves the box first and shimmers until the number exists. */}
       <Tabs value={tab} onChange={setTab} tabs={[
-        ['checks', `Checks ${checks?.length ?? ''}`],
-        ['agents', `Sensor Agents ${locations?.length ?? ''}`]] as const} />
+        ['checks', 'Checks', checks?.length ?? null],
+        ['agents', 'Sensor Agents', locations?.length ?? null]] as const} />
 
       {tab === 'checks' && (
         <>
-          {/* filter cards */}
-          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
-            {([['all', 'All checks', 'var(--text0)'], ['passing', 'Passing', SEV.green],
-              ['degraded', 'Degraded', SEV.medium], ['failing', 'Failing', SEV.critical],
-              ['paused', 'Paused', SEV.info]] as const).map(([key, label, color]) => (
-              <button key={key} onClick={() => setFilter(key as typeof filter)}
-                style={{ flex: 1, minWidth: 110, textAlign: 'left', background: 'var(--bg2)',
-                  border: `1px solid ${filter === key ? SEV.low : 'var(--bg3)'}`,
-                  boxShadow: filter === key ? '0 0 0 1px rgba(56,139,253,0.35)' : undefined,
-                  borderRadius: 8, padding: '10px 14px' }}>
-                <span className="micro text-2xs">{label}</span>
-                <div className="mono font-bold" style={{ fontSize: 18, color, marginTop: 2 }}>
-                  {counts[key as keyof typeof counts]}
-                </div>
-              </button>
-            ))}
-          </div>
+          {/* This was six inline styles per card reproducing .card plus a selection
+              ring — i.e. KpiCard and Tabs, drawn by hand. KpiTabs is the two of them,
+              so the null placeholder comes from KpiCard rather than a second copy. */}
+          <KpiTabs value={filter} onChange={setFilter} items={CHECK_CARDS.map(([id, label, color]) => ({
+            id, label, color, count: counts ? counts[id] : null }))} />
 
           {/* checks table */}
           <Card style={{ padding: 0 }}>
@@ -409,12 +418,8 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
           <div>
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
               <span className="micro text-2xs">By sensor agent ({latest.length})</span>
-              <span className="row" style={{ gap: 6 }}>
-                <button className={`chip ${gridMode === 'hex' ? 'active' : ''}`}
-                  onClick={() => setGridMode('hex')}>Honeycomb</button>
-                <button className={`chip ${gridMode === 'grid' ? 'active' : ''}`}
-                  onClick={() => setGridMode('grid')}>StatusGrid</button>
-              </span>
+              <Segmented value={gridMode} onChange={setGridMode} label="Agent grid style"
+                options={[['hex', 'Honeycomb'], ['grid', 'StatusGrid']] as const} />
             </div>
             {latest.length === 0
               ? <div className="mono text-xs text-text3">no results yet</div>
@@ -965,9 +970,12 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
             <>
               <div className="micro text-2xs" style={{ marginBottom: 6 }}>Region</div>
               <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                {/* Chips rather than Segmented: the list comes from data, and Segmented
+                    is for a fixed handful. The atom is what adds aria-pressed — as bare
+                    buttons these were N identical unlabelled controls to a reader. */}
                 {regions.map((r) => (
-                  <button key={r} className={`chip ${region === r ? 'active' : ''}`}
-                    onClick={() => { setRegion(r); setEntry(null); }}>{r}</button>
+                  <Chip key={r} active={region === r}
+                    onClick={() => { setRegion(r); setEntry(null); }}>{r}</Chip>
                 ))}
               </div>
               <div className="micro text-2xs" style={{ marginBottom: 6 }}>City</div>

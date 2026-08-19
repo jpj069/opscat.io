@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { api, ApiError } from './api';
 import { useApp, type PageId } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, fmtHistory, initials, logSevColor } from './format';
-import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Input, Textarea} from './ui';
+import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Tabs, Input, Textarea} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import { topLayer } from './toplayer';
 import {
@@ -313,16 +313,12 @@ function Login() {
             <div className="text-xs text-text2">Infrastructure Ops Platform</div>
           </div>
         </div>
-        <div className="row" style={{ gap: 0, marginBottom: 14, borderBottom: '1px solid var(--bg3)' }}>
-          {tabs.map((m) => (
-            <button key={m} type="button" onClick={() => { setMode(m); setErr(''); setMsg(''); }}
-              style={{ padding: '6px 12px', fontSize: 'var(--t-sm)', fontWeight: 600,
-                color: mode === m ? 'var(--text0)' : 'var(--text2)',
-                borderBottom: mode === m ? '2px solid #388bfd' : '2px solid transparent' }}>
-              {tabLabel(m)}
-            </button>
-          ))}
-        </div>
+        {/* The second hand-rolled tab bar, same shape and same #388bfd literal as the
+            one in the Vendors modal — this is what a component with no single home
+            costs twice. No useTab: nobody is signed in yet, so there is no /app path
+            to put a tab segment in, and the login mode is not a place anyway. */}
+        <Tabs value={mode} onChange={(m) => { setMode(m); setErr(''); setMsg(''); }}
+          tabs={tabs.map((m) => [m, tabLabel(m)] as const)} />
         {mode === 'signup' && (
           <Field label="Name">
             <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />

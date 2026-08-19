@@ -91,19 +91,24 @@ function idFromSearch(key: string): number | null {
  *    pairs the reader then has to walk through;
  *  - a deep link landed on has no entry of ours (`history.state` says so), so closing
  *    it **replaces** — never walk a reader out of the app they just arrived in.
+ *
+ * `replace` opts out of the push for a selection the READER did not make. A
+ * master-detail page (Incidents) selects a row for you when it loads, and pushing
+ * there is a trap: Back returns to "nothing selected", the page immediately selects
+ * again, and the button looks broken. There was no state worth keeping to go back to.
  */
-function writeOverlayParam(key: string, id: number | null) {
+function writeOverlayParam(key: string, id: number | null, replace = false) {
   const url = new URL(location.href);
   const ours = history.state?.overlay === key;
   if (id === null) {
-    if (ours) { history.back(); return; }
+    if (ours && !replace) { history.back(); return; }
     url.searchParams.delete(key);
     history.replaceState(null, '', url.pathname + url.search);
     return;
   }
   url.searchParams.set(key, String(id));
   const target = url.pathname + url.search;
-  if (ours) history.replaceState({ overlay: key, id }, '', target);
+  if (ours || replace) history.replaceState({ overlay: key, id }, '', target);
   else history.pushState({ overlay: key, id }, '', target);
 }
 
@@ -113,16 +118,17 @@ function writeOverlayParam(key: string, id: number | null) {
  *
  *   const [nodeId, setNodeId] = useOverlayParam('node');
  */
-export function useOverlayParam(key: string): [number | null, (id: number | null) => void] {
+export function useOverlayParam(key: string):
+  [number | null, (id: number | null, replace?: boolean) => void] {
   const [id, setId] = useState<number | null>(() => idFromSearch(key));
   useEffect(() => {
     const onPop = () => setId(idFromSearch(key));
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, [key]);
-  const set = React.useCallback((v: number | null) => {
+  const set = React.useCallback((v: number | null, replace = false) => {
     setId(v);
-    writeOverlayParam(key, v);
+    writeOverlayParam(key, v, replace);
   }, [key]);
   return [id, set];
 }

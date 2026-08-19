@@ -13,12 +13,12 @@ import {
   RefreshCwIcon,
   XIcon,
 } from 'lucide-react';
-import { useApp } from '../state';
+import { useApp, useQueryState, useOverlayParam } from '../state';
 import { api } from '../api';
 import { SEV, relTime } from '../format';
 import { Card, Button,
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard, Input, HostInput, COL} from '../ui';
+  Toggle, KpiCard, Chip, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
@@ -45,6 +45,15 @@ const STATUS_UI: Record<ReputationStatus, { label: string; color: string }> = {
   unknown: { label: 'unknown', color: SEV.medium },
   pending: { label: 'pending', color: SEV.info },
 };
+// Every status a row can carry, so no asset is unreachable through the filter.
+// Chips rather than KpiTabs, for two reasons worth writing down: LIST COVERAGE is a
+// PERCENTAGE and has no list behind it, so a card row would mix one card that does
+// not filter in among four that do; and six statuses is past the handful cards are
+// good for. The counts stay on the cards above — repeating them on the chips would
+// print every number on this page twice.
+const REP_FILTERS = ['all', 'listed', 'informational', 'clean', 'unknown', 'pending'] as const;
+const REP_KEYS = ['status'] as const;   // module scope: useQueryState memoises on it
+
 const TIER_COLOR: Record<ReputationTier, string> = {
   critical: SEV.critical, standard: SEV.high, informational: SEV.low,
 };
@@ -86,11 +95,17 @@ export default function Reputation() {
   const app = useApp();
   const [assets, setAssets] = useState<ReputationAsset[] | null>(null);
   const [overview, setOverview] = useState<ReputationOverview | null>(null);
-  const [selId, setSelId] = useState<number | null>(null);
+  const [selId, setSelId] = useOverlayParam('asset');
   const [showAdd, setShowAdd] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [zones, setZones] = useState<ReputationZones | null>(null);
+  // A refinement of one list, so: query parameter, replace not push.
+  const [q, setQ] = useQueryState(REP_KEYS);
+  const rawStatus = q.status ?? 'all';
+  const filter = (REP_FILTERS as readonly string[]).includes(rawStatus)
+    ? (rawStatus as typeof REP_FILTERS[number]) : 'all';
+  const setFilter = (f: typeof REP_FILTERS[number]) => setQ({ status: f === 'all' ? null : f });
 
   const canWrite = (ROLE_RANK[app.user?.role ?? ''] ?? 0) >= ROLE_RANK.lead;
 
@@ -117,6 +132,8 @@ export default function Reputation() {
   // Coverage is reported per kind because the denominators differ (31 IP lists
   // vs 8 domain lists). "19/31" on IPs and "8/8" on domains is the honest
   // reading; one merged number made a domain-only org look catastrophic.
+  const shownAssets = (assets ?? []).filter((a) => filter === 'all' || a.status === filter);
+
   const coverage = useMemo(() => {
     if (!overview) return { value: null as string | null, sub: null as string | null, color: SEV.info };
     const parts = (['ip', 'domain'] as const)
@@ -196,6 +213,13 @@ export default function Reputation() {
           </span>
         </div>
 
+        <div className="row row-wrap" style={{ gap: 6, marginBottom: 10 }}>
+          {REP_FILTERS.map((f) => (
+            <Chip key={f} active={filter === f} onClick={() => setFilter(f)}
+              color={f === 'all' ? undefined : STATUS_UI[f].color}>{f}</Chip>
+          ))}
+        </div>
+
         <TableScroll cols={GRID} minWidth={760}>
           <div className="tbl-head">
             <span>Target</span><span>Role (rDNS)</span><span>Status</span>
@@ -204,14 +228,22 @@ export default function Reputation() {
 
           {assets === null && <TableSkeleton rows={5} />}
 
+          {/* Two different facts, two different sentences: an empty account needs the
+              onboarding copy, an empty FILTER needs to say which filter. Reusing the
+              first for the second told a customer with 40 assets to add their first. */}
           {assets !== null && assets.length === 0 && (
             <div className="text-sm text-text2" style={{ padding: '18px 12px' }}>
               No assets monitored yet. Add the IPs your mail actually leaves from — they are in
               your SPF record — plus the sending domain itself.
             </div>
           )}
+          {assets !== null && assets.length > 0 && shownAssets.length === 0 && (
+            <div className="text-sm text-text2" style={{ padding: '18px 12px' }}>
+              No {filter} assets.
+            </div>
+          )}
 
-          {(assets ?? []).map((a) => {
+          {shownAssets.map((a) => {
             const ui = STATUS_UI[a.status];
             const actionable = a.listings.filter((l) => l.tier !== 'informational');
             const shown = actionable.length ? actionable : a.listings;

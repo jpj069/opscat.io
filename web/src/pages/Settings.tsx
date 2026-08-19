@@ -257,7 +257,10 @@ function SystemCard() {
           </Row>
           <Row label="Records">
             <span className="mono text-sm text-text1">
-              {sys.counts?.logs ?? 0} logs · {sys.counts?.events ?? 0} events · {sys.counts?.cases ?? 0} cases · {sys.counts?.users ?? 0} users
+              {/* `?? 0` claimed "0 logs" for a response that carried no counts at all —
+                  an em dash says "not reported", which is the actual fact. The loading
+                  case is already handled above by FormSkeleton. */}
+              {sys.counts?.logs ?? '—'} logs · {sys.counts?.events ?? '—'} events · {sys.counts?.cases ?? '—'} cases · {sys.counts?.users ?? '—'} users
             </span>
           </Row>
           <Row label="Node version">

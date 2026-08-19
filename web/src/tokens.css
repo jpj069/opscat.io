@@ -666,6 +666,9 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 .seg-btn {
   padding: 5px 12px; font-size: var(--t-sm); font-weight: 600; color: var(--text3);
   font-family: 'JetBrains Mono', monospace; border-left: 1px solid var(--bg3);
+  /* inline-flex so an icon segment centres like a text one — Monitor's layout
+     switch is three icons and nothing else */
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .seg-btn:first-child { border-left: 0; }
 .seg-btn:hover { color: var(--text1); }
@@ -693,6 +696,30 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   background: var(--bg0); border: 1px solid var(--bg3);
 }
 .chart-sel-bar > span:first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* Count next to a label (ui.tsx <Count>) — a tab's "Open 12", a chip's "critical 2".
+   tabular-nums is the half that is easy to skip and the reason the bar still twitched
+   after min-width was added: in a proportional face "1" is narrower than "9", so even
+   9 -> 8 moves everything behind it. min-width reserves the box BEFORE the number
+   exists, so the skeleton, a 3 and a 147 all occupy the same run of pixels and the
+   tab under the reader's thumb never travels. */
+.cnt {
+  font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums;
+  display: inline-flex; justify-content: flex-end; align-items: center;
+  min-width: 2ch; margin-left: 6px; color: var(--text3);
+}
+.tab.active .cnt, .chip.active .cnt { color: var(--text2); }
+.cnt > .skel { width: 100%; }
+
+/* A KpiCard used as a filter (ui.tsx <KpiTabs>) — it is a <button> carrying .card,
+   so it needs the text alignment and cursor a button does not inherit. The selected
+   ring sits on the card element itself; a wrapping button would paint it outside
+   the card's own border and read as two frames. */
+.kpi-tab { text-align: left; cursor: pointer; font: inherit; }
+.kpi-tab:hover { border-color: var(--text3); }
+.kpi-tab.active {
+  border-color: var(--low); box-shadow: 0 0 0 1px color-mix(in srgb, var(--low) 35%, transparent);
+}
 
 /* filter chips */
 .chip {

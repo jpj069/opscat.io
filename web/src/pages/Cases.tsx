@@ -27,9 +27,14 @@ export default function Cases() {
   const load = () => api.get<CaseRow[]>('/api/cases').then(setCases).catch(() => {});
   useEffect(() => { load(); }, []);
 
+  // null while `cases` is null — "not known yet", which is NOT the same claim as
+  // "no open cases". `(cases || [])` used to erase that one line before render, so
+  // the head announced "Open 0" for as long as the fetch took while the table below
+  // it honestly showed a skeleton. Count renders the same skeleton from this null.
   const counts = useMemo(() => {
+    if (!cases) return null;
     const c = { open: 0, assigned: 0, closed: 0 };
-    (cases || []).forEach((x) => { c[x.status]++; });
+    cases.forEach((x) => { c[x.status]++; });
     return c;
   }, [cases]);
 
@@ -43,7 +48,8 @@ export default function Cases() {
       <PageHeader title="Cases" />
 
       <Tabs value={tab} onChange={setTab}
-        tabs={TABS.map((t) => [t, t === 'all' ? 'All' : `${t[0].toUpperCase()}${t.slice(1)} ${counts[t]}`] as const)} />
+        tabs={TABS.map((t) => [t, `${t[0].toUpperCase()}${t.slice(1)}`,
+          t === 'all' ? (cases?.length ?? null) : (counts ? counts[t] : null)] as const)} />
 
       <Card style={{ padding: 0 }}>
         <TableScroll cols={COLS} stickyFirst minWidth={1010}>

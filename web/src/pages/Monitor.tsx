@@ -1,9 +1,9 @@
 // Monitor — default screen: resizable split of live events + streaming logs.
 import React, { useMemo, useRef, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useQueryState } from '../state';
 import { api } from '../api';
 import { SEV, alpha, sevColor, age, fmtTime, logSevColor } from '../format';
-import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input, COL} from '../ui';
+import { Avatar, SevBadge, Spark, TableScroll, TableSkeleton, Input, Chip, Segmented, COL} from '../ui';
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -13,6 +13,10 @@ import {
 } from 'lucide-react';
 
 type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low';
+const FILTERS: readonly Filter[] = ['all', 'critical', 'high', 'medium', 'low'];
+// Module scope, so the reference is stable — useQueryState memoises on `keys`, and
+// a fresh array each render would re-subscribe on every paint.
+const FILTER_KEYS = ['sev'] as const;
 const BANDS: Record<Exclude<Filter, 'all'>, [number, number]> = {
   critical: [80, 101], high: [60, 80], medium: [40, 60], low: [20, 40],
 };
@@ -36,7 +40,14 @@ export default function Monitor() {
   const app = useApp();
   const [layout, setLayout] = useState<'horizontal' | 'vertical' | 'events'>('horizontal');
   const [split, setSplit] = useState(58);
-  const [filter, setFilter] = useState<Filter>('all');
+  // The severity filter is a REFINEMENT of this view, not a place — so it belongs in
+  // the query string rather than the path (`?sev=critical`), and it replaces rather
+  // than pushes: narrowing a list four times should not cost four presses of Back.
+  // Before this it lived in useState, i.e. "look at the criticals" was not sendable.
+  const [q, setQ] = useQueryState(FILTER_KEYS);
+  const raw = q.sev ?? 'all';
+  const filter: Filter = (FILTERS as readonly string[]).includes(raw) ? (raw as Filter) : 'all';
+  const setFilter = (f: Filter) => setQ({ sev: f === 'all' ? null : f });
   const [logQuery, setLogQuery] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -90,12 +101,13 @@ export default function Monitor() {
   const eventsPanel = (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, flex: 1 }}>
       <div className="row" style={{ padding: '10px 16px', gap: 6, flexShrink: 0 }}>
-        {(['all', 'critical', 'high', 'medium', 'low'] as Filter[]).map((f) => (
-          <button key={f} className={`chip ${filter === f ? 'active' : ''}`}
-            style={filter === f && f !== 'all' ? { color: SEV[f], borderColor: alpha(SEV[f], 0.5) } : undefined}
-            onClick={() => setFilter(f)}>
-            {f}{f !== 'all' && ` ${app.events.filter((e) => e.severity >= BANDS[f][0] && e.severity < BANDS[f][1]).length}`}
-          </button>
+        {FILTERS.map((f) => (
+          <Chip key={f} active={filter === f} onClick={() => setFilter(f)}
+            color={f === 'all' ? undefined : SEV[f]}
+            count={f === 'all' ? undefined
+              : app.events.filter((e) => e.severity >= BANDS[f][0] && e.severity < BANDS[f][1]).length}>
+            {f}
+          </Chip>
         ))}
         <div style={{ flex: 1 }} />
         <span className="mono text-2xs text-text3">{events.length} events</span>
@@ -202,11 +214,14 @@ export default function Monitor() {
     <div className="page-console" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="row" style={{ padding: '10px 16px 0', gap: 6 }}>
         <span className="micro text-2xs">LAYOUT</span>
-        {([['horizontal', PanelTopIcon], ['vertical', PanelLeftIcon], ['events', SquareIcon]] as const).map(([l, Icon]) => (
-          <button key={l} className={`chip ${layout === l ? 'active' : ''}`} title={l}
-            style={{ display: 'inline-flex', alignItems: 'center' }}
-            onClick={() => setLayout(l)}><Icon size={11} /></button>
-        ))}
+        {/* A mode, not a filter: it changes how this view is drawn, not which rows it
+            shows — so Segmented, which is what the component exists for. As chips it
+            looked like the severity filter one row below and meant something else. */}
+        <Segmented value={layout} onChange={setLayout} label="Panel layout" options={[
+          ['horizontal', <PanelTopIcon size={11} />, 'Horizontal split'],
+          ['vertical', <PanelLeftIcon size={11} />, 'Vertical split'],
+          ['events', <SquareIcon size={11} />, 'Events only'],
+        ] as const} />
       </div>
       <div ref={wrapRef} style={{ flex: 1, minHeight: 0, display: 'flex',
         flexDirection: vert ? 'row' : 'column', padding: '8px 0 0' }}>

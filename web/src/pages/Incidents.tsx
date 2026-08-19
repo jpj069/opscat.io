@@ -1,7 +1,7 @@
 // Incidents — master-detail: incident list + status timeline + RCA editor.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { useApp } from '../state';
+import { useApp, useOverlayParam, useQueryState } from '../state';
 import { SEV, alpha, sevColor, fmtTime, fmtDuration, fmtDateTime, STATUS_META, IMPACTS } from '../format';
 import { Card, Button, SevBadge, StatusPill, Modal, Field, ListSkeleton, TextSkeleton, Input, Textarea} from '../ui';
 import { Select, MultiSelect } from '../Select';
@@ -31,22 +31,37 @@ function statusColor(s: string): string {
   return STATUS_COLOR[s as Incident['status']] ?? 'var(--text2)';
 }
 
+// Module scope: useQueryState memoises on this array.
+const INCIDENT_KEYS = ['who'] as const;
+
 export default function Incidents() {
   const app = useApp();
   const [incidents, setIncidents] = useState<Incident[] | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // "Which incident is on your screen?" is the first question of every handover, and
+  // in useState it had no answer that could be pasted into one.
+  const [selectedId, setSelectedId] = useOverlayParam('incident');
   const [showNew, setShowNew] = useState(false);
   const [comps, setComps] = useState<Component[]>([]);
-  const [who, setWho] = useState('');
+  // Also a refinement, also in the query — "the incidents assigned to Nadia" is a link.
+  const [q, setQ] = useQueryState(INCIDENT_KEYS);
+  const who = q.who || '';
+  const setWho = (v: string) => setQ({ who: v || null });
 
-  const load = async (selectId?: number) => {
+  // `sel` is read from the closure rather than through a functional update: the URL is
+  // the source of truth now, so there is no setState queue to sequence against.
+  const load = async (selectId?: number, sel = selectedId) => {
     const rows = await api.get<Incident[]>('/api/incidents');
     setIncidents(rows);
-    setSelectedId((cur) => {
-      if (selectId != null) return selectId;
-      if (cur != null && rows.some((r) => r.id === cur)) return cur;
-      return rows[0]?.id ?? null;
-    });
+    // An explicit pick is the reader's and PUSHES; keeping or defaulting a selection is
+    // ours and REPLACES — this page always has a row open, so pushing the automatic one
+    // would leave Back pointing at a state the page instantly undoes.
+    // Re-asserting the row that is already open is a REFRESH after a mutation, not a
+    // navigation — `reload(incident.id)` fires on every status change, and after a deep
+    // link (where no entry is ours yet) that would push a duplicate the reader has to
+    // press Back through twice to escape.
+    if (selectId != null) { setSelectedId(selectId, selectId === sel); return; }
+    if (sel != null && rows.some((r) => r.id === sel)) return;
+    setSelectedId(rows[0]?.id ?? null, true);
   };
   useEffect(() => { load().catch(() => setIncidents([])); }, []);
   useEffect(() => { api.get<Component[]>('/api/admin/components').then(setComps).catch(() => {}); }, []);
@@ -58,7 +73,12 @@ export default function Incidents() {
   const shown = useMemo(() => {
     if (!incidents) return null;
     if (who === '') return incidents;
-    const id = who === 'me' ? app.user?.id : Number(who);
+    // `Number(who)` — users.id is a UUID, so this was NaN, and `assigneeId === NaN` is
+    // false for every row: picking a colleague from the filter showed an empty list and
+    // looked like they had no incidents. Only "Anyone" and "me" ever worked. This is the
+    // exact shape CLAUDE.md's identity-keys rule names, and the type gate cannot see it —
+    // `string | undefined` and `string | number | undefined` overlap, so === is allowed.
+    const id = who === 'me' ? app.user?.id : who;
     return incidents.filter((i) => i.assigneeId === id);
   }, [incidents, who, app.user]);
 

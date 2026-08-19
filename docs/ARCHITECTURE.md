@@ -854,8 +854,8 @@ because they answer three different questions:
 |---|---|---|
 | which page | `/app/<page>` | `setNav` (`state.tsx`) |
 | which tab of that page | `/app/<page>/<tab>` | `useTab` (`state.tsx`) |
-| which **overlay** is open on top | `?event=<id>`, `?node=<id>` | `setSelectedEvent` / `useOverlayParam` (`state.tsx`) |
-| which **filter/window** a page shows | `?q=…&from=…&to=…` | `useQueryState` (`state.tsx`) |
+| which **overlay** is open on top | `?event=<id>`, `?node=<id>`, `?incident=<id>`, `?check=<id>`, `?vendor=<id>`, `?asset=<id>`, `?schedule=<id>`, `?alert=<id>`, `?page=<id>` | `setSelectedEvent` / `useOverlayParam` (`state.tsx`) |
+| which **filter/window** a page shows | `?q=…&from=…&to=…`, `?sev=`, `?status=`, `?who=`, `?alerts=` | `useQueryState` (`state.tsx`) |
 
 The filter row is the newest of the four and follows the same argument: "the four
 minutes where ingest spiked" is a place, and a place has an address. It differs from the
@@ -866,6 +866,18 @@ there: `setNav('logs', '?from=…&to=…')` carries the filter INTO the page, wh
 Scout opens the lines behind a template and how the throughput chart opens the lines
 under a dragged-over span. Both go through `setNav` rather than an `<a href>` so the
 jump stays a SPA navigation.
+
+`useOverlayParam`'s setter takes a second argument, `replace`, for a selection the
+READER did not make. A master-detail page (Incidents) opens a row for you when it loads;
+pushing that is a trap, because Back returns to "nothing selected", the page re-selects
+at once and the button looks broken — there was no state worth going back to. The same
+applies to re-asserting the open row after a mutation, which is a refresh rather than a
+navigation. Everything the reader actually chose still pushes.
+
+`scripts/probe-deeplinks.mjs` drives all four history properties (open pushes, switch
+replaces, Back closes, a deep link stays put) in a real browser, because the address bar
+looks right under all four even when the back button is broken. It found nothing on the
+pass that introduced it, which is the point of writing it while the shapes were fresh.
 
 The event slide-over is the overlay case. It is rendered by the shell, not by a page —
 it floats over whatever is behind it — so it cannot own a path segment: the path already
