@@ -234,6 +234,25 @@ async function main() {
 
   const AT = rt3.access_token;
 
+  /* Fixtures for the read-tool sweep further down, and they are the point of
+   * it: a sweep over an EMPTY database validates nothing, because a schema
+   * only disagrees with a handler once the handler has a row to return. The
+   * `sev`-as-a-string bug lived for months precisely because no test ever put
+   * a log line in front of a tool that returns one.
+   *
+   * The log line goes through the log STORE, not a direct INSERT, so it lands
+   * in whichever engine this build is configured for. */
+  const logs = require('./src/db/log-store');
+  const nowMs = Date.now();
+  await logs.insert([{
+    orgId: org.id, ts: nowMs - 60000, device: 'mcp-probe-01',
+    line: 'BGP neighbor 10.0.0.1 Down - hold time expired', sev: 3, source: 'e2e-mcp', meta: null,
+  }]);
+  const eventId = (await q.prepare(`INSERT INTO events
+    (org_id, dedupe_key, name, device, description, severity, hits, status, first_seen, last_seen)
+    VALUES (?, 'mcp-probe|mcp-probe-01|', 'bgp', 'mcp-probe-01', 'probe', 75, 1, 'active', ?, ?)`)
+    .insert(org.id, nowMs - 60000, nowMs - 60000));
+
   // ── 5. MCP transport ─────────────────────────────────────────────────────
   const H = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
   const mcp = (body, extra = {}) => fetch(`${B}/mcp`, {
@@ -290,6 +309,48 @@ async function main() {
   }, S));
   chk('tools/call opscat_list_checks returns checks',
     Array.isArray(checks.result?.structuredContent?.checks), JSON.stringify(checks).slice(0, 200));
+
+  /* ── every read tool is INVOKED, with data present ────────────────────────
+   *
+   * This harness had 62 checks and called five of twenty-one tools. What that
+   * cost: `opscat_search_logs` and `opscat_get_event` both declared the log
+   * line's `sev` as a STRING, and it has always been a number — better-sqlite3
+   * returned INTEGER as one, and pg.js's int8 parser coerces it. So every
+   * response carrying a log line failed the SDK's own output validation, from
+   * the commit that introduced the MCP server (#44) until it was hit by hand
+   * against production.
+   *
+   * The fix for the field is one word. The fix for the CLASS is this loop: the
+   * SDK validates structuredContent against each tool's declared outputSchema,
+   * so calling a tool with rows in the database is the whole check. A schema
+   * that drifts from what the handler returns fails here rather than in
+   * somebody's agent.
+   *
+   * Read tools only, and only those whose required inputs we can supply —
+   * a write tool has side effects, and the existing section below covers those
+   * deliberately. Tools needing an id are called with the fixtures seeded above
+   * rather than skipped, because "returns a log line" is exactly the shape that
+   * was broken. */
+  const ARGS = { opscat_search_logs: { sinceMinutes: 10080, limit: 5 }, opscat_get_event: { id: eventId } };
+  const readTools = tools.filter((t) => t.annotations?.readOnlyHint);
+  chk('there are read tools to sweep', readTools.length >= 10, `${readTools.length}`);
+  let swept = 0;
+  const broken = [];
+  for (const t of readTools) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await parse(await mcp({
+      jsonrpc: '2.0', method: 'tools/call', id: 900 + swept, params: { name: t.name, arguments: ARGS[t.name] || {} },
+    }, S));
+    swept++;
+    /* A JSON-RPC error, or `isError`, or a missing structuredContent on a tool
+     * that declares an outputSchema — all three are the same failure from a
+     * caller's point of view: the tool did not answer. Output-validation
+     * failures surface as the first. */
+    const bad = r.error || r.result?.isError || (t.outputSchema && !r.result?.structuredContent);
+    if (bad) broken.push(`${t.name}: ${JSON.stringify(r.error || r.result?.content || r.result).slice(0, 160)}`);
+  }
+  chk(`every read tool answers with valid structured output (${swept} swept)`,
+    broken.length === 0, broken.join(' | '));
 
   const stale = await mcp({ jsonrpc: '2.0', method: 'tools/list', id: 5 }, { 'mcp-session-id': 'does-not-exist' });
   chk('a stale session id → 404', stale.status === 404, `got ${stale.status}`);

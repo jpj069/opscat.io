@@ -134,7 +134,12 @@ const TOOLS = [
     inputSchema: { id: z.number().describe('Event id from opscat_list_events.') },
     outputSchema: {
       event: z.object(eventShape).nullable(),
-      recentLogs: z.array(z.object({ ts: z.number(), device: z.string().nullable(), line: z.string(), sev: z.string().nullable() })),
+      // `sev` is a syslog severity 0..7 and has always arrived as a NUMBER —
+      // better-sqlite3 returned INTEGER as one, and pg.js's int8 type parser
+      // coerces it. Declared as a string since the MCP server shipped (#44),
+      // which made every response carrying a log line fail output validation.
+      // Nothing caught it because no harness invoked a tool that returns one.
+      recentLogs: z.array(z.object({ ts: z.number(), device: z.string().nullable(), line: z.string(), sev: z.number().nullable() })),
       case: z.object({ id: z.number(), label: z.string(), status: z.string() }).nullable(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -200,7 +205,7 @@ const TOOLS = [
     outputSchema: {
       logs: z.array(z.object({
         ts: z.number(), device: z.string().nullable(), line: z.string(),
-        sev: z.string().nullable(), source: z.string().nullable(),
+        sev: z.number().nullable(), source: z.string().nullable(),   // see opscat_get_event
       })),
       count: z.number(),
     },
