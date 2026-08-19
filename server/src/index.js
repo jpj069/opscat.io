@@ -36,6 +36,54 @@ app.use(require('./routes/public'));
 app.use('/v1', require('./routes/heartbeat')); // public ping, token-in-URL auth
 app.use('/v1', require('./routes/ingest'));
 
+// API contract: the spec generated from the zod schemas that validate the
+// traffic (lib/openapi.js), and a server-rendered reference for humans. Public
+// and unauthenticated on purpose — a client has to be able to read the contract
+// before it holds a credential, and the document carries shapes, never data.
+app.get('/openapi.json', (req, res) => {
+  res.type('application/json').send(JSON.stringify(require('./lib/openapi').buildOpenApiDocument(), null, 2));
+});
+app.get('/docs', (req, res) => {
+  const oa = require('./lib/openapi');
+  res.type('html').send(oa.renderDocsPage(oa.buildOpenApiDocument()));
+});
+
+/* Root llms.txt — the one place an agent looks to find everything else.
+ *
+ * Generated rather than a checked-in file, so it cannot describe an endpoint
+ * this instance does not serve: the counts come from the live registry and the
+ * URLs from this instance's own baseUrl, which matters for self-hosted
+ * installs that are not opscat.io. */
+app.get('/llms.txt', (req, res) => {
+  const { registeredRoutes } = require('./lib/route-schema');
+  const documented = registeredRoutes().filter((r) => !r.internal).length;
+  res.type('text/plain').send(
+`# OpsCat
+
+Infrastructure ops: events, cases, logs, synthetic checks, incidents, on-call
+and the monitored inventory.
+
+## For agents
+
+- MCP server: ${config.baseUrl}/mcp  (Streamable HTTP, OAuth 2.1 — see /mcp/llms.txt)
+- The REST contract is also an MCP resource: opscat://openapi
+
+## REST API
+
+- Spec:      ${config.baseUrl}/openapi.json   (${documented} endpoints documented)
+- Reference: ${config.baseUrl}/docs
+
+The spec is generated from the zod schemas that validate the traffic, so it
+describes what the server enforces rather than what someone remembered to write
+down. Routes not yet migrated to schema-first registration are ABSENT from it
+rather than guessed at — an incomplete document that is true.
+
+## Public, no credential needed
+
+- Status page JSON: ${config.baseUrl}/status.json
+`);
+});
+
 // MCP: the OAuth 2.1 authorization server (+ .well-known discovery, which MUST
 // live at the app root) and the Streamable HTTP endpoint. Both carry their own
 // auth — Bearer for /mcp, the browser session for the consent screen — so they

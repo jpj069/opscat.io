@@ -8,8 +8,15 @@ const sec = require('../security');
 const pipeline = require('../engine/pipeline');
 const synthEngine = require('../engine/synthetics');
 const plans = require('../plans');
+const { createRouteRegistrar, ApiProblem } = require('../lib/route-schema');
+const S = require('../schemas/ingest');
 
 const router = express.Router();
+
+/* Schema-first registration for this file's converted routes. The remaining
+ * raw `router.post(...)` handlers below are counted by scripts/check-api-schema.js
+ * and migrate one at a time; see docs/API-CONTRACT.md. */
+const route = createRouteRegistrar(router, '/v1');
 
 /* Daily log line allowance (plan limit; no-op on the community edition).
  * Returns true if allowed; otherwise sends a 429 and returns false.
@@ -31,32 +38,56 @@ async function withinIngestPlan(orgId, res) {
 }
 
 // ---- logs: the "drop your logs here" endpoint ----
-// Accepts {logs:[{ts?,device,line,sev?,meta?}]} or a bare array, max 500/batch.
-router.post('/ingest/logs', sec.requireApiKey('ingest'), async (req, res) => {
-  const body = req.body;
-  const entries = Array.isArray(body) ? body : Array.isArray(body?.logs) ? body.logs : null;
-  if (!entries) return httpError(res, 400, 'expected {logs:[...]} or [...]');
-  if (entries.length === 0) return res.json({ accepted: 0, events: 0 });
-  if (entries.length > 500) return httpError(res, 413, 'max 500 log entries per batch');
-  if (!(await withinIngestPlan(req.orgId, res))) return;
-  const result = await pipeline.ingestLogs(entries, req.apiKey.name, req.orgId);
-  res.json(result);
+route({
+  method: 'post', path: '/ingest/logs',
+  summary: 'Ingest log lines',
+  description: 'Accepts {logs:[…]} or a bare array, max 500 entries per batch. '
+    + 'Lines are classified and deduplicated into events by the pipeline.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.IngestLogsBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse, 413: S.ErrorResponse, 429: S.ErrorResponse },
+}, async ({ body, req, res }) => {
+  const entries = Array.isArray(body) ? body : body.logs;
+  if (entries.length === 0) return { accepted: 0, events: 0 };
+  if (entries.length > 500) throw new ApiProblem(413, 'max 500 log entries per batch');
+  // Sends its own 429; returning undefined hands the already-written response
+  // through the registrar's escape hatch untouched.
+  if (!(await withinIngestPlan(req.orgId, res))) return undefined;
+  return pipeline.ingestLogs(entries, req.apiKey.name, req.orgId);
 });
 
 // ---- direct event ingest ----
-router.post('/ingest/events', sec.requireApiKey('ingest'), async (req, res) => {
-  const { name, device, target, description, severity, ip, ts } = req.body || {};
-  if (!isStr(name, 100) || !isStr(device, 100)) return httpError(res, 400, 'name and device required');
-  const result = await pipeline.ingestEvent({
+route({
+  method: 'post', path: '/ingest/events',
+  summary: 'Ingest a single event',
+  description: 'Bypasses log classification — use when the caller already knows this is an event.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.IngestEventBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse },
+}, async ({ body, req }) => {
+  const { name, device, target, description, severity, ip, ts } = body;
+  // The schema already guarantees both are strings <= 100; clampInt still owns
+  // severity because it accepts anything and this surface must stay lenient.
+  return pipeline.ingestEvent({
     name: name.replace(/[^\w.:/-]/g, '_'), device, target, description,
     severity: clampInt(severity, 0, 100, 50), ip, ts,
   }, req.apiKey.name, false, req.orgId);
-  res.json(result);
 });
 
 // ---- generic webhook (e.g. alertmanager, custom) ----
-router.post('/ingest/webhook', sec.requireApiKey('ingest'), async (req, res) => {
-  const b = req.body || {};
+route({
+  method: 'post', path: '/ingest/webhook',
+  summary: 'Ingest an event from a generic webhook',
+  description: 'Tolerant by design: Alertmanager-style keys are recognised, anything else is accepted and '
+    + 'mapped onto sensible defaults.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.IngestWebhookBody,
+  responses: { 200: S.OkResponse, 400: S.ErrorResponse },
+}, async ({ body, req }) => {
+  const b = body;
   const device = isStr(b.device, 100) ? b.device : (isStr(b.host, 100) ? b.host : 'webhook');
   const name = isStr(b.name, 100) ? b.name : (isStr(b.alertname, 100) ? b.alertname : 'webhook_event');
   const description = isStr(b.message, 300) ? b.message : (isStr(b.description, 300) ? b.description : name);
@@ -64,7 +95,7 @@ router.post('/ingest/webhook', sec.requireApiKey('ingest'), async (req, res) => 
     name: name.replace(/[^\w.:/-]/g, '_'), device, target: isStr(b.target, 200) ? b.target : null,
     description, severity: clampInt(b.severity, 0, 100, 50),
   }, `webhook:${req.apiKey.name}`, false, req.orgId);
-  res.json({ ok: true });
+  return { ok: true };
 });
 
 // ---- Sentry integration: point a Sentry webhook/alert action here ----
@@ -73,7 +104,16 @@ const SENTRY_LEVEL_SEV = { fatal: 92, error: 75, warning: 45, info: 20, debug: 1
 //  1. Legacy webhook plugin:  {project_name, message, level, culprit, event, url}
 //  2. Internal-integration issue:  {action, data:{issue:{title, level, project:{slug}, culprit, metadata}}}
 //  3. Internal-integration error:  {action, data:{error:{title, level, project, ...}}}
-router.post('/integrations/sentry', sec.requireApiKey('ingest'), async (req, res) => {
+route({
+  method: 'post', path: '/integrations/sentry',
+  summary: 'Ingest a Sentry alert',
+  description: 'Point a Sentry webhook or alert action here. Three payload shapes are recognised: the legacy '
+    + 'webhook plugin, an internal-integration issue alert, and an error alert.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.SentryBody,
+  responses: { 200: S.OkResponse, 400: S.ErrorResponse },
+}, async ({ req }) => {
   const b = req.body || {};
   const issue = b.data?.issue;
   const errorEv = b.data?.error;
@@ -93,7 +133,7 @@ router.post('/integrations/sentry', sec.requireApiKey('ingest'), async (req, res
     description: (url ? `${title} — ${url}` : title).slice(0, 300),
     severity: SENTRY_LEVEL_SEV[level] ?? 50,
   }, 'sentry', false, req.orgId);
-  res.json({ ok: true });
+  return { ok: true };
 });
 
 // ---- OpenTelemetry (OTLP/HTTP, JSON encoding) ----
@@ -120,9 +160,16 @@ function otlpAnyValue(v) {
   return '';
 }
 
-router.post('/otlp/v1/logs', sec.requireApiKey('ingest'), async (req, res) => {
-  const resourceLogs = req.body?.resourceLogs;
-  if (!Array.isArray(resourceLogs)) return httpError(res, 400, 'expected OTLP JSON {resourceLogs:[...]}');
+route({
+  method: 'post', path: '/otlp/v1/logs',
+  summary: 'Ingest OTLP logs',
+  description: 'OTLP/HTTP JSON. Up to 500 log records per request are stored; severityNumber is mapped to syslog.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.OtlpLogsBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse, 429: S.ErrorResponse },
+}, async ({ body, req, res }) => {
+  const resourceLogs = body.resourceLogs;
   const entries = [];
   for (const rl of resourceLogs) {
     const service = otlpAttr(rl.resource?.attributes, 'service.name') ||
@@ -141,13 +188,20 @@ router.post('/otlp/v1/logs', sec.requireApiKey('ingest'), async (req, res) => {
       }
     }
   }
-  if (!(await withinIngestPlan(req.orgId, res))) return;
-  res.json(await pipeline.ingestLogs(entries, `otlp:${req.apiKey.name}`, req.orgId));
+  if (!(await withinIngestPlan(req.orgId, res))) return undefined;  // 429 already sent
+  return pipeline.ingestLogs(entries, `otlp:${req.apiKey.name}`, req.orgId);
 });
 
-router.post('/otlp/v1/traces', sec.requireApiKey('ingest'), async (req, res) => {
-  const resourceSpans = req.body?.resourceSpans;
-  if (!Array.isArray(resourceSpans)) return httpError(res, 400, 'expected OTLP JSON {resourceSpans:[...]}');
+route({
+  method: 'post', path: '/otlp/v1/traces',
+  summary: 'Ingest OTLP traces',
+  description: 'OTLP/HTTP JSON. Spans with status.code = 2 (ERROR) become events, up to 100 per request.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  body: S.OtlpTracesBody,
+  responses: { 200: S.OtlpTracesResult, 400: S.ErrorResponse },
+}, async ({ body, req }) => {
+  const resourceSpans = body.resourceSpans;
   let spans = 0, errors = 0;
   for (const rs of resourceSpans) {
     const service = otlpAttr(rs.resource?.attributes, 'service.name') || 'otel';
@@ -168,13 +222,20 @@ router.post('/otlp/v1/traces', sec.requireApiKey('ingest'), async (req, res) => 
       }
     }
   }
-  res.json({ accepted: spans, errorEvents: errors });
+  return { accepted: spans, errorEvents: errors };
 });
 
-router.post('/otlp/v1/metrics', sec.requireApiKey('ingest'), (req, res) => {
-  // Accepted but not stored yet (documented); OTLP partialSuccess signals this.
-  res.json({ partialSuccess: { rejectedDataPoints: 0, errorMessage: 'metrics accepted but not stored in this version' } });
-});
+route({
+  method: 'post', path: '/otlp/v1/metrics',
+  summary: 'Ingest OTLP metrics (accepted, not stored)',
+  description: 'Accepted and discarded in this version. OTLP partialSuccess is how that is signalled, so an '
+    + 'exporter pointed here does not retry forever.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('ingest')],
+  responses: { 200: S.OtlpMetricsResult },
+}, () => ({
+  partialSuccess: { rejectedDataPoints: 0, errorMessage: 'metrics accepted but not stored in this version' },
+}));
 
 // ---- agents ----
 // Async since the shim, and the `await` is the authentication: unawaited, the
@@ -200,7 +261,16 @@ try {
   bundledAgentVersion = (/const VERSION = '([^']+)'/.exec(bundledAgent) || [])[1] || null;
 } catch { /* no bundled agent in this build */ }
 
-router.post('/agents/heartbeat', requireAgentToken, async (req, res) => {
+route({
+  method: 'post', path: '/agents/heartbeat',
+  summary: 'Agent heartbeat',
+  description: 'Updates last-seen plus the reported hostname/platform/version, and tells the agent whether a '
+    + 'newer bundled version is available.',
+  tags: ['Agents'], auth: 'agentToken',
+  middleware: [requireAgentToken],
+  body: S.AgentHeartbeatBody,
+  responses: { 200: S.AgentHeartbeatResult },
+}, async ({ req }) => {
   const b = req.body || {};
   await q.prepare(`UPDATE agents SET last_seen_at = ?, hostname = COALESCE(?, hostname),
       platform = COALESCE(?, platform), version = COALESCE(?, version) WHERE id = ?`)
@@ -209,7 +279,7 @@ router.post('/agents/heartbeat', requireAgentToken, async (req, res) => {
       isStr(b.version, 50) ? b.version : null, req.agent.id);
   const updateAvailable = !!(bundledAgentVersion && req.agent.auto_update
     && isStr(b.version, 50) && b.version !== bundledAgentVersion);
-  res.json({ ok: true, intervalS: 60, latestVersion: bundledAgentVersion, updateAvailable });
+  return { ok: true, intervalS: 60, latestVersion: bundledAgentVersion, updateAvailable };
 });
 
 // Self-update download: the agent fetches this when its heartbeat says
@@ -223,7 +293,16 @@ router.get('/agents/update', requireAgentToken, (req, res) => {
 // Container snapshot from the host agent (docker ps + stats). Raises a
 // container_down event when a container that was running in the previous
 // snapshot is now missing or in a non-running state.
-router.post('/agents/containers', requireAgentToken, async (req, res) => {
+route({
+  method: 'post', path: '/agents/containers',
+  summary: 'Container snapshot from the host agent',
+  description: 'docker ps + stats. A container that was running in the previous snapshot and is now missing or '
+    + 'not running raises a container_down event.',
+  tags: ['Agents'], auth: 'agentToken',
+  middleware: [requireAgentToken],
+  body: S.AgentContainersBody,
+  responses: { 200: S.AgentContainersResult },
+}, async ({ req }) => {
   const list = Array.isArray(req.body && req.body.containers) ? req.body.containers.slice(0, 200) : [];
   const minute = Math.floor(now() / 60000) * 60000;
   const ins = q.prepare(`INSERT INTO agent_containers (agent_id, ts, name, image, state, cpu_pct, mem_used, mem_limit)
@@ -277,10 +356,19 @@ router.post('/agents/containers', requireAgentToken, async (req, res) => {
       description: `container_down ${name} on ${req.agent.name} (${cur ? cur.state : 'gone'})`,
     }, 'agents', false, req.agent.org_id);
   }
-  res.json({ ok: true, stored: list.length });
+  return { ok: true, stored: list.length };
 });
 
-router.post('/agents/metrics', requireAgentToken, async (req, res) => {
+route({
+  method: 'post', path: '/agents/metrics',
+  summary: 'Host metrics from the agent',
+  description: 'cpu, load, memory and disk. Values that are not finite numbers are stored as null; a disk at '
+    + '>= 90% raises a host_disk_high event.',
+  tags: ['Agents'], auth: 'agentToken',
+  middleware: [requireAgentToken],
+  body: S.AgentMetricsBody,
+  responses: { 200: S.OkResponse },
+}, async ({ req }) => {
   const m = req.body || {};
   const num = (v) => (Number.isFinite(v) ? v : null);
   const minute = Math.floor(now() / 60000) * 60000;
@@ -310,16 +398,24 @@ router.post('/agents/metrics', requireAgentToken, async (req, res) => {
     await pipeline.ingestEvent({ name: 'host_disk_high', device: name, severity: 75,
       description: `host_disk_high ${Math.round((m.diskUsed / m.diskTotal) * 100)}% on ${name}` }, 'agents', false, org);
   }
-  res.json({ ok: true });
+  return { ok: true };
 });
 
 // Agents can also ship logs with their token (no separate API key needed).
-router.post('/agents/logs', requireAgentToken, async (req, res) => {
-  const entries = Array.isArray(req.body?.logs) ? req.body.logs : null;
-  if (!entries) return httpError(res, 400, 'expected {logs:[...]}');
-  if (entries.length > 500) return httpError(res, 413, 'max 500 log entries per batch');
-  if (!(await withinIngestPlan(req.agent.org_id, res))) return;
-  res.json(await pipeline.ingestLogs(entries, `agent:${req.agent.name}`, req.agent.org_id));
+route({
+  method: 'post', path: '/agents/logs',
+  summary: 'Ship logs with an agent token',
+  description: 'The same pipeline as /v1/ingest/logs, authenticated by the agent token so an installed agent '
+    + 'needs no separate API key.',
+  tags: ['Agents'], auth: 'agentToken',
+  middleware: [requireAgentToken],
+  body: S.AgentLogsBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse, 413: S.ErrorResponse, 429: S.ErrorResponse },
+}, async ({ body, req, res }) => {
+  const entries = body.logs;
+  if (entries.length > 500) throw new ApiProblem(413, 'max 500 log entries per batch');
+  if (!(await withinIngestPlan(req.agent.org_id, res))) return undefined;  // 429 already sent
+  return pipeline.ingestLogs(entries, `agent:${req.agent.name}`, req.agent.org_id);
 });
 
 // ---- remote probe reports ----
@@ -359,7 +455,15 @@ async function checkAllowedOnLocation(check, loc) {
 
 // Probe pulls its work list: own-org checks for customer locations, the union
 // of all booking orgs' checks for managed locations — filtered by assignment.
-router.get('/synthetics/checks', requireProbeKey, async (req, res) => {
+route({
+  method: 'get', path: '/synthetics/checks',
+  summary: 'Checks this probe location should run',
+  description: 'Also marks the location as seen, and flips a managed node from provisioning to online on its '
+    + 'first call.',
+  tags: ['Probes'], auth: 'probeKey',
+  middleware: [requireProbeKey],
+  responses: { 200: S.SyntheticChecksResult },
+}, async ({ req }) => {
   const loc = req.probeLocation;
   await q.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?').run(now(), loc.id);
   if (loc.node_id) {
@@ -403,7 +507,7 @@ router.get('/synthetics/checks', requireProbeKey, async (req, res) => {
       if (r.location_id === loc.id) assigned.add(r.check_id);
     }
   }
-  res.json(rows
+  return (rows
     // a check with no location rows runs everywhere; one with rows runs only
     // where it was assigned — the same rule, expressed without a query inside it.
     // The predicate is SYNCHRONOUS and must stay that way: an async one returns
@@ -416,10 +520,18 @@ router.get('/synthetics/checks', requireProbeKey, async (req, res) => {
 
 // …and reports results (only for checks this location is allowed to serve —
 // no cross-org injection).
-router.post('/synthetics/report', requireProbeKey, async (req, res) => {
-  const results = Array.isArray(req.body?.results) ? req.body.results : null;
-  if (!results) return httpError(res, 400, 'expected {results:[...]}');
-  if (results.length > 200) return httpError(res, 413, 'max 200 results per batch');
+route({
+  method: 'post', path: '/synthetics/report',
+  summary: 'Report synthetic check results',
+  description: 'Results for checks this location is not allowed to run are skipped silently rather than '
+    + 'rejected, so a stale probe config cannot fail a whole batch.',
+  tags: ['Probes'], auth: 'probeKey',
+  middleware: [requireProbeKey],
+  body: S.SyntheticReportBody,
+  responses: { 200: S.SyntheticReportResult, 400: S.ErrorResponse, 413: S.ErrorResponse },
+}, async ({ body, req }) => {
+  const results = body.results;
+  if (results.length > 200) throw new ApiProblem(413, 'max 200 results per batch');
   const t = now();
   let accepted = 0;
   for (const r of results) {
@@ -435,7 +547,7 @@ router.post('/synthetics/report', requireProbeKey, async (req, res) => {
   }
   await q.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?')
     .run(t, req.probeLocation.id);
-  res.json({ accepted });
+  return { accepted };
 });
 
 module.exports = router;

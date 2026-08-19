@@ -17,6 +17,7 @@
 // role the equivalent UI action requires, neither more nor less.
 
 const { z } = require('zod');
+const { McpEventSchema, toMcpEvent } = require('../schemas/domain');
 const q = require('../db/shim');
 const logs = require('../db/log-store');   // log LINES may not be in `q` — see db/log-store.js
 const { now, isStr, clampInt } = require('../util');
@@ -61,11 +62,12 @@ async function confirmDestructive(ctx, args, message) {
 
 // ── shared shapes ──────────────────────────────────────────────────────────
 
-const eventShape = {
-  id: z.number(), name: z.string(), device: z.string().nullable(),
-  severity: z.number(), hits: z.number(), status: z.string(),
-  firstSeen: z.number(), lastSeen: z.number(), description: z.string().nullable(),
-};
+/* Derived from the REST projection in ../schemas/domain.js rather than declared
+ * here: this shape and routes/ops.js publicEvent() describe the same DB row, and
+ * two independent declarations of one row is how they drift. A rename over there
+ * now breaks the .pick() at load instead of silently producing two different
+ * public descriptions of the same event. */
+const eventShape = McpEventSchema.shape;
 
 /* `'text'` is pinned to the literal type rather than left to widen to `string`.
  * Every handler is async since the shim conversion, so what these two return is
@@ -118,10 +120,7 @@ const TOOLS = [
              ORDER BY severity DESC, last_seen DESC LIMIT ?`).all(p.orgId, minSev, limit)
         : await q.prepare(`SELECT * FROM events WHERE org_id = ? AND status = ? AND severity >= ?
              ORDER BY severity DESC, last_seen DESC LIMIT ?`).all(p.orgId, status, minSev, limit);
-      const events = rows.map((e) => ({
-        id: e.id, name: e.name, device: e.device, severity: e.severity, hits: e.hits,
-        status: e.status, firstSeen: e.first_seen, lastSeen: e.last_seen, description: e.description,
-      }));
+      const events = rows.map(toMcpEvent);
       return ok({ events, count: events.length });
     },
   },
@@ -150,10 +149,7 @@ const TOOLS = [
       const c = await q.prepare(`SELECT id, status FROM cases WHERE org_id = ? AND event_id = ?
         ORDER BY id DESC LIMIT 1`).get(p.orgId, e.id);
       return ok({
-        event: {
-          id: e.id, name: e.name, device: e.device, severity: e.severity, hits: e.hits,
-          status: e.status, firstSeen: e.first_seen, lastSeen: e.last_seen, description: e.description,
-        },
+        event: toMcpEvent(e),
         recentLogs,
         case: c ? { id: c.id, label: `C-${1000 + c.id}`, status: c.status } : null,
       });

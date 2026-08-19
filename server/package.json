@@ -2,13 +2,14 @@
   "name": "opscat-server",
   "version": "2.0.0",
   "private": true,
-  "description": "OpsCat platform server \u2014 API, ingest, engines",
+  "description": "OpsCat platform server — API, ingest, engines",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "seed": "node src/engine/seed.js",
     "test": "node run-e2e.js",
-    "check:server": "node scripts/check-types.js"
+    "check:server": "node scripts/check-types.js",
+    "check:api": "node scripts/check-api-schema.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

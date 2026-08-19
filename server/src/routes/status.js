@@ -14,7 +14,7 @@ const express = require('express');
 // rename this conversion must not make somebody read twice.
 const store = require('../db/shim');
 const { getOrgSetting } = require('../db');
-const { now, sha256, RateLimiter, escapeHtml: esc } = require('../util');
+const { now, sha256, httpError, RateLimiter, escapeHtml: esc } = require('../util');
 const { clientIp } = require('../security');
 const config = require('../config');
 const pages = require('../lib/status-pages');
@@ -22,7 +22,18 @@ const branding = require('../lib/status-branding');
 const subscribers = require('../lib/subscribers');
 const { RANK: STATUS_RANK } = require('../lib/status-scale');
 
+const { createRouteRegistrar, ApiProblem } = require('../lib/route-schema');
+const S = require('../schemas/status');
+
 const router = express.Router();
+// Mounted at the ROOT (see index.js), so the spec paths are the paths.
+//
+// Most of this file is deliberately NOT registered: the status PAGE is HTML,
+// the feed is XML, the logo and favicon are binary, the confirm/unsubscribe
+// mini-pages are HTML, and the Caddy TLS check answers plain text. The
+// registrar describes one JSON body per request — a schema for any of those
+// would be a fiction.
+const route = createRouteRegistrar(router, '');
 
 const STATUS_LABEL = {
   operational: 'All Systems Operational', maintenance: 'Scheduled Maintenance in Progress',
@@ -130,14 +141,18 @@ const lastReportFrom = store.prepare(
 // Accepts the status-page form (urlencoded) or JSON. The `website` field is a
 // honeypot — humans never see it, bots fill it. Success and silent drops both
 // answer alike so probing reveals nothing.
+/* Dual-mode: the form posts redirect, the JSON endpoints RETURN their body so
+ * lib/route-schema.js can validate it. The redirect branches still write to
+ * `res` and return undefined — the registrar's escape hatch — because a 303 is
+ * not a JSON body and pretending otherwise would put a shape in the spec that
+ * nothing ever sends. Each branch keeps the exact condition it had. */
 async function handleReport(req, res, page, redirectTo) {
   const done = () => (redirectTo
-    ? res.redirect(303, `${redirectTo || '/status'}?reported=1`)
-    : res.json({ ok: true }));
+    ? void res.redirect(303, `${redirectTo || '/status'}?reported=1`)
+    : { ok: true });
   if (!servable(req, page) || !reportsEnabled(page.org_id)) {
-    return redirectTo !== null
-      ? res.redirect(303, redirectTo || '/status')
-      : res.status(404).json({ error: 'not published' });
+    if (redirectTo !== null) return void res.redirect(303, redirectTo || '/status');
+    throw new ApiProblem(404, 'not published');
   }
   const b = req.body || {};
   const ip = clientIp(req);
@@ -169,12 +184,11 @@ const subLimiter = new RateLimiter({ perMinute: 3, burst: 3 });
 // the form cannot be used to probe an address book.
 async function handleSubscribe(req, res, page, redirectTo) {
   const done = () => (redirectTo !== null
-    ? res.redirect(303, `${redirectTo || '/status'}?subscribed=1`)
-    : res.json({ ok: true }));
+    ? void res.redirect(303, `${redirectTo || '/status'}?subscribed=1`)
+    : { ok: true });
   if (!servable(req, page) || !subscribers.available(page)) {
-    return redirectTo !== null
-      ? res.redirect(303, redirectTo || '/status')
-      : res.status(404).json({ error: 'not available' });
+    if (redirectTo !== null) return void res.redirect(303, redirectTo || '/status');
+    throw new ApiProblem(404, 'not available');
   }
   const b = req.body || {};
   if (typeof b.website === 'string' && b.website.trim() !== '') return done(); // honeypot hit
@@ -418,9 +432,9 @@ ${new Date(d.ts).toISOString().replace('T', ' ').slice(0, 16)} UTC</footer>
 // with a slug parameter. `/summary.json` is the Instatus-shaped alias OpsCat's
 // own vendor detector probes for (engine/vendor-feeds.js), so an OpsCat status
 // page is auto-detectable by OpsCat and by anything following that convention.
-async function statusJson(req, res, page) {
-  if (!servable(req, page)) return res.status(404).json({ error: 'not published' });
-  return res.json(await statusData(page));
+async function statusJson(req, page) {
+  if (!servable(req, page)) throw new ApiProblem(404, 'not published');
+  return statusData(page);
 }
 
 // ---- token-addressed flows (confirm / unsubscribe) ---------------------------
@@ -471,7 +485,19 @@ async function handleUnsubscribe(req, res) {
 // itself is untouched and public.js keeps `/` for the marketing site.
 const domainRoutes = express.Router();
 domainRoutes.get('/', (req, res) => renderStatus(req, res, req.statusPage));
-domainRoutes.get(['/summary.json', '/status.json'], (req, res) => statusJson(req, res, req.statusPage));
+// Raw, not registered: these are the SAME two documents already in the spec at
+// /status.json and /summary.json, served again at a custom domain's root.
+// Registering them a second time would put a duplicate path in the document.
+// So this one call site writes the response itself and turns statusJson's
+// ApiProblem back into the body the registrar would have produced.
+domainRoutes.get(['/summary.json', '/status.json'], async (req, res) => {
+  try {
+    res.json(await statusJson(req, req.statusPage));
+  } catch (e) {
+    if (e instanceof ApiProblem) return httpError(res, e.status, e.message);
+    throw e;   // Express 5 forwards a rejected handler to the error middleware
+  }
+});
 domainRoutes.get('/feed.xml', (req, res) => statusFeed(req, res, req.statusPage));
 domainRoutes.get('/logo', (req, res) => sendAsset(req, res, req.statusPage, 'logo'));
 domainRoutes.get('/favicon', (req, res) => sendAsset(req, res, req.statusPage, 'favicon'));
@@ -540,23 +566,60 @@ router.get('/api/public/tls-check', async (req, res) => {
 // Order matters: the fixed segments must be registered before `/status/:slug`,
 // which would otherwise swallow "confirm", "logo" and friends as slugs.
 
-router.get('/api/status', async (req, res) => {
-  const page = req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null);
-  // returned, not fired: the handler is async now, and Express only sees a
-  // rejection it is handed back.
-  return statusJson(req, res, page);
-});
-router.post('/api/status/report', async (req, res) =>
-  handleReport(req, res, req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
-router.post('/api/status/subscribe', async (req, res) =>
-  handleSubscribe(req, res, req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
+route({
+  method: 'get', path: '/api/status',
+  summary: 'Public status of a page',
+  description: 'The endpoint a customer\'s monitoring polls. A page that does not exist, is unpublished, or is '
+    + 'private and was reached without its link secret all answer 404 — never 403, which would confirm the page exists.',
+  tags: ['Status page'], auth: 'none',
+  query: S.StatusQuery,
+  responses: { 200: S.StatusResponse, 404: S.ErrorResponse },
+}, async ({ req }) => statusJson(req,
+  req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null)));
+
+route({
+  method: 'post', path: '/api/status/report',
+  summary: 'Report a problem from the status page',
+  description: 'Downdetector-style. Honeypot, per-IP rate limit and one report per visitor per 10 minutes — and '
+    + 'every one of those outcomes answers identically, so the form cannot be used to probe anything.',
+  tags: ['Status page'], auth: 'none',
+  query: S.StatusQuery, body: S.ReportBody,
+  responses: { 200: S.OkResponse, 404: S.ErrorResponse },
+}, async ({ req, res }) => handleReport(req, res,
+  req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
+
+route({
+  method: 'post', path: '/api/status/subscribe',
+  summary: 'Subscribe to a status page by e-mail',
+  description: 'Double opt-in. New, pending, already-confirmed and silently-dropped all look identical from outside.',
+  tags: ['Status page'], auth: 'none',
+  query: S.StatusQuery, body: S.SubscribeBody,
+  responses: { 200: S.OkResponse, 404: S.ErrorResponse },
+}, async ({ req, res }) => handleSubscribe(req, res,
+  req.query.org ? await pages.pageBySlug(req.query.org) : await pages.resolvePage(req, null), null));
 
 router.get('/status/confirm', handleConfirm);
 router.get('/status/unsubscribe', handleUnsubscribeForm);
 router.post('/status/unsubscribe', handleUnsubscribe);
 
-router.get(['/status.json', '/summary.json'], async (req, res) => statusJson(req, res, await pages.resolvePage(req, null)));
-router.get('/status/:slug.json', async (req, res) => statusJson(req, res, await pages.pageBySlug(req.params.slug)));
+// Two paths, two registrations: both exist, so both belong in the spec.
+// `/summary.json` is the older name and is kept because things point at it.
+for (const path of ['/status.json', '/summary.json']) {
+  route({
+    method: 'get', path,
+    summary: 'Public status of the default page',
+    tags: ['Status page'], auth: 'none',
+    responses: { 200: S.StatusResponse, 404: S.ErrorResponse },
+  }, async ({ req }) => statusJson(req, await pages.resolvePage(req, null)));
+}
+
+route({
+  method: 'get', path: '/status/:slug.json',
+  summary: 'Public status of one page by slug',
+  tags: ['Status page'], auth: 'none',
+  params: S.SlugParam,
+  responses: { 200: S.StatusResponse, 404: S.ErrorResponse },
+}, async ({ req }) => statusJson(req, await pages.pageBySlug(req.params.slug)));
 router.get('/status/feed.xml', async (req, res) => statusFeed(req, res, await pages.resolvePage(req, null)));
 router.get('/status/logo', async (req, res) => sendAsset(req, res, await pages.resolvePage(req, null), 'logo'));
 router.get('/status/favicon', async (req, res) => sendAsset(req, res, await pages.resolvePage(req, null), 'favicon'));

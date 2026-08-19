@@ -1,5 +1,17 @@
 # OpsCat API
 
+**Machine-readable contract:** `GET /openapi.json`, rendered at `GET /docs`, and
+available to agents as the MCP resource `opscat://openapi`. It is generated from
+the zod schemas that validate the traffic, so it describes what the server
+enforces — see `docs/API-CONTRACT.md`. Routes not yet migrated are absent from it
+rather than guessed at; this file remains the narrative (auth model, tenancy,
+conventions) and the endpoint list for the surfaces still to come.
+
+`/v1` and `/api` are migrated, so their request and response SHAPES are no longer
+written here — repeating them would be the second description this repo is busy
+removing. What stays is what a schema cannot carry: why a call answers 409, what
+the pipeline does with a line, what a channel's `recipients` actually mean.
+
 Two surfaces:
 
 - **`/api/*`** — session-authenticated UI API (cookie `opscat_sid`; state-changing requests
@@ -103,15 +115,14 @@ done through the admin users API below.
 
 ## Ingest (`/v1`, API key scope `ingest`)
 
-| Endpoint | Body |
-|---|---|
-| POST `/v1/ingest/logs` | `{logs:[{ts?, device, line, sev?, meta?}]}` or bare array; ≤500/batch; `sev` = syslog 0–7 |
-| POST `/v1/ingest/events` | `{name, device, target?, description?, severity? (0–100), ip?, ts?}` |
-| POST `/v1/ingest/webhook` | generic: `{name/alertname, device/host, message/description, severity?, target?}` |
-| POST `/v1/integrations/sentry` | Sentry issue-alert webhook payload; use `…/sentry?key=ock_…` as the webhook URL |
-| POST `/v1/otlp/v1/logs` | OTLP/HTTP JSON `{resourceLogs:[…]}` — full ingest (service.name → device) |
-| POST `/v1/otlp/v1/traces` | OTLP/HTTP JSON — spans with error status become events |
-| POST `/v1/otlp/v1/metrics` | accepted (partialSuccess), not stored yet |
+`/v1/ingest/{logs,events,webhook}`, `/v1/integrations/sentry` and
+`/v1/otlp/v1/{logs,traces,metrics}` — **shapes and limits are in
+`/openapi.json`**, generated from the schemas that validate them.
+
+Two things the spec cannot tell you: point a Sentry webhook at
+`…/integrations/sentry?key=ock_…` (the key rides in the query because Sentry
+sends no headers you control), and OTLP metrics are accepted with a
+`partialSuccess` and not stored yet.
 
 Log lines run through the classifier pipeline (see `server/src/engine/pipeline.js`): lines
 scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-open a case.
@@ -126,52 +137,71 @@ Install files are served unauthenticated under `/agent/` (`install.sh`,
 one-liner shown in onboarding and Settings → Agents & SNMP:
 `curl -fsSL https://<host>/agent/install.sh | sudo OPSCAT_URL=… OPSCAT_AGENT_TOKEN=oca_… sh`
 
-| Endpoint | Body |
-|---|---|
-| POST `/v1/agents/heartbeat` | `{hostname?, platform?, version?}` → `{ok, intervalS, latestVersion, updateAvailable}` |
-| GET `/v1/agents/update` | server-bundled agent script for self-update (`X-Agent-Version` header); agents with auto-update on replace themselves and restart via systemd |
-| POST `/v1/agents/containers` | `{containers:[{name, image, state, cpuPct?, memUsed?, memLimit?}]}` — docker snapshot (minute-bucketed); a previously-running container now missing/stopped raises `container_down` |
-| POST `/v1/agents/metrics` | `{cpuPct, load1, memUsed, memTotal, diskUsed, diskTotal, netRx, netTx}` |
-| POST `/v1/agents/logs` | `{logs:[…]}` like ingest/logs |
+`/v1/agents/{heartbeat,containers,metrics,logs}` are in the spec. What it does
+not say: the container snapshot is minute-bucketed, and a container that was
+running in the previous snapshot and is now missing or stopped raises a
+`container_down` event.
+
+`GET /v1/agents/update` is deliberately **not** in the spec — it serves the
+bundled agent JavaScript, not JSON, so a response schema for it would be a
+fiction. It carries an `X-Agent-Version` header; an agent with auto-update on
+replaces itself and lets systemd restart it.
 
 ## Remote probes (`/v1`, probe key)
 
-| Endpoint | Notes |
-|---|---|
-| GET `/v1/synthetics/checks` | work list `[{id, type, target, intervalS, timeoutMs}]` |
-| POST `/v1/synthetics/report` | `{results:[{checkId, ok, latencyMs?, meta?, ts?}]}` ≤200 |
+`GET /v1/synthetics/checks` (the work list) and `POST /v1/synthetics/report` are
+in the spec. The rule behind them: a result for a check this location is not
+allowed to run is skipped **silently** rather than rejected, so a stale probe
+config cannot fail a whole batch.
 
 ## UI API (`/api`, session)
 
-- `GET /api/stream` — SSE; events: `log` `{ts,device,line,sev}`, `event` (event object)
-- `GET /api/events?status=active|finished|downgraded|all&limit=` → `[{id,name,device,ip,target,description,severity,hits,status,firstSeen,lastSeen,assigned:{id,n,i,c}|null,spark:[10 cumulative points]}]`
-- `GET /api/events/:id` → event + `spark` (same 10 cumulative points as the list) + `recentLogs` + `timeline` + `case {label,id,status}`
-  - `timeline: [{ts, user:{id,n,i,c}|null, action, detail}]`, oldest first — who did what to this
-    event. `user: null` = the platform, not a person. The first entry is always `detected`,
-    derived from `firstSeen` (so events predating the table still have a history) and carries
-    no `detail`: `severity` is the CURRENT value, and a derived line must not state as fact
-    something a later downgrade made true. Actions: `detected`, `assign`, `downgrade`
-    (`"92 → 67"`), `finish`, `note` (the note body), `case_status`, `root_cause`.
-- `POST /api/events/:id/action` — `{action:'finish'|'downgrade'|'assign'|'note', userId?, note?}`
-  - appends one `timeline` entry per accepted call. **409** when the action would change
-    nothing: already finished, already assigned to that user, severity already at the floor
-    (10). The UI disables the matching button; this is the same rule enforced server-side.
-- `GET /api/cases?status=` → `[{id,label,eventId,name,device,severity,status,assigned,rootCause,note,openedAt,closedAt,durationMs}]`
-- `PATCH /api/cases/:id` — `{status?, assignedUserId?, rootCause?, note?}`. Each field that
-  actually CHANGED appends an entry to the event's timeline (a re-save of an untouched form
-  records nothing), so a note written here and one written in the slide-over land in the
-  same history. `note` is a single column — it holds the latest note; the timeline holds all
-  of them, with their authors.
-- `GET /api/logs?hours=&from=&to=&q=&limit=` → `[{ts,device,line,sev}]` `from`/`to` are an ABSOLUTE window in ms and take precedence over `hours` — that is what a link from elsewhere needs: Scout's "the lines behind this template" and the throughput chart's "the lines under the span I dragged over" both name a fixed span, and re-deriving it as "hours ago" goes stale in an open tab. `hours` still caps at 720.
-- `GET /api/dashboard` → `{sevCounts, openCases, mttrMs, logs24, events24, casesByAnalyst}`
-- `GET /api/analytics?range=24h|7d|30d` → `{volume:[{d,c,h,m,l}], mttrDaily:[{d,v}], topTypes, topServers, totals:{events,mttrMs,resolutionRate,notifications,notificationsFailed}}`
-- `GET/POST/PATCH/DELETE /api/rules[/:id]` — `{name,enabled,channel:'email'|'msteams'|'webhook'|'slack'|'telegram'|'discord'|'ntfy'|'pushover',triggerName,severityMin,cooldownM,recipients:[]}` (lead+ to modify). `recipients` per channel: email addresses, webhook/Slack/Discord/ntfy URLs, Telegram chat ids, Pushover user keys; Telegram/Pushover need `telegram_bot_token`/`pushover_token` in settings
-- `GET /api/notifications` → `[{ts,rule,event,channel,ok,error}]`
-- `GET /api/assets` → unified list of monitored assets `[{kind:'agent'|'snmp'|'check'|'heartbeat'|'container'|'source'|'vendor', id, name, detail, status, lastSeen}]` — agents, SNMP targets, synthetic checks, heartbeats, containers (latest agent snapshot), monitored vendors plus implicit log/event sources
-- `GET/POST/DELETE /api/maintenance[/:id]` (lead+ to modify) — `{name, startsAt, endsAt}` (ms epoch, ≤30 days); while a window is active all alert dispatch for the org is suppressed (events still record; the notification log shows `suppressed: maintenance window "…"`)
-- `GET/POST/PATCH/DELETE /api/heartbeats[/:id]` (lead+ to modify) — `{name, intervalS, graceS}`; POST returns `pingUrl` once. Public ping: `GET|POST /v1/heartbeat/:token` (no other auth); silence past interval+grace raises a `heartbeat_missed` event
-- `GET/POST /api/incidents` (POST lead+ — `{title, severity?, message?, assigneeId?, components?:[{id,impact}]}`, `impact` ∈ degraded|partial|major — the app-wide status scale, see `lib/status-scale.js`), `POST /api/incidents/:id/status` (`{status,message?}`), `PATCH /api/incidents/:id` (`{title?,severity?,published?,assigneeId?,components?,rca:{…}}` — `assigneeId` writes a timeline entry; `components` replaces the affected set) — incident objects: `{id,label,title,severity,status,published,startedAt,resolvedAt,durationMs,assigneeId,assignee,components:[{id,impact,name}],links:[{kind:'case'|'event',refId,label}],updates:[{ts,status,message}],rca}`. Every mutation goes through `lib/incidents.js`: it emits the synthetic lifecycle events `incident_created`/`incident_status_changed`/`incident_resolved` through the org's **alert rules** (name/severity-matched like `bridge_insight`; reserved for alert rules — flows use native `incident.*` triggers, see docs/INCIDENTS-V2.md §3.2) and recomputes derived component status (worst impact across OPEN incidents; back to `operational` on the last resolve; manual component status is recomputed away on the next incident transition)
-- `POST /api/cases/:id/promote` (lead+) — case → incident: prefills `{title?,severity?,components?,assigneeId?}` from the case (assignee defaults case-assignee → promoter), links the case and its event in `incident_links`, appends a case note; an open incident already linked to the case is returned with `already:true` instead of a twin. Case rows carry `incident:{id,label}|null`
+Every route here except the SSE stream is in `/openapi.json` with its request and
+response schema. What follows is the reasoning behind them.
+
+- `GET /api/stream` — SSE, so it is deliberately **not** in the spec: the
+  registrar describes one JSON body per request, and a stream is not that.
+  Events: `log` `{ts,device,line,sev}`, `event` (event object).
+- `GET /api/events/:id` — the `timeline` is oldest first and answers who did what
+  to this event; `user: null` means the platform acted, not a person. The first
+  entry is always `detected`, DERIVED from `firstSeen` rather than recorded, so
+  events predating the table still have a history — and it carries no `detail`
+  on purpose: `severity` is the CURRENT value, and a derived line must not state
+  as fact something a later downgrade made true. Actions: `detected`, `assign`,
+  `downgrade` (`"92 → 67"`), `finish`, `note` (the note body), `case_status`,
+  `root_cause`.
+- `POST /api/events/:id/action` — appends one `timeline` entry per accepted call.
+  **409** when the action would change nothing: already finished, already
+  assigned to that user, severity already at the floor (10). The UI disables the
+  matching button; this is the same rule enforced server-side.
+- `PATCH /api/cases/:id` — each field that actually CHANGED appends an entry to
+  the event's timeline (a re-save of an untouched form records nothing), so a
+  note written here and one written in the slide-over land in the same history.
+  `note` is a single column — it holds the latest note; the timeline holds all of
+  them, with their authors.
+- `GET /api/logs` — `from`/`to` are an ABSOLUTE window in ms and take precedence
+  over `hours`. That is what a link from elsewhere needs: Scout's "the lines
+  behind this template" and the throughput chart's "the lines under the span I
+  dragged over" both name a fixed span, and re-deriving it as "hours ago" goes
+  stale in an open tab. `hours` still caps at 720.
+- `/api/rules` (lead+ to modify) — `recipients` means something different per
+  channel: email addresses, webhook/Slack/Discord/ntfy URLs, Telegram chat ids,
+  Pushover user keys. Telegram and Pushover additionally need
+  `telegram_bot_token`/`pushover_token` in settings.
+- `/api/maintenance` (lead+ to modify) — while a window is active all alert
+  dispatch for the org is suppressed. Events still record; the notification log
+  shows `suppressed: maintenance window "…"`.
+- `/api/heartbeats` (lead+ to modify) — POST returns `pingUrl` once, because only
+  the token hash is stored. Public ping: `GET|POST /v1/heartbeat/:token` (no
+  other auth); silence past interval+grace raises a `heartbeat_missed` event.
+- `/api/incidents` (lead+ to modify) — a component's `impact` is
+  degraded|partial|major, the app-wide status scale (`lib/status-scale.js`). On
+  PATCH, `assigneeId` writes a timeline entry and `components` REPLACES the
+  affected set rather than adding to it. Every mutation goes through
+  `lib/incidents.js`: it emits the synthetic lifecycle events `incident_created`/`incident_status_changed`/`incident_resolved` through the org's **alert rules** (name/severity-matched like `bridge_insight`; reserved for alert rules — flows use native `incident.*` triggers, see docs/INCIDENTS-V2.md §3.2) and recomputes derived component status (worst impact across OPEN incidents; back to `operational` on the last resolve; manual component status is recomputed away on the next incident transition)
+- `POST /api/cases/:id/promote` (lead+) — case → incident: prefills title,
+  severity, components and assignee from the case (assignee defaults
+  case-assignee → promoter), links the case and its event in `incident_links`, appends a case note; an open incident already linked to the case is returned with `already:true` instead of a twin. Case rows carry `incident:{id,label}|null`
 - `GET /api/admin/components` → `[{id,name,group,status,ownerId,uptimePct,days:[{day,worst}]}]`; POST/PATCH/DELETE for lead+ (`status` ∈ operational|degraded|partial|major|maintenance — but derived from open incidents, see above; `ownerId` in PATCH sets/clears the component owner (`component_owners`, feeds auto-assign), must be an org member; `group` is a free label the component carries — the set of groups IS the distinct values in use, there is no group entity, and the admin UI offers the ones already in use plus "New group…" so a typo cannot silently mint a second one. PATCH audits as `component_update` naming the facts that actually changed — it logged `component_status … → operational` for a group rename before)
 - **Status-page subscribers** (`lib/subscribers.js`, docs/INCIDENTS-V2.md slice 2) — e-mail double-opt-in, only available when a mail transport is configured AND `status_subscribers_enabled` ≠ '0'. Public: `POST /status[/:slug]/subscribe` (form) / `POST /api/status/subscribe?org=` (JSON) — honeypot + 3/min rate limit, **uniform `{ok:true}`** for new/pending/confirmed/invalid so the form cannot probe an address book; the confirm mail carries a single-use token link (48h TTL, hashed at rest). `GET /status/confirm?token=` confirms; `GET/POST /status/unsubscribe` is deliberately two-step (mail scanners GET every link) and accepts the original token or the per-mail `id`+HMAC pair. Confirmed subscribers are mailed on every transition of a **published** incident and the moment one first becomes published (`lib/incidents.setStatus`/`setPublished` — one mutation path, so the REST API and MCP behave identically); each mail carries its own unsubscribe link. Admin (lead+, addresses are PII): `GET /api/admin/status-subscribers` → `{available,enabled,confirmed,pending,rows:[{id,email,confirmedAt,createdAt}]}`, `DELETE /api/admin/status-subscribers/:id`
 - `GET /status[/:slug]/feed.xml` — Atom feed of the published incidents the status page shows (same payload, `.xml` beside the page URL like `.json`); XML-escaped, `<link rel="alternate">` on the page, works independently of e-mail subscriptions

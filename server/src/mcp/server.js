@@ -81,6 +81,33 @@ function registerResources(server, principal) {
     },
   );
 
+  /* The REST contract, as a resource.
+   *
+   * An agent connected to this MCP server can then read the HTTP API without
+   * anyone pasting a URL into a prompt — which is the whole reason the spec is
+   * generated rather than written: it is only useful if it is reachable from
+   * where the agent already is. Org-independent, so it is registered once with
+   * a flat URI.
+   *
+   * Public information (shapes, never data), so it needs no scope of its own. */
+  server.registerResource(
+    'openapi',
+    'opscat://openapi',
+    {
+      title: 'OpenAPI document',
+      description: 'The REST API contract, generated from the zod schemas that validate the traffic. '
+        + 'Also served unauthenticated at /openapi.json, with a rendered reference at /docs.',
+      mimeType: 'application/json',
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        mimeType: 'application/json',
+        text: JSON.stringify(require('../lib/openapi').buildOpenApiDocument(), null, 2),
+      }],
+    }),
+  );
+
   server.registerResource(
     'open-incidents',
     `opscat://org/${principal.orgId}/incidents/open`,

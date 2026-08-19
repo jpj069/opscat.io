@@ -152,6 +152,29 @@ const timersOf = (id) => q.prepare('SELECT * FROM alert_timers WHERE alert_id = 
 const eventsNamed = (n) => q.prepare('SELECT * FROM events WHERE name = ? ORDER BY id').all(n);
 const notifsFor = (id) => q.prepare('SELECT * FROM notifications WHERE alert_id = ? ORDER BY id').all(id);
 
+/* `tick()` above is a fixed 60ms sleep: it HOPES a fire-and-forget send has
+ * landed. That hope is the runner's to grant. Under the `pgsweep` job, which
+ * preloads `scripts/sql-record.js` and so wraps every statement the process
+ * issues, 60ms was not enough — the e-mail-fallback assertion below read an
+ * empty list on a box where nothing was actually wrong, while the identical
+ * suite passed in `server e2e`. (Line ~514 already carries a doubled `tick()`,
+ * so this had been walked into once before and papered over.)
+ *
+ * Waiting for the ROW instead of for the clock is deterministic on a fast box
+ * and a slow one alike. It is not tolerance: a fallback that genuinely never
+ * fires still spends the whole budget and still fails, and the failure still
+ * prints the rows it did see. */
+const waitForNotifs = async (id, min, budgetMs = 5000) => {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await notifsFor(id);
+    if (rows.length >= min || Date.now() >= deadline) return rows;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
+
 /* Schema questions asked of whichever engine is underneath — see the same pair
  * in e2e-oncall.js. `PRAGMA` and `sqlite_master` are SQLite's; the portable form
  * of "does this exist" is a statement that NAMES the object, and the declared
@@ -527,11 +550,10 @@ async function main() {
   const caseN = await mkCase(90);
   const N = (await call(lead, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseN, policyId: davePol.id })).j;
-  await tick();
   // No mail transport in the harness, so the send FAILS — but it must have been
   // attempted on the account address. A person with no configured method who is
   // simply skipped is the silent hole this fallback exists to close.
-  const nNotifs = await notifsFor(N.id);
+  const nNotifs = await waitForNotifs(N.id, 1);
   chk('a person with no contact method is still tried, on their account e-mail',
     nNotifs.some((n) => n.channel === 'email'), JSON.stringify(nNotifs));
 

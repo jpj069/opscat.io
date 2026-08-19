@@ -810,8 +810,18 @@ async function main() {
    *
    * A lock that genuinely does not serialise still never converges, so the two
    * checks below still go red for the reason they exist — this buys determinism,
-   * not tolerance. */
-  const stageDeadline = Date.now() + 20000;
+   * not tolerance.
+   *
+   * The budget is 60s, not 20s, because the SLOWEST caller decides it. The
+   * `pgsweep` job preloads `scripts/sql-record.js`, which wraps every single
+   * statement the process issues — so the background sweep over the 222 catalog
+   * subscriptions holds `running` several times longer there than it does under
+   * `npm test` alone. 20s went red on that job while the identical suite passed
+   * in `server e2e`, which is the same race the block above describes, one
+   * multiplier further along. `run-e2e.js` allows a harness 5 minutes and this
+   * one normally finishes in ~2s, so the headroom is free: the budget is only
+   * ever spent when we are already failing to find an idle window. */
+  const stageDeadline = Date.now() + 60000;
   for (let staged = 0; staged < 5 && observed2.length < 2 && Date.now() < stageDeadline;) {
     observed2.length = 0;
     // eslint-disable-next-line no-await-in-loop
