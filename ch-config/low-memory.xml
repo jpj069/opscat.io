@@ -2,14 +2,28 @@
   <!-- ClickHouse's DEFAULTS do not fit a small host: mark_cache 5 GiB and
        uncompressed_cache 8 GiB each exceed the whole 3.8 GB production machine.
        These four are the ones that matter, and they are all about MEMORY. -->
-  <max_server_memory_usage>805306368</max_server_memory_usage>   <!-- 768 MiB, under the 1g container cap -->
+  <!-- RAISED 2026-08-19, and the reason is worth keeping.
+       These numbers were chosen while ClickHouse was an idle EXPERIMENT beside
+       production. It answers every log query now, and the first real 7-day
+       full-text search on the production host was refused:
+
+         Code: 241. Memory limit (total) exceeded: would use 826.65 MiB,
+         maximum: 768.00 MiB. OvercommitTracker decision: Query was selected
+         to stop
+
+       That is the configuration WORKING — ClickHouse refused the query instead
+       of being OOM-killed, which is the whole point of setting a server limit
+       below the container limit. It was simply set for a workload that no
+       longer exists. `max_server_memory_usage` must stay comfortably under
+       `mem_limit` so that relationship holds: 1.15 GiB under a 1.5 GB cap. -->
+  <max_server_memory_usage>1234803916</max_server_memory_usage>   <!-- 1.15 GiB, under the 1.5g container cap -->
   <mark_cache_size>134217728</mark_cache_size>                    <!-- 128 MiB (default 5 GiB) -->
   <uncompressed_cache_size>0</uncompressed_cache_size>            <!-- off (default 8 GiB) -->
   <max_concurrent_queries>4</max_concurrent_queries>
 
   <profiles><default>
     <max_threads>2</max_threads>                                  <!-- 2 vCPU -->
-    <max_memory_usage>536870912</max_memory_usage>                <!-- 512 MiB per query -->
+    <max_memory_usage>805306368</max_memory_usage>                <!-- 768 MiB per query -->
   </default></profiles>
 
   <!-- DELIBERATELY NOT SET. Both were tried and both broke the server, in

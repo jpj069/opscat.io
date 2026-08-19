@@ -244,7 +244,11 @@ services:
       - opscat_chdata:/var/lib/clickhouse
     expose:
       - "8123"
-    mem_limit: 1g
+    # 1.5g, not 1g. The original figure was set while this was an idle
+    # experiment; the first real 7-day log search on production was refused for
+    # exceeding it. ch-config/low-memory.xml keeps ClickHouse's own limit below
+    # this one on purpose, so it refuses a query rather than being OOM-killed.
+    mem_limit: 1.5g
     ulimits:
       nofile: {soft: 262144, hard: 262144}
     healthcheck:
