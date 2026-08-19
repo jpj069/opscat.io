@@ -19,12 +19,16 @@ module.exports = {
   databaseUrl: process.env.DATABASE_URL || null,
   /* ClickHouse — the LOG LINE store, and only that (src/db/log-store.js).
    *
-   * Unset is a supported configuration, not a degraded one: the community
-   * edition serves log lines from PostgreSQL, which is what keeps the
-   * "whole stack idles under 350 MB" claim true and what stops an existing
-   * self-hoster's next `docker compose up` from needing a new container.
-   * Set it and log lines move; everything transactional stays in Postgres
-   * either way.
+   * The default in both editions. Unset is still a SUPPORTED configuration
+   * rather than a degraded one — log lines stay in PostgreSQL, which is the
+   * right answer for a box too small to spare ~600 MB, and it is covered by the
+   * same parity harness on every pull request. Everything transactional stays
+   * in Postgres either way.
+   *
+   * Set-but-unreachable is neither: `index.js` exits non-zero rather than
+   * falling back, because serving logs from Postgres while writes go to
+   * ClickHouse would split one org's lines across two stores with no error
+   * anywhere.
    */
   clickhouseUrl: (process.env.CLICKHOUSE_URL || '').trim() || null,
   clickhouseDatabase: process.env.CLICKHOUSE_DB || 'opscat',

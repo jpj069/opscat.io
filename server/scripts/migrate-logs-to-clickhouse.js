@@ -24,10 +24,17 @@
  * It refuses to run when ClickHouse's `logs` is non-empty unless you pass
  * --force, which is the guard against the second run.
  *
- * The Postgres rows are NOT deleted. Dropping them is a separate decision with
- * a separate blast radius; once the copy is verified, `TRUNCATE logs` in
- * Postgres reclaims the space and the retention sweep will otherwise do it
- * gradually anyway.
+ * DROPPING THE POSTGRES ROWS: pass --drop-source, on this run or a later one.
+ * It TRUNCATEs `logs` in PostgreSQL, but only after checking, PER ORGANISATION,
+ * that ClickHouse holds at least as many lines inside the same timestamp window.
+ * That is a real guard and it is not a proof of identity — it cannot be, short
+ * of comparing every row — so it is stated for what it is: enough to catch a
+ * copy that half-ran, silently targeted the wrong database, or was never run at
+ * all, and not enough to catch a copy that wrote the right number of wrong rows.
+ * Look at the Logs page before you pass it.
+ *
+ * Without the flag nothing is deleted. Retention prunes the orphaned Postgres
+ * rows on its own schedule anyway; --drop-source reclaims the space now.
  */
 
 const q = require('../src/db/shim');
@@ -36,6 +43,7 @@ const config = require('../src/config');
 
 const DRY = process.argv.includes('--dry-run');
 const FORCE = process.argv.includes('--force');
+const DROP = process.argv.includes('--drop-source');
 /* Rows per INSERT. 10k of typical log lines is a few MB in the request body —
  * large enough that the round trip is not the cost, small enough that a failure
  * costs one batch and not an hour. */
@@ -58,6 +66,15 @@ async function main() {
   console.log(`clickhouse logs: ${chBefore.toLocaleString()} rows`);
 
   if (!pgTotal) { console.log('\nnothing to copy.'); return; }
+  /* A LATER run, after the copy has already happened: there is nothing to
+   * copy (ClickHouse is non-empty, which is what the guard below refuses on),
+   * and the caller only wants the drop. Take that path explicitly rather than
+   * making them pass --force, which means something else entirely. */
+  if (DROP && chBefore && !FORCE) {
+    if (DRY) { console.log('\n--dry-run: would verify per-org counts, then TRUNCATE postgres logs.'); return; }
+    await dropSource(client);
+    return;
+  }
   if (chBefore && !FORCE) {
     fail(`ClickHouse already holds ${chBefore.toLocaleString()} lines. Copying again would\n`
        + 'DUPLICATE them — there is no key to deduplicate on. Pass --force only if you\n'
@@ -101,8 +118,55 @@ async function main() {
     fail(`MISMATCH: expected ${pgTotal.toLocaleString()} new rows, ClickHouse gained `
        + `${(chAfter - chBefore).toLocaleString()}. Do NOT truncate the Postgres table.`);
   }
-  console.log('\nrow counts agree. The Postgres rows were NOT deleted — verify the Logs page,');
-  console.log('then reclaim the space with:  TRUNCATE logs;   (in Postgres)');
+  console.log('\nrow counts agree.');
+  if (DROP) await dropSource(client);
+  else {
+    console.log('The Postgres rows were NOT deleted. Verify the Logs page, then either');
+    console.log('re-run with --drop-source, or leave them for the retention sweep.');
+  }
+}
+
+/**
+ * TRUNCATE the PostgreSQL `logs` table, but only if ClickHouse plausibly has
+ * everything it held.
+ *
+ * The check is per ORGANISATION and inside each org's own timestamp window:
+ * ClickHouse must hold at least as many lines between that org's oldest and
+ * newest Postgres row as Postgres does. Per-org rather than a single total,
+ * because one tenant's data going missing is exactly the failure a global
+ * count hides — a busy org's new lines would cover for an empty one.
+ *
+ * TRUNCATE rather than DELETE: it reclaims the space immediately, which is the
+ * entire point of running this, and it takes no row locks to escalate.
+ */
+async function dropSource(client) {
+  const orgs = await q.prepare(`SELECT org_id, COUNT(*) c, MIN(ts) lo, MAX(ts) hi
+    FROM logs GROUP BY org_id`).all();
+  if (!orgs.length) { console.log('\nnothing to drop.'); return; }
+
+  console.log('\nchecking ClickHouse holds what PostgreSQL is about to lose:');
+  let bad = 0;
+  for (const o of orgs) {
+    const row = await client.get(
+      `SELECT count() AS c FROM logs
+       WHERE org_id = {org:UUID} AND ts >= {lo:Int64} AND ts <= {hi:Int64}`,
+      { org: o.org_id, lo: o.lo, hi: o.hi }, { numeric: ['c'] });
+    const ok = row && row.c >= Number(o.c);
+    if (!ok) bad++;
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${o.org_id}  postgres ${Number(o.c).toLocaleString()}`
+      + `  clickhouse ${(row ? row.c : 0).toLocaleString()} in the same window`);
+  }
+  if (bad) {
+    fail(`${bad} organisation(s) hold fewer lines in ClickHouse than in PostgreSQL.\n`
+       + 'NOTHING WAS DELETED. Copy first (run this script without --drop-source),\n'
+       + 'or work out where those lines went before forcing anything.');
+  }
+
+  await q.exec('TRUNCATE TABLE logs');
+  const left = Number((await q.prepare('SELECT COUNT(*) c FROM logs').get()).c);
+  if (left !== 0) fail(`TRUNCATE left ${left} rows — stop and investigate.`);
+  console.log('\npostgres `logs` truncated; the space is back.');
+  console.log('ClickHouse is now the only copy of the log lines — check your backups say so.');
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

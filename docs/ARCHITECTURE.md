@@ -47,7 +47,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
 |---|---|
 | Express 5 + Node 22 | Tiny footprint on the 2-vCPU VPS, and async handlers forward rejections to the error middleware on their own. Upgraded from 4 in one line: path-to-regexp v8 needs NAMED wildcards, so the SPA catch-all is `/app/*splat`, not `/app/*` — a bare `*` throws at registration. Nothing else in the codebase used the removed APIs (`req.param()`, `app.del()`, `res.sendfile()`, `res.json(obj, status)`) or mutated `req.query`, which is a getter now. |
 | PostgreSQL 16 (node-postgres) | The only engine, in both editions (decision D6). Every statement in `server/src` goes through the async shim (`src/db/shim.js`); `src/schema.sql` is PostgreSQL DDL and is the only description of the shape. It replaced SQLite, which was genuinely good at this write pattern and gave a one-file backup — what it cost was a second SQL dialect over ~770 statements, with `int8`-as-string, `CAST` disagreements, case-sensitivity of `LIKE`, `lastInsertRowid` and a `withTx` serialisation lock all differing per engine, and no product benefit on the other side. See `docs/POSTGRES-MIGRATION-PLAN.md`. |
-| ClickHouse for log LINES only | The one table that is append-only, never updated, read by scanning, and large. Measured (`docs/BENCHMARKS.md` § 5): 22 bytes/row against Postgres's 301, log search 17-25 ms against 435 ms, the throughput chart 26 ms against 261 — and production was already OUTSIDE a 250 ms budget on two user-facing queries at 392,319 rows. Nothing transactional moved and nothing is joined across the two. It is **optional**: the community edition serves lines from Postgres, because ClickHouse alone is ~600 MB resident and the self-hosted stack idles at 283 MB. See § Log storage. |
+| ClickHouse for log LINES only | The one table that is append-only, never updated, read by scanning, and large. Measured (`docs/BENCHMARKS.md` § 5): 22 bytes/row against Postgres's 301, log search 17-25 ms against 435 ms, the throughput chart 26 ms against 261 — and production was already OUTSIDE a 250 ms budget on two user-facing queries at 392,319 rows. Nothing transactional moved and nothing is joined across the two. **The default in both editions**; it costs the stack ~400 MB → ~720 MB, and `CLICKHOUSE_URL=` empty remains a supported configuration for a box that cannot spare it. See § Log storage. |
 | In-process schedulers | No queue infra needed at this load. Engine modules are already isolated so they can be split into separate probe/worker processes when scaling out. |
 | API-key ingest, session UI auth | Open "drop your logs here" endpoints stay decoupled from human auth. Keys are hashed (SHA-256) — plaintext is shown once at creation. |
 | SSE (not WebSocket) | One-directional live streams (logs/events) through Caddy with zero extra dependencies. |
@@ -612,13 +612,19 @@ doubling storage.
 One module, `src/db/log-store.js`, with two implementations of one interface. The
 choice is made **once at boot** from `CLICKHOUSE_URL`:
 
-- **set** → ClickHouse. The cloud edition. Unreachable is a hard boot failure,
-  never a fallback: serving from Postgres instead would split an organisation's
-  lines across two stores with no error anywhere.
-- **unset** → Postgres. The community default, and a supported configuration.
-  ClickHouse alone is more resident memory than the entire self-hosted stack
-  idles at, so making it mandatory would both falsify a published claim and break
-  every existing self-hoster's next `docker compose up`.
+- **set** → ClickHouse. The default in both editions. Unreachable is a hard boot
+  failure, never a fallback: serving from Postgres instead would split an
+  organisation's lines across two stores with no error anywhere.
+- **unset** → Postgres. Still supported, and the right answer for a box that
+  cannot spare ~600 MB — `docker-compose.postgres-logs.yml` is the opt-out, and
+  it exists because an empty `CLICKHOUSE_URL` alone leaves the container running
+  (the service is declared, so compose starts it whether the app uses it or
+  not). It was the community DEFAULT for about a day, on the
+  argument that a self-hoster should not be made to pay for a column store; that
+  was reversed once the numbers were published rather than avoided, because a
+  self-hosted instance with real log volume hits the same 250 ms wall the cloud
+  one did. What the reversal costs an existing install is one password and one
+  migration command, both of which fail loudly rather than silently.
 
 Fourteen call sites go through it and **nothing else in `server/src` names the
 `logs` table**. There is deliberately no query builder: each method answers one

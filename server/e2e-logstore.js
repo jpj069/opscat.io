@@ -3,8 +3,9 @@
  *
  * ── Why this harness exists ─────────────────────────────────────────────────
  *
- * `src/db/log-store.js` has two implementations of one interface: Postgres for
- * the community edition, ClickHouse for the cloud. CLAUDE.md's standing warning
+ * `src/db/log-store.js` has two implementations of one interface: ClickHouse,
+ * the default in both editions, and Postgres, the supported opt-out for a box
+ * that cannot spare ~600 MB. CLAUDE.md's standing warning
  * is that "a second implementation is how the two drift apart", and every other
  * mitigation in that module is structural — one seam, one boot-time choice, no
  * query builder. This file is the mitigation that can actually FAIL a build.

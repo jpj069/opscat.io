@@ -52,27 +52,32 @@ edition with `OPSCAT_EDITION=community` (default).
 | `agent/` | `opscat-agent.js` — dependency-free server agent + probe mode + installer |
 | `docs/` | [ARCHITECTURE](docs/ARCHITECTURE.md) · [API](docs/API.md) · [OPERATIONS](docs/OPERATIONS.md) · [MCP-PLAN](docs/MCP-PLAN.md) |
 
-The whole stack — API, engines, PostgreSQL, Caddy, DNS resolver — runs on a
-2-vCPU / 4 GB VM and idles under 350 MB. There is no search cluster, no message
-broker and no JVM: logs, events, cases, synthetics and incidents all live in one
-PostgreSQL.
+**Two databases, and only two.** Everything transactional — events, cases,
+incidents, users, settings — lives in **PostgreSQL**. Raw log **lines** live in
+**ClickHouse**: they are the one table that is append-only, never updated, read
+by scanning and large, so they are the one table a column store is right for.
+About **14× less disk per line** and log search an order of magnitude faster.
+Nothing is joined across the two.
 
-**ClickHouse is optional, and off by default.** Raw log lines are the one table
-that is append-only and large, so they can move to a column store when an
-instance is big enough to care: ~14× less disk per line and log search an order
-of magnitude faster. It costs about 600 MB of resident memory — more than this
-entire stack idles at — which is exactly why it is opt-in rather than required:
+No search cluster, no message broker, no JVM, no queue. The whole stack — API,
+engines, both databases, Caddy, DNS resolver — runs on a **2-vCPU / 4 GB VM** at
+about **720 MB** shortly after boot, budget 1 GB once ClickHouse's caches fill.
+Each database is capped at 1 GB by the compose file, so the ceiling is a number
+you can plan against rather than a surprise.
 
-```sh
-CLICKHOUSE_URL=http://clickhouse:8123   # in .env, plus CLICKHOUSE_PASSWORD
-docker compose --profile clickhouse up -d
-# copy the lines you already have across — reads switch over immediately,
-# and this is the only thing that moves the existing ones:
-docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js
-```
+<sub>Constrained box? `docker-compose.postgres-logs.yml` keeps log lines in
+PostgreSQL and drops the stack to ~400 MB. Supported and tested on every pull
+request — see [OPERATIONS](docs/OPERATIONS.md) — but Postgres + ClickHouse is
+the stack.</sub>
 
-Measured figures for both, each with the conditions that make it true, are in
+Measured figures, each with the conditions that make it true, are in
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+> **Upgrading an existing install?** Set `CLICKHOUSE_PASSWORD` in `.env` (it
+> refuses to start without one), then bring your log history across —
+> `docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js`.
+> Reads switch over as soon as the app restarts, so without that step your older
+> lines stay in PostgreSQL and stop being displayed.
 
 ## Quick start (development)
 

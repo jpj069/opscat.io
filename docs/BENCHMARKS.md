@@ -659,6 +659,35 @@ right query?
 So the honest split of the three over-budget queries: **two are ours to fix in
 the database we already run, one is a genuine engine question.**
 
+### 5.7.3 What the stack costs with ClickHouse in it
+
+Measured on the production host on 2026-08-19, about thirty seconds after the
+stack came up on the ClickHouse build. `docker stats`, so RSS per container:
+
+| container | |
+|---|---|
+| `app` | 114.7 MiB |
+| `clickhouse` | 321.5 MiB |
+| `db` (PostgreSQL) | 245.4 MiB |
+| `caddy` | 31.2 MiB |
+| `unbound` | 8.4 MiB |
+| `livekit` (profile-gated, off by default) | 21.9 MiB |
+| **total without livekit** | **~721 MiB** |
+
+Two honest qualifications, because this number replaces a published claim:
+
+- **It is a fresh boot.** ClickHouse grows as its mark cache fills; § 5.6
+  measured it at **609 MB PSS** after real query load in the sandbox, which puts
+  the settled figure nearer **1 GB**. Both databases carry `mem_limit: 1g` in
+  both compose files, so the worst case is bounded rather than open-ended.
+- **The claim it replaces was already loose.** "The whole stack idles under
+  350 MB" came from § 3, which measured **app + Postgres only** — no Caddy, no
+  unbound, no second database. The comparable Postgres-only figure for the
+  actual stack is closer to 400 MB. So the honest headline is not "350 → 750";
+  it is "**~400 MB → ~750 MB, and the old number was never the whole stack**".
+
+---
+
 ### 5.8 The recommendation, and what was decided
 
 **Decided on 2026-08-19: adopt it, for log lines only.** The analysis below is
@@ -666,9 +695,18 @@ kept as written rather than rewritten to match the outcome — it is the reasoni
 that produced the decision, including the part it got wrong.
 
 What shipped: `src/db/log-store.js`, one interface with two implementations,
-chosen at boot by `CLICKHOUSE_URL`. ClickHouse in the cloud edition, Postgres in
-the community edition, everything transactional in Postgres in both. See
-`docs/ARCHITECTURE.md` § Log storage.
+chosen at boot by `CLICKHOUSE_URL`. Everything transactional stays in Postgres.
+See `docs/ARCHITECTURE.md` § Log storage.
+
+**Amended the next day: ClickHouse became the default in the community edition
+too.** The original split — ClickHouse in the cloud, Postgres for self-hosters —
+rested on § 5.6's memory figure and on not wanting to falsify a published
+"idles under 350 MB". § 5.7.3 measured what the stack actually costs and the
+claim was corrected rather than protected, which removed the argument: a
+self-hosted instance with real log volume hits the same 250 ms wall § 5.7.1
+found in production. `CLICKHOUSE_URL=` empty remains supported and remains
+covered by the parity harness — it is no longer the default, which is not the
+same as deprecated.
 
 What the decision did NOT wait for: items 1 and 2 below — the missing
 `log_buckets` rollup and a maintained `last_seen` — are still worth doing and are
@@ -742,7 +780,8 @@ Detaching the condition makes it false.
 | **Under 20 ms** for the event list, case list and dashboard end to end | over HTTP, warm, single request at a time | §2.2 |
 | Full-text log search across **7 days / 596 k lines in ~215 ms** | 4 cores; substring scan, no index possible; ~310 ms on 2 cores; grows linearly with retention | §2.1, §2.3 |
 | **~267 bytes per log line** on disk, indexes included | this corpus's line-length mix | §2 |
-| App + Postgres idle at **283 MB** | fresh boot, empty database, bare metal, no Caddy/unbound/livekit | §3 |
+| App + Postgres idle at **283 MB** | fresh boot, empty database, bare metal, **app and Postgres only** — this is NOT "the whole stack", and was quoted that way on the marketing page until § 5.7.3 measured the real thing | §3 |
+| The whole stack with ClickHouse runs at **~721 MiB** | six containers on the production host, ~30 s after boot; nearer 1 GB once ClickHouse's caches fill, and capped at 1 GB per database by `mem_limit` | §5.7.3 |
 | App + Postgres at **347 MB** under full ingest load | 4 cores, c=4, Postgres counted as PSS | §3 |
 | **CPU-bound, not disk-bound** | `synchronous_commit=off` buys only 7% | §1.3 |
 | ClickHouse stores the same corpus in **1/14 of the disk** (22 vs 301 bytes/row) | `MergeTree`, `LowCardinality` device/source, indexes counted on the Postgres side | §5.3 |

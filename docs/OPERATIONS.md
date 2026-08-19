@@ -50,13 +50,16 @@ Log in at `https://<your-domain>/app`, then change the password.
 All state lives in PostgreSQL, in the `opscat_pgdata` volume. `DATABASE_URL` is
 required and the app refuses to start without it.
 
-If you have enabled the optional ClickHouse log store (see *Faster log search*
-below), raw log LINES live in `opscat_chdata` instead. Everything else — events,
-cases, incidents, users, settings — is still in PostgreSQL, so the `pg_dump`
-below remains the backup that matters. A lost ClickHouse volume costs the raw
-lines behind events that already exist, for as long as your retention would have
-kept them; the instance comes back working with an empty Logs page that refills
-as agents ship.
+Raw log LINES live in ClickHouse (`opscat_chdata`) — see *The two databases*
+below. Everything else is in PostgreSQL, so the `pg_dump` below remains the
+backup that matters. A lost ClickHouse volume costs the raw lines behind events
+that already exist, for as long as your retention would have kept them; the
+instance comes back working, with a Logs page that refills as agents ship.
+
+Back ClickHouse up too if the retention you keep makes the lines themselves
+something you would miss — it is a `SELECT … FORMAT Native` dump, and it is not
+free on a large table. If you run with `CLICKHOUSE_URL=` empty, the lines are in
+PostgreSQL and the `pg_dump` already has them.
 
 If you are coming from a build that ran on SQLite, note that the file-copy
 backup is gone with the file. `pg_dump` in a cron is more to set up than
@@ -127,16 +130,17 @@ Retention defaults are configurable under **Settings** in the UI; the retention
 engine prunes old logs/events on an interval. Community edition has no plan
 limits — retention is whatever you configure.
 
-## Faster log search (optional ClickHouse)
+## The two databases
 
-By default log lines live in PostgreSQL along with everything else, and for most
-self-hosted installs that is the right answer: the whole stack idles under
-350 MB and the Logs page opens in about a millisecond.
+Everything transactional — events, cases, incidents, users, settings — is in
+**PostgreSQL**. Raw log **lines** are in **ClickHouse**. Nothing is joined
+across the two, and only PostgreSQL needs a backup on a schedule (see *Data &
+backups*).
 
-Two things get slow as an instance grows, and both are full scans: **full-text
-log search** and the **throughput chart** on the Analytics page. Moving raw log
-lines to ClickHouse fixes both and shrinks them on disk. Measured on 596,491
-lines over 7 days, two cores (`docs/BENCHMARKS.md`):
+ClickHouse is there because two things get slow as an instance grows, and both
+are full scans of the log table: **full-text log search** and the **throughput
+chart** on the Analytics page. Measured on 596,491 lines over 7 days, two cores
+(`docs/BENCHMARKS.md`):
 
 | | PostgreSQL | ClickHouse |
 |---|---|---|
@@ -145,41 +149,88 @@ lines over 7 days, two cores (`docs/BENCHMARKS.md`):
 | throughput chart, 7 days | 261 ms | **26 ms** |
 | the same chart at 6 M lines | 2,620 ms | **134 ms** |
 
-**The cost is memory: ClickHouse is ~600 MB resident on its own**, which is more
-than this entire stack idles at. That is why it is off by default. If your box
-has the RAM and your Logs page feels slow, turn it on:
+**What it costs is memory, stated plainly:** the stack runs at about **720 MB**
+shortly after boot with both databases, against roughly 400 MB with PostgreSQL
+alone. Budget 1 GB once ClickHouse's caches fill. Both databases carry
+`mem_limit: 1g`, so the ceiling is bounded rather than open-ended.
+
+### Running without it
+
+On a box too small to spare that — a Pi, a 1 GB VPS, an appliance — there is a
+one-file opt-out:
 
 ```bash
-# in .env
-CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)
-CLICKHOUSE_URL=http://clickhouse:8123
-
-docker compose --profile clickhouse up -d
+docker compose -f docker-compose.yml -f docker-compose.postgres-logs.yml up -d
 ```
 
-Then copy the lines you already have. Reads switch to ClickHouse the moment the
-app restarts, so without this step your existing logs stay in PostgreSQL and
-stop being displayed:
+Log lines then stay in PostgreSQL and everything works exactly as before.
+
+**Use the override file rather than just emptying `CLICKHOUSE_URL`.** An empty
+URL tells the app to use PostgreSQL, which is half the job: the `clickhouse`
+service is still declared, so `docker compose up -d` starts the container anyway
+and you pay the memory for a database nothing reads. The override removes the
+service and the dependency on it.
+
+You will still need a `CLICKHOUSE_PASSWORD` line in `.env` and it can say
+anything (`CLICKHOUSE_PASSWORD=unused`). Compose interpolates every service
+block when it loads the file, including one it will never start, so the
+requirement is evaluated before the override applies. Requiring it on the
+default path is deliberate — an install that silently comes up without its log
+store is much harder to diagnose than one line at startup.
+
+This is a supported configuration, not a deprecated one: CI runs the same 40
+assertions against both stores on every change.
+
+### Upgrading an existing install
+
+Two steps, and the second is the one people miss.
+
+**1. Set a password**, or `docker compose up -d` refuses to start:
+
+```bash
+CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)   # in .env
+```
+
+It fails loudly on purpose. An install that comes up without its log store
+reports itself as a crash-loop, which is much harder to diagnose than a
+one-line error at startup.
+
+**2. Bring your existing log lines across**, once the stack is up:
 
 ```bash
 docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --dry-run
 docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js
 ```
 
-It verifies the row counts agree, does **not** delete the PostgreSQL rows, and
-refuses to run twice (there is no key to deduplicate on, so a second pass would
-double every line). Once the Logs page looks right you can reclaim the space
-with `TRUNCATE logs;` in PostgreSQL.
+Reads switch to ClickHouse the moment the app restarts, so without this your
+history is still in PostgreSQL and simply stops being displayed. The script
+pages through the table, verifies the row counts agree, does **not** delete the
+PostgreSQL rows, and refuses to run a second time (there is no key to
+deduplicate on, so a second pass would double every line).
 
-Notes worth knowing before you switch:
+Once the Logs page looks right, reclaim the PostgreSQL space:
 
-- **If `CLICKHOUSE_URL` is set and ClickHouse cannot be reached, the app exits.**
-  It does not fall back to PostgreSQL — that would split your lines across two
-  stores with no error anywhere.
+```bash
+docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --drop-source
+```
+
+It re-checks, **per organisation**, that ClickHouse holds at least as many lines
+inside the same timestamp window before it truncates anything, and refuses
+outright if any org comes up short. Per organisation rather than one total,
+because a busy tenant's new lines would otherwise cover for an empty one. That
+guard catches a copy that half-ran or never ran; it cannot prove the rows are
+identical, so look at the Logs page first.
+
+### Things worth knowing
+
+- **If ClickHouse cannot be reached, the app exits.** It does not fall back to
+  PostgreSQL — that would split your lines across two stores with no error
+  anywhere, and the split stays invisible until you search for one that is in
+  the other.
 - `docker compose logs app | grep '^log store:'` says which one is serving.
-- Retention still works exactly as configured, per organisation.
-- Turning it back off means setting `CLICKHOUSE_URL=` empty; the lines already in
-  ClickHouse are not copied back.
+- Retention works exactly as configured, per organisation, on both.
+- Going back means setting `CLICKHOUSE_URL=` empty; lines already in ClickHouse
+  are not copied back.
 
 ## Agents & probes
 

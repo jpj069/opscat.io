@@ -1,0 +1,47 @@
+# Log lines in PostgreSQL instead of ClickHouse — the supported opt-out for a
+# box that cannot spare ~600 MB (a Pi, a 1 GB VPS, an appliance).
+#
+# WHY THIS FILE EXISTS AND AN EMPTY `CLICKHOUSE_URL` IS NOT ENOUGH. Setting the
+# variable empty tells the APP to use PostgreSQL, which is half the job: the
+# `clickhouse` service is still declared and `app` still `depends_on` it, so
+# `docker compose up -d` starts the container anyway and waits for it. You get
+# the PostgreSQL log store AND pay the memory — the opposite of the point.
+#
+# Compose overrides cannot delete a key by assigning to it, which is why this
+# needs `!reset` (Compose 2.24+) rather than a plain override.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres-logs.yml up -d
+#
+# YOU STILL NEED A `CLICKHOUSE_PASSWORD` LINE IN .env, and it can be anything:
+#
+#   CLICKHOUSE_PASSWORD=unused
+#
+# That is not an oversight, it is how compose works — it interpolates EVERY
+# service block when it loads a file, including one it will never start, so the
+# `${CLICKHOUSE_PASSWORD:?}` in the base file is evaluated before this override
+# is even applied. The same property is documented on the `db` service, where it
+# once nearly aborted a production deploy over a container nobody had asked for.
+#
+# Requiring it on the default path is deliberate: an install that comes up
+# without its log store reports itself as a crash-loop, which is far harder to
+# diagnose than one line at startup. One unused variable is the price of that.
+#
+# Verify with:  docker compose logs app | grep '^log store:'
+#               -> log store: postgres (CLICKHOUSE_URL unset)
+services:
+  app:
+    environment:
+      - CLICKHOUSE_URL=
+    # `!override`, not a plain value and not `!reset`. Compose MERGES depends_on
+    # by key, so writing the block normally would keep the ClickHouse entry and
+    # the app would wait for a container this file never starts. `!reset` would
+    # drop the whole block including the PostgreSQL wait — which is worse: the
+    # app then races its own database and the crash-loop reads as a slow start.
+    # `!override` replaces the block with exactly this one dependency.
+    depends_on: !override
+      db:
+        condition: service_healthy
+  clickhouse:
+    # An unmatched profile is how a service is switched off: nothing requests
+    # "disabled", so compose never creates it.
+    profiles: ["disabled"]

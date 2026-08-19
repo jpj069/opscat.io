@@ -2,6 +2,32 @@
 # In the public opscat.io repo this file is published as `docker-compose.yml`.
 # Set OPSCAT_DOMAIN (and the mail settings if you want alert e-mails) in a .env
 # file next to this compose file; Caddy obtains TLS certificates automatically.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# UPGRADING FROM A VERSION BEFORE 2026-08-19? TWO STEPS, AND THE SECOND MATTERS.
+#
+# Raw log LINES now live in ClickHouse. Everything else — events, cases,
+# incidents, users, settings — is still PostgreSQL and is untouched.
+#
+#   1. Put a password in .env, or `docker compose up -d` refuses to start:
+#        CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)
+#      It fails loudly on purpose. An install that comes up without its log
+#      store reports itself as a crash-loop, which is harder to diagnose than
+#      a one-line error.
+#
+#   2. Bring your existing log lines across, AFTER the stack is up:
+#        docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --dry-run
+#        docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js
+#      Reads switch to ClickHouse the moment the app restarts, so without this
+#      your history is still in PostgreSQL and simply stops being displayed.
+#      The script deletes nothing, verifies the row counts agree, and refuses
+#      to run twice.
+#
+# Want to stay on PostgreSQL for log lines? Add the opt-out override:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres-logs.yml up -d
+# It keeps the lines in PostgreSQL and stops the container from being started at
+# all. Still tested on every pull request — not the default is not deprecated.
+# ─────────────────────────────────────────────────────────────────────────────
 services:
   app:
     build:
@@ -32,27 +58,32 @@ services:
       # copy; see OPERATIONS.md § Data & backups.
       - DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-opscat}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opscat}}
       #
-      # ClickHouse is OPTIONAL here, and unset by default on purpose. It stores
-      # log LINES about 14x more compactly than Postgres and answers log search
-      # and the throughput chart an order of magnitude faster
-      # (docs/BENCHMARKS.md § 5) — but it is ~600 MB resident on its own, which
-      # is more than this entire stack idles at. A single-box install with a few
-      # hundred thousand log lines does not need it and should not pay for it.
+      # ClickHouse holds the raw log LINES; everything transactional stays in
+      # `db` above. It is part of the stack here, the same as in the cloud —
+      # about 14x less disk per line and log search an order of magnitude
+      # faster (docs/BENCHMARKS.md § 5).
       #
-      # Turn it on when log search or the analytics charts start feeling slow:
-      #   CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)  # in .env
-      #   CLICKHOUSE_URL=http://clickhouse:8123        # in .env
-      #   docker compose --profile clickhouse up -d
+      # THE PRICE IS MEMORY AND IT IS STATED RATHER THAN HIDDEN: the stack ran
+      # at ~400 MB with Postgres alone and runs at ~750 MB with ClickHouse
+      # beside it, budget 1 GB once its caches fill. Both databases are capped
+      # by `mem_limit` below, so the worst case is bounded rather than a
+      # surprise on a small box.
       #
-      # Note it does NOT migrate the lines already in Postgres: reads go to
-      # ClickHouse from that moment, so older lines stay visible only until
-      # retention would have removed them anyway. Switch it on early or accept
-      # the gap — there is deliberately no silent dual-read that would hide
-      # which store answered.
-      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
+      # UPGRADING AN EXISTING INSTALL? Read the note at the top of this file.
+      # This is a breaking change: `docker compose up -d` will now refuse
+      # without CLICKHOUSE_PASSWORD, and your existing log lines need one
+      # command to come across.
+      #
+      # Too small a box for it? `docker-compose.postgres-logs.yml` is the
+      # supported opt-out — it keeps log lines in PostgreSQL AND stops the
+      # container from starting, which an empty CLICKHOUSE_URL alone does not
+      # (the service is still declared, so compose starts it anyway). That path
+      # is not deprecated and not untested — CI runs the same 40 assertions
+      # against both stores on every pull request — it is simply not default.
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL-http://clickhouse:8123}
       - CLICKHOUSE_DB=${CLICKHOUSE_DB:-opscat}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-opscat}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env — e.g. openssl rand -hex 24}
       - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
       - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
       - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
@@ -106,6 +137,8 @@ services:
     # window into a crash-loop that reads as a slow start.
     depends_on:
       db:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     restart: always
 
@@ -193,17 +226,15 @@ services:
       - "50100-50200:50100-50200/udp"
     restart: always
 
-  # ClickHouse — OPTIONAL log-line store, off unless you ask for it:
-  #   docker compose --profile clickhouse up -d
-  # See the CLICKHOUSE_URL comment on `app` for when it is worth it. Without the
-  # profile this block is inert and the stack is exactly what it was.
+  # ClickHouse — the log LINE store. Part of the stack, same as in the cloud.
+  # See the CLICKHOUSE_URL comment on `app` for what it costs and how to run
+  # without it on a box too small to spare the memory.
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
-    profiles: ["clickhouse"]
     environment:
       - CLICKHOUSE_DB=${CLICKHOUSE_DB:-opscat}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-opscat}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env — e.g. openssl rand -hex 24}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=0
     volumes:
       # ClickHouse's defaults assume a machine far bigger than a self-hosted box

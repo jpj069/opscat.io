@@ -16,18 +16,29 @@
  *   • Production was already OUTSIDE the 250 ms budget on two user-facing
  *     queries at 392,319 rows (§ 5.7.1).
  *
- * TWO IMPLEMENTATIONS, ONE INTERFACE, AND THE REASON THAT MATTERS:
+ * TWO IMPLEMENTATIONS, ONE INTERFACE, AND WHY THE SECOND ONE STAYS:
  *
- * The cloud edition runs ClickHouse. The community edition must not be forced
- * to — we publish "the whole stack idles under 350 MB", ClickHouse alone is
- * 609 MB resident (§ 5.6), and making it mandatory would both falsify that
- * sentence and break every existing self-hoster's next `docker compose up`.
+ * ClickHouse is the default in BOTH editions. It was cloud-only for about a
+ * day, on the argument that a self-hoster should not be made to pay ~600 MB of
+ * resident memory for it — that call was reversed deliberately: the stack goes
+ * from ~400 MB to ~750 MB and the numbers are now published rather than
+ * avoided, because a self-hosted install with real log volume hits the same
+ * 250 ms wall the cloud one did.
  *
- * That is exactly the situation CLAUDE.md warns about ("a second implementation
- * is how the two drift apart"), so the mitigation is structural rather than
- * hopeful: every caller talks to THIS module, the choice is made once at boot,
- * and `e2e-logstore.js` runs the SAME assertions against both implementations
- * in one process. A behaviour that differs between them fails the build.
+ * The Postgres implementation is NOT vestigial and NOT deprecated. Leaving
+ * `CLICKHOUSE_URL` empty is a supported configuration, and it is what a box too
+ * small for a column store should run — a Pi, a 1 GB VPS, an appliance. It is
+ * also what keeps an upgrade from being a cliff: an existing install that has
+ * not read the notes gets an explicit error about a missing password, not a
+ * silent switch of where its data lives.
+ *
+ * Two implementations is exactly the situation CLAUDE.md warns about ("a second
+ * implementation is how the two drift apart"), and the mitigation is structural
+ * rather than hopeful: every caller talks to THIS module, the choice is made
+ * once at boot, and `e2e-logstore.js` runs the SAME 40 assertions against both
+ * in one process on every pull request. A behaviour that differs fails the
+ * build. That is the only reason a second store is affordable at all — remove
+ * the parity harness and this paragraph becomes wishful thinking.
  *
  * WHAT THIS MODULE MAY NOT BECOME: a query builder. Each method answers one
  * question the product actually asks. Adding a `where` parameter would move the
