@@ -10,6 +10,7 @@
  *   OPSCAT_URL          base URL of the OpsCat server         (--url)
  *   OPSCAT_AGENT_TOKEN  agent token (Bearer)                  (--token)
  *   OPSCAT_PROBE_KEY    synthetics probe key (Bearer)         (--probe-key)
+ *   OPSCAT_PROBE_CONCURRENCY  checks in flight at once, default 16 (--concurrency)
  *
  * Flags:
  *   --logs              ship journald logs to /v1/agents/logs
@@ -29,12 +30,38 @@ const dns = require('dns');
 const { execFile, spawn } = require('child_process');
 const readline = require('readline');
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.1';
 const HTTP_TIMEOUT_MS = 10000;
 const LOG_QUEUE_CAP = 2000;
 const LOG_BATCH = 100;
 const LOG_FLUSH_MS = 5000;
-const PROBE_POLL_MS = 30000;
+/* The work list is refreshed every 30 s, but due-ness is evaluated every 5 s —
+ * and those used to be the same number, which is why a 60 s check could run
+ * every 90 s. `due` is `now - last >= intervalS * 1000`, so on a 30 s grid a
+ * timer firing two milliseconds early misses the boundary and waits a whole
+ * further period. Measured, not theorised: docs/BENCHMARKS.md § 4.5.
+ *
+ * Splitting them costs nothing at the control plane — the list is cached
+ * between refreshes — and puts the granularity where the server's own
+ * scheduler has it (engine/synthetics.js ticks at 5 s). */
+const PROBE_LIST_MS = 30000;
+const PROBE_TICK_MS = 5000;
+/* 16, and the number came off a real node rather than a guess (BENCHMARKS
+ * §6.0.1). On the t3.small the fleet provisions, the pool trades throughput
+ * against the LATENCY THIS PRODUCT EXISTS TO REPORT, not against CPU — the box
+ * never passed 0.44 of its 2 cores at any setting. Against a target pinned at
+ * 150 ms, p50 measured 160 ms at 8, 164 ms at 16, 182 ms at 32 and 261 ms at
+ * 64: past 16, what is being reported as the site's latency is increasingly the
+ * agent's own queue.
+ *
+ * So 16 is where capacity is nearly free (+41% for +2% latency, ~1,900 →
+ * ~2,600 checks at a 60 s interval) and 32 is where it stops being. It also
+ * stays under the node class's sustained CPU allowance (0.23 of the 0.4 vCPU a
+ * t3.small holds without burning credits), which 32 does not.
+ *
+ * Deployed agents pick this up on their next self-update, so a change here is
+ * a change to every sensor in the field — measure before moving it again. */
+const PROBE_CONCURRENCY = 16;
 
 // --- config ----------------------------------------------------------------
 function parseArgs(argv) {
@@ -45,7 +72,7 @@ function parseArgs(argv) {
       const key = a.slice(2);
       const next = argv[i + 1];
       // boolean flags
-      if (['logs', 'probe', 'dry-run', 'help'].includes(key)) { out[key] = true; continue; }
+      if (['logs', 'probe', 'dry-run', 'help', 'no-auto-update'].includes(key)) { out[key] = true; continue; }
       if (next !== undefined && !next.startsWith('--')) { out[key] = next; i++; }
       else out[key] = true;
     } else {
@@ -67,6 +94,19 @@ const cfg = {
   diskPath: args['disk-path'] || '/',
   logs: !!args.logs,
   probe: !!args.probe,
+  /* How many checks may be in flight at once. The old loop was strictly
+   * sequential, which made one node's capacity `interval / per-check` — about
+   * 385 checks a minute against a site 50 ms away, while the box itself
+   * saturates at ~473 checks a SECOND (docs/BENCHMARKS.md § 6). The limit was
+   * the loop, not the hardware, and four agent processes on the same two cores
+   * multiplied throughput by exactly four. A pool does the same inside one
+   * process, with one probe key and one 90 MB heap instead of four. */
+  // Mirrors `agents.auto_update`, which defaults to 1: an agent we shipped keeps
+  // itself current unless the operator says otherwise.
+  autoUpdate: args['auto-update'] !== 'false' && args['no-auto-update'] !== true
+    && process.env.OPSCAT_AUTO_UPDATE !== '0',
+  concurrency: Math.max(1, Math.min(64,
+    parseInt(args.concurrency || process.env.OPSCAT_PROBE_CONCURRENCY, 10) || PROBE_CONCURRENCY)),
   dryRun: !!args['dry-run'],
 };
 
@@ -97,7 +137,7 @@ function withTimeout(promise, ms, label) {
 }
 
 // --- HTTP ------------------------------------------------------------------
-async function httpJson(method, path, token, body) {
+async function httpJson(method, path, token, body, extraHeaders) {
   const url = cfg.url + path;
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
@@ -106,14 +146,15 @@ async function httpJson(method, path, token, body) {
       method,
       headers: Object.assign(
         { 'Content-Type': 'application/json' },
-        token ? { Authorization: 'Bearer ' + token } : {}
+        token ? { Authorization: 'Bearer ' + token } : {},
+        extraHeaders || {}
       ),
       body: body != null ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
     let data = null;
     try { data = await res.json(); } catch (e) { /* non-JSON / empty */ }
-    return { ok: res.ok, status: res.status, data };
+    return { ok: res.ok, status: res.status, data, headers: res.headers };
   } finally {
     clearTimeout(to);
   }
@@ -399,44 +440,124 @@ function startProbe() {
   if (!cfg.probeKey) { logErr('probe', 'OPSCAT_PROBE_KEY not set; probe disabled'); return; }
   const run = () => { probeCycle().catch((e) => logErr('probe', (e && e.message) || String(e))); };
   run();
-  probeTimer = setInterval(run, PROBE_POLL_MS);
+  probeTimer = setInterval(run, PROBE_TICK_MS);
+}
+
+/* One cycle at a time. The three server engines all open with `if (running)
+ * return` and this did not, so a sweep longer than the poll interval overlapped
+ * itself: measured at 200 checks against a 150 ms target, the stub target saw
+ * two requests in flight from ONE process and served 730 where 600 were due.
+ * The overlapping pass re-runs checks, reports them twice, and adds load to a
+ * node that is already behind — the wrong direction for a box under pressure. */
+let probeRunning = false;
+let probeChecks = [];         // cached work list
+let probeListAt = 0;          // when it was last refreshed
+
+/* Self-update for a PROBE-ONLY sensor.
+ *
+ * `selfUpdate()` above needs an agent token: it is driven by the heartbeat, and
+ * a sensor has no token, so a provisioned node kept whatever agent cloud-init
+ * downloaded on the day it booted — forever, silently, with the fleet screen
+ * showing no version at all. The signal now rides on the work-list response
+ * (`X-OpsCat-Agent-Latest`) and the download has a probe-key route of its own.
+ *
+ * Same mechanics as the host-agent path once it has the script: write beside
+ * the file, rename over it, exit and let systemd bring the new one up. The
+ * plausibility guard is the same too — a truncated or unexpected payload is
+ * refused rather than installed. */
+async function selfUpdateProbe(latest) {
+  if (updating || !cfg.autoUpdate || !latest || latest === VERSION) return;
+  updating = true;
+  try {
+    const res = await fetch(cfg.url + '/v1/synthetics/agent', {
+      headers: { Authorization: 'Bearer ' + cfg.probeKey },
+    });
+    if (!res.ok) { logErr('update', 'HTTP ' + res.status); updating = false; return; }
+    const script = await res.text();
+    const m = /const VERSION = '([^']+)'/.exec(script);
+    if (!m || m[1] === VERSION || script.length < 10000) {
+      logErr('update', 'refusing update: implausible script payload');
+      updating = false;
+      return;
+    }
+    fs.writeFileSync(__filename + '.new', script, { mode: 0o755 });
+    fs.renameSync(__filename + '.new', __filename);
+    logInfo('self-update ' + VERSION + ' -> ' + m[1] + ' installed; exiting for restart');
+    setTimeout(() => process.exit(0), 300);
+  } catch (e) {
+    logErr('update', (e && e.message) || String(e));
+    updating = false;
+  }
 }
 
 async function probeCycle() {
-  let checks;
+  if (probeRunning) return;
+  probeRunning = true;
   try {
-    const r = await httpJson('GET', '/v1/synthetics/checks', cfg.probeKey, null);
-    if (!r.ok) { logErr('probe-fetch', 'HTTP ' + r.status); return; }
-    checks = Array.isArray(r.data) ? r.data : [];
-  } catch (e) {
-    logErr('probe-fetch', e && e.name === 'AbortError' ? 'timeout' : (e && e.message) || String(e));
-    return;
-  }
-
-  const nowMs = Date.now();
-  const due = checks.filter((c) => {
-    const last = probeState.get(c.id) || 0;
-    return nowMs - last >= (Number(c.intervalS) || 60) * 1000;
-  });
-
-  let results = [];
-  for (const c of due) {
-    probeState.set(c.id, Date.now());
-    let res;
-    try {
-      res = await runCheck(c);
-    } catch (e) {
-      res = { ok: false, meta: { error: String((e && e.message) || e).slice(0, 200) } };
+    const nowMs = Date.now();
+    if (nowMs - probeListAt >= PROBE_LIST_MS || !probeChecks.length) {
+      try {
+        const r = await httpJson('GET', '/v1/synthetics/checks', cfg.probeKey, null,
+          { 'X-OpsCat-Agent-Version': VERSION });
+        if (!r.ok) { logErr('probe-fetch', 'HTTP ' + r.status); return; }
+        probeChecks = Array.isArray(r.data) ? r.data : [];
+        probeListAt = Date.now();
+        // Fire and forget: an update replaces this process, and a failed one must
+        // never stop the checks from running.
+        const latest = r.headers && r.headers.get('x-opscat-agent-latest');
+        if (latest) selfUpdateProbe(latest).catch(() => {});
+      } catch (e) {
+        logErr('probe-fetch', e && e.name === 'AbortError' ? 'timeout' : (e && e.message) || String(e));
+        return;
+      }
     }
-    if (res == null) continue; // check skipped (e.g. traceroute binary missing)
-    results.push(Object.assign({ checkId: c.id, ts: Date.now() }, res));
-    if (results.length >= 200) { await reportResults(results); results = []; }
-  }
-  if (results.length) await reportResults(results);
+    const checks = probeChecks;
 
-  // forget state for checks that no longer exist
-  const ids = new Set(checks.map((c) => c.id));
-  for (const id of Array.from(probeState.keys())) if (!ids.has(id)) probeState.delete(id);
+    const due = checks.filter((c) => {
+      const last = probeState.get(c.id) || 0;
+      return Date.now() - last >= (Number(c.intervalS) || 60) * 1000;
+    });
+
+    /* A bounded pool, not a sequential loop and not `Promise.all` over
+     * everything: a node with 500 checks must not open 500 sockets at once, and
+     * one with 5 must not wait for them one at a time. Results are reported in
+     * batches of 200 — the server's per-request cap — as they accumulate. */
+    let results = [];
+    const queue = due.slice();
+    const flush = async () => {
+      if (!results.length) return;
+      const batch = results;
+      results = [];
+      await reportResults(batch);
+    };
+    const worker = async () => {
+      for (;;) {
+        const c = queue.shift();
+        if (!c) return;
+        probeState.set(c.id, Date.now());
+        let res;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          res = await runCheck(c);
+        } catch (e) {
+          res = { ok: false, meta: { error: String((e && e.message) || e).slice(0, 200) } };
+        }
+        if (res == null) continue; // check skipped (e.g. traceroute binary missing)
+        results.push(Object.assign({ checkId: c.id, ts: Date.now() }, res));
+        // eslint-disable-next-line no-await-in-loop
+        if (results.length >= 200) await flush();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(cfg.concurrency, Math.max(1, queue.length)) },
+      () => worker()));
+    await flush();
+
+    // forget state for checks that no longer exist
+    const ids = new Set(checks.map((c) => c.id));
+    for (const id of Array.from(probeState.keys())) if (!ids.has(id)) probeState.delete(id);
+  } finally {
+    probeRunning = false;
+  }
 }
 
 async function reportResults(results) {
@@ -446,7 +567,7 @@ async function reportResults(results) {
 function runCheck(c) {
   const timeoutMs = Math.max(1000, Number(c.timeoutMs) || 5000);
   switch (c.type) {
-    case 'http': return checkHttp(c.target, timeoutMs);
+    case 'http': return checkHttp(c.target, timeoutMs, c.userAgent);
     case 'icmp': return checkIcmp(c.target, timeoutMs);
     case 'dns': return checkDns(c.target, timeoutMs);
     case 'tcp': return checkTcp(c.target, timeoutMs);
@@ -455,12 +576,21 @@ function runCheck(c) {
   }
 }
 
-async function checkHttp(target, timeoutMs) {
+async function checkHttp(target, timeoutMs, userAgent) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   const start = process.hrtime.bigint();
   try {
-    const res = await fetch(target, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
+    /* `redirect: 'manual'` and the server-supplied User-Agent, so a sensor and
+     * the cloud probe measure the SAME thing. This used to follow redirects and
+     * send Node's default `node`, which meant a check could pass from one
+     * location and fail from another for reasons that had nothing to do with
+     * the target being up. A 3xx counts as reachable — that is the health
+     * signal — and is not followed. */
+    const res = await fetch(target, {
+      method: 'GET', redirect: 'manual', signal: ctrl.signal,
+      headers: { 'User-Agent': userAgent || 'OpsCat-Synthetics/1.0' },
+    });
     const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
     // drain body so the socket can be reused/closed
     try { await res.arrayBuffer(); } catch (e) { /* ignore */ }
@@ -597,6 +727,8 @@ function printHelp() {
     '  --probe-key <key>    probe key (overrides OPSCAT_PROBE_KEY)',
     '  --logs               ship journald logs to /v1/agents/logs',
     '  --probe              run synthetic checks (needs a probe key)',
+    '  --concurrency <n>    checks in flight at once (default 16, max 64)',
+    '  --no-auto-update     do not replace this script when the server has a newer one',
     '  --interval <sec>     metrics/heartbeat interval (default 60)',
     '  --disk-path <path>   filesystem to report disk usage for (default /)',
     '  --dry-run            collect metrics once, print JSON, exit',

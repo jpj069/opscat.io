@@ -23,6 +23,15 @@
  * was, character for character, identical. Sharing the string is not sharing the
  * geometry; only a content-independent track gives you that.
  *
+ * THIRD rule, cheapest and the one that shipped a visible defect: an inline
+ * `gridTemplateColumns` on an element that is not a grid. The property is dead
+ * CSS — the children lay themselves out inline — and nothing about the JSX looks
+ * wrong, which is why it survived review twice on Platform › Managed Fleet (the
+ * details block rendered "RegionNorth America") and in three more places where
+ * KPI cards silently stopped being a responsive grid. Either the style object
+ * carries `display: 'grid'`, or the element's className does (`tbl-row`,
+ * `detail-list`, …) — otherwise the track list is doing nothing.
+ *
  * Runs in `npm run check:ui`, therefore in the build, therefore in the deploy.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -82,6 +91,25 @@ for (const f of files) {
     if (exempt) continue;
     findings.push(`${f.replace(SRC, 'src/')}:${line}  ${name} has no flexible track — `
       + `"${value}"\n      compose from COL (ui.tsx), or add a "grid-exempt ${name}: <why>" comment`);
+  }
+}
+
+// Rule 3: a track list on something that is not a grid.
+const GRID_CLASSES = /\b(tbl-row|tbl-head|detail-list|grid)\b/;   // classes that supply display:grid
+for (const f of files) {
+  const src = readFileSync(f, 'utf8');
+  for (const m of src.matchAll(/style=\{\{([\s\S]*?)\}\}/g)) {
+    const body = m[1];
+    if (!/gridTemplateColumns/.test(body)) continue;
+    if (/display:\s*['"]grid['"]/.test(body)) continue;
+    // the className on the same element may be what makes it a grid
+    const tagStart = src.lastIndexOf('<', m.index);
+    const cls = src.slice(tagStart, m.index).match(/className="([^"]*)"/);
+    if (cls && GRID_CLASSES.test(cls[1])) continue;
+    const line = src.slice(0, m.index).split('\n').length;
+    findings.push(`${f.replace(SRC, 'src/')}:${line}  gridTemplateColumns on an element that is `
+      + `NOT a grid\n      — add display: 'grid' (or use DetailList/TableScroll). As written the `
+      + `property is dead CSS and the children lay out inline.`);
   }
 }
 

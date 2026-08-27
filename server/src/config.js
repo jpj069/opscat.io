@@ -63,6 +63,52 @@ module.exports = {
     pass: process.env.SMTP_PASS || null,
   },
   baseUrl: process.env.OPSCAT_BASE_URL || 'https://opscat.io',
+
+  // --- The managed syslog endpoint (stage 2) --------------------------------
+  //
+  // Where a customer's relay sends when they run NO collector of their own.
+  // Empty disables the managed flavour outright: the snippets are then simply
+  // not offered, which is the honest answer for a self-hosted instance that has
+  // not put a gateway anywhere. Defaulting it to `syslog.<apex>` would print a
+  // hostname that resolves to nothing on every community install.
+  syslogHost: (process.env.OPSCAT_SYSLOG_HOST || '').trim().toLowerCase(),
+  syslogPort: int(process.env.OPSCAT_SYSLOG_PORT, 6514),
+  /* The private enterprise number in the structured-data element that carries
+   * the tenant's key: `[opscat@<PEN> token="ocl_…"]`. RFC 5424 §7.2 requires a
+   * custom SD-ID to be `name@<PEN>`, and ours is applied for but not yet
+   * assigned — so the default is **0**, which IANA lists as Reserved and can
+   * therefore never be another organisation's. Printing a plausible-looking
+   * number we do not own would put somebody else's identifier into customer
+   * configuration files.
+   *
+   * Changing it later is free by construction: the gateway matches the SD
+   * element by NAME and ignores the number (`syslog.js` § sdParamAny), so every
+   * relay configured before the assignment keeps working untouched. */
+  syslogPen: (process.env.OPSCAT_SYSLOG_PEN || '0').trim(),
+
+  /* --- The syslog tunnel (stage 3) -----------------------------------------
+   *
+   * WireGuard, and the point of it is that plain UDP becomes attributable: the
+   * kernel will not carry a packet whose source is not in the sending peer's
+   * AllowedIPs, so the inner address IS the tenant and no token has to travel
+   * in the message. That is what makes an appliance which can only speak
+   * UDP/514 reachable at all.
+   *
+   * All three are required together and the mode is refused unless all three
+   * are set — an inner network with no endpoint to reach it, or an endpoint
+   * with no public key to trust, is a configuration that renders a snippet
+   * nobody can use. */
+  tunnelNet: (process.env.OPSCAT_TUNNEL_NET || '').trim(),
+  tunnelEndpoint: (process.env.OPSCAT_TUNNEL_ENDPOINT || '').trim(),
+  // OUR public key. The private half never leaves the gateway container, and
+  // nothing in the app has any use for it.
+  tunnelPubkey: (process.env.OPSCAT_TUNNEL_PUBKEY || '').trim(),
+  /* Shared with the gateway container by compose, exactly like
+   * CLICKHOUSE_PASSWORD — this is infrastructure configuration, not a tenant
+   * credential, and it has no place in a table or a UI. Unset means `/v1/tunnel/*`
+   * answers 404: an instance running no gateway should look like one that has
+   * never heard of the feature, rather than advertise a door it keeps locked. */
+  tunnelGatewayKey: (process.env.OPSCAT_TUNNEL_GATEWAY_KEY || '').trim(),
   // The contact a push service uses if our sends start misbehaving (VAPID
   // `sub`). It must be a real mailbox; lib/webpush.js falls back to
   // ops@<baseUrl host> so a fresh install is not broken by an unset variable.

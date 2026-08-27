@@ -64,9 +64,11 @@ services:
       # faster (docs/BENCHMARKS.md § 5).
       #
       # THE PRICE IS MEMORY AND IT IS STATED RATHER THAN HIDDEN: the stack ran
-      # at ~400 MB with Postgres alone and runs at ~750 MB with ClickHouse
-      # beside it, budget 1 GB once its caches fill. Both databases are capped
-      # by `mem_limit` below, so the worst case is bounded rather than a
+      # at ~400 MB with Postgres alone and SETTLES at ~870 MB with ClickHouse
+      # beside it — measured after days of traffic, not seconds after boot,
+      # which is a 150 MB difference because ClickHouse grows into its caches
+      # (docs/BENCHMARKS.md § 5.7.4). Both databases are capped by `mem_limit`
+      # below — 1g and 1.5g — so the worst case is bounded rather than a
       # surprise on a small box.
       #
       # UPGRADING AN EXISTING INSTALL? Read the note at the top of this file.
@@ -85,6 +87,23 @@ services:
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-opscat}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env — e.g. openssl rand -hex 24}
       - OPSCAT_BASE_URL=${OPSCAT_BASE_URL:-http://localhost}
+      # The managed syslog endpoint. Listed here so the variable is not silently
+      # dropped by compose (the OPSCAT_GRID_PUBLISHED precedent), but left EMPTY
+      # on purpose: a self-hosted stack has no gateway unless its operator runs
+      # one, and an empty value means the mode is simply not offered rather than
+      # printing a hostname that resolves to nothing. Point it at your own
+      # `collector/Dockerfile` image started with OPSCAT_GATEWAY=1 to enable it.
+      - OPSCAT_SYSLOG_HOST=${OPSCAT_SYSLOG_HOST:-}
+      - OPSCAT_SYSLOG_PORT=${OPSCAT_SYSLOG_PORT:-6514}
+      - OPSCAT_SYSLOG_PEN=${OPSCAT_SYSLOG_PEN:-0}
+      # The WireGuard tunnel (stage 3). Same story as the managed endpoint above:
+      # listed so compose does not silently drop them, empty by default because
+      # a self-hosted stack has no tunnel gateway until its operator runs one.
+      # `collector/Dockerfile` with --build-arg WITH_WIREGUARD=1 is that gateway.
+      - OPSCAT_TUNNEL_NET=${OPSCAT_TUNNEL_NET:-}
+      - OPSCAT_TUNNEL_ENDPOINT=${OPSCAT_TUNNEL_ENDPOINT:-}
+      - OPSCAT_TUNNEL_PUBKEY=${OPSCAT_TUNNEL_PUBKEY:-}
+      - OPSCAT_TUNNEL_GATEWAY_KEY=${OPSCAT_TUNNEL_GATEWAY_KEY:-}
       - OPSCAT_ADMIN_EMAIL=${OPSCAT_ADMIN_EMAIL:-}
       - OPSCAT_ALERT_FROM=${OPSCAT_ALERT_FROM:-}
       - OPSCAT_AUTH_FROM=${OPSCAT_AUTH_FROM:-}

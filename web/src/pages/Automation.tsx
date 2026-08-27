@@ -3,9 +3,9 @@
 // event), case auto-assign, outbound webhooks. Every run is audited.
 import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import { useApp } from '../state';
+import { useApp, useOverlayParam } from '../state';
 import { SEV } from '../format';
-import { Card, Button, Modal, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput, COL} from '../ui';
+import { Card, Button, Flyout, Field, Toggle, TableScroll, TableSkeleton, ListSkeleton, PageHeader, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import {
   PlusIcon,
@@ -43,7 +43,10 @@ export default function Automation() {
   const [rows, setRows] = useState<AutomationRow[] | null>(null);
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [team, setTeam] = useState<TeamMember[]>([]);
-  const [editing, setEditing] = useState<AutomationRow | 'new' | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [editId, setEditId] = useOverlayParam('automation');
+  // Derived from the loaded list: a deep link arrives with an id and no row yet.
+  const editing = rows?.find((r) => r.id === editId) ?? null;
 
   const load = () => {
     api.get<AutomationRow[]>('/api/admin/automations').then(setRows).catch(() => setRows([]));
@@ -57,7 +60,7 @@ export default function Automation() {
   return (
     <div className="page">
       <PageHeader title="Automation">
-        {canEdit && <Button size="sm" onClick={() => setEditing('new')}><PlusIcon size={13} /> New automation</Button>}
+        {canEdit && <Button size="sm" onClick={() => setCreating(true)}><PlusIcon size={13} /> New automation</Button>}
       </PageHeader>
 
       <Card>
@@ -79,7 +82,7 @@ export default function Automation() {
           )}
           {rows?.map((r) => (
             <div key={r.id} className="tbl-row" style={{ padding: 'var(--row-py) 0' }}>
-              <button onClick={canEdit ? () => setEditing(r) : undefined} title={canEdit ? 'Edit' : undefined}
+              <button onClick={canEdit ? () => setEditId(r.id) : undefined} title={canEdit ? 'Edit' : undefined}
                 className="text-sm text-text0 font-semibold" style={{ textAlign: 'left',
                   cursor: canEdit ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap' }}>{r.name}</button>
@@ -127,9 +130,10 @@ export default function Automation() {
         ))}
       </Card>
 
-      {editing && (
-        <EditModal existing={editing === 'new' ? null : editing} team={team}
-          onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
+      {(creating || editing) && (
+        <EditModal existing={editing} team={team}
+          onClose={() => { setCreating(false); setEditId(null); }}
+          onSaved={() => { setCreating(false); setEditId(null); load(); }} />
       )}
     </div>
   );
@@ -175,7 +179,7 @@ function EditModal({ existing, team, onClose, onSaved }: {
   };
 
   return (
-    <Modal title={existing ? 'Edit automation' : 'New automation'} onClose={onClose} width={520}>
+    <Flyout title={existing ? existing.name : 'New automation'} onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name">
           <Input required value={name} onChange={(e) => setName(e.target.value)}
@@ -260,6 +264,6 @@ function EditModal({ existing, team, onClose, onSaved }: {
         <Button variant="primary" block
  disabled={busy}>{busy ? '…' : existing ? 'Save changes' : 'Create automation'}</Button>
       </form>
-    </Modal>
+    </Flyout>
   );
 }

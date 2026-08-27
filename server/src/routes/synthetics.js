@@ -3,14 +3,17 @@
 // (self-hosted, BYO-cloud, managed bookings), cloud credentials, checks and
 // results. Concept: docs/SENSOR-AGENTS.md.
 const express = require('express');
-const crypto = require('crypto');
 const q = require('../db/shim');
 const config = require('../config');
 const { now, sha256, isStr, clampInt, httpError, encrypt, decrypt } = require('../util');
 const sec = require('../security');
+const tokens = require('../lib/tokens');
 const synthEngine = require('../engine/synthetics');
 const plans = require('../plans');
 const providers = require('../providers');
+const { sshAccessFor } = require('../lib/sshaccess');
+const { validateUserAgent, resolveUserAgent } = require('../lib/useragent');
+const { getOrgSetting } = require('../db');
 
 const router = express.Router();
 router.use(sec.requireSessionOrToken);
@@ -43,7 +46,7 @@ router.get('/locations', async (req, res) => {
   res.json(rows.map((l) => ({
     id: l.id, city: l.city, cc: l.cc, kind: l.kind, region: l.region,
     isPremium: !!l.is_premium, booked: !!l.booked,
-    provider: l.provider, nodeStatus: l.node_status || null,
+    provider: l.provider, nodeStatus: l.node_status || null, lastIp: l.last_ip || null,
     online: l.kind === 'local' || (!!l.last_seen_at && t - l.last_seen_at < 5 * 60 * 1000),
   })));
 });
@@ -52,7 +55,7 @@ router.get('/locations', async (req, res) => {
 router.post('/locations', sec.requireRole('lead'), async (req, res) => {
   const { city, cc, region } = req.body || {};
   if (!isStr(city, 80) || !isStr(cc, 2)) return httpError(res, 400, 'city and cc required');
-  const probeKey = 'ocp_' + crypto.randomBytes(24).toString('hex');
+  const probeKey = tokens.mint('sensorKey');
   // insert() rather than run().lastInsertRowid: better-sqlite3 reports one and
   // node-postgres has no such field, so the shim uses RETURNING id on both.
   const id = await q.prepare(`INSERT INTO synthetic_locations
@@ -75,7 +78,7 @@ router.post('/locations/provision', sec.requireRole('lead'), async (req, res) =>
     .get(clampInt(credentialId, 1, 1e9, 0), req.orgId);
   if (!cred || cred.provider !== pk) return httpError(res, 400, 'credential not found for this provider — add it first');
   const cap = config.sensorNodeCapPerOrg;
-  const probeKey = 'ocp_' + crypto.randomBytes(24).toString('hex');
+  const probeKey = tokens.mint('sensorKey');
   const t = now();
   // The node row goes FIRST so the location can be written with `node_id`
   // already set — which is what lets the cap and the write that consumes it be
@@ -108,14 +111,37 @@ router.post('/locations/provision', sec.requireRole('lead'), async (req, res) =>
 
   try {
     const secret = JSON.parse(decrypt(cred.key_enc, config.secret));
-    const userData = providers.renderCloudInit({ opscatUrl: config.baseUrl, probeKey });
+    // Break-glass SSH, opt-in per org (docs/SENSOR-AGENTS.md §11). `sshAccessFor`
+    // throws on a half-configured pair — a key with no source range, or ranges
+    // with no key — rather than silently provisioning an unreachable box or an
+    // open one. getOrgSetting is SYNCHRONOUS and must stay that way; it answers
+    // from the boot cache.
+    const ssh = sshAccessFor(getOrgSetting, req.orgId);
+    // The inbound rule is created BEFORE the instance: a node that boots with a
+    // key nobody can reach is the failure this feature exists to remove, and
+    // failing here rolls the whole provision back below.
+    const securityGroupId = ssh
+      ? await providers.provider(pk).ensureSshAccess(secret, { region: code, cidrs: ssh.cidrs })
+      : null;
+    const userData = providers.renderCloudInit({
+      opscatUrl: config.baseUrl, probeKey, sshKey: ssh ? ssh.sshKey : null });
     const created = await providers.provider(pk).createInstance(secret, {
       region: code, instanceType: providers.instanceType(pk, cls), userData, locationId,
+      securityGroupId,
     });
+    if (ssh) sec.audit(req.user.id, 'sensor_ssh_enabled', `${pk} ${code} ${entry.city}`, req.orgId);
     await q.prepare('UPDATE sensor_nodes SET provider_instance_id = ? WHERE id = ?')
       .run(created.providerInstanceId, nodeId);
     await q.prepare('UPDATE synthetic_locations SET provider_ref = ? WHERE id = ?')
       .run(created.providerInstanceId, locationId);
+    // Remember WHERE we launched, for the orphan sweeper. It must not be derived
+    // from `sensor_nodes` later: that table is what the sweeper deletes from, so
+    // the last node leaving a region would take the region off its list and let
+    // an orphan there bill forever. Written after the launch succeeded, because
+    // an instance that was never created cannot be orphaned.
+    await q.prepare(`INSERT INTO cloud_regions_used (credential_id, region, first_used_at)
+      VALUES (?, ?, ?) ON CONFLICT (credential_id, region) DO NOTHING`).run(cred.id, code, now());
+
     await q.prepare('UPDATE cloud_credentials SET last_used_at = ? WHERE id = ?').run(now(), cred.id);
     res.json({ id: locationId, status: 'provisioning' });
   } catch (e) {
@@ -259,10 +285,31 @@ function cleanAssertions(a) {
   return Object.keys(out).length ? JSON.stringify(out) : null;
 }
 
-// Validate + persist the check→location assignment. undefined/empty = all
-// agents incl. future ones (no rows). Only accessible locations are accepted.
+// Everything this org can actually run a check from RIGHT NOW: what it owns,
+// plus the managed locations it has booked. Deliberately narrower than the
+// /locations list, which also returns unbooked managed locations (flagged) so
+// the UI can offer them.
+const runnableLocations = q.prepare(`SELECT l.id FROM synthetic_locations l
+  WHERE l.active = 1 AND (l.org_id = ?
+    OR (l.kind = 'managed' AND l.visible = 1
+        AND EXISTS (SELECT 1 FROM org_location_access a
+                     WHERE a.org_id = ? AND a.location_id = l.id)))`);
+
+// Validate + persist the check→location assignment. Only accessible locations
+// are accepted; `undefined` means "do not touch" (PATCH partial semantics).
+//
+// An EMPTY array is "all agents", and it is written out as real rows for the
+// fleet that exists at this moment. It used to be stored as no rows at all,
+// which `runsOnLocation()` reads as "anywhere" — so booking a managed sensor
+// attached every check in the org to it: a node on another continent starts
+// costing money, and every uptime and latency series quietly gains a sampler,
+// with nobody having clicked anything. Migration 034 backfills the checks that
+// predate this.
 async function setCheckLocations(req, checkId, locationIds) {
   if (!Array.isArray(locationIds)) return;
+  if (!locationIds.length) {
+    locationIds = (await runnableLocations.all(req.orgId, req.orgId)).map((r) => r.id);
+  }
   await q.prepare('DELETE FROM check_locations WHERE check_id = ?').run(checkId);
   const ins = q.prepare('INSERT INTO check_locations (check_id, location_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
   for (const raw of locationIds.slice(0, 200)) {
@@ -288,25 +335,33 @@ router.get('/checks', async (req, res) => {
     return { id: c.id, type: c.type, target: c.target, intervalS: c.interval_s,
       timeoutMs: c.timeout_ms, enabled: !!c.enabled, passing: !failing, locations: Math.max(locs, 1),
       locationIds: (await locIds.all(c.id)).map((r) => r.location_id),
-      assertions: c.assertions ? JSON.parse(c.assertions) : null };
+      assertions: c.assertions ? JSON.parse(c.assertions) : null,
+      userAgent: c.user_agent || null,
+      // What the check ACTUALLY sends, after the org default and ours. The form
+      // shows it beside the field, because "empty" is not the same as "none".
+      effectiveUserAgent: c.type === 'http'
+        ? resolveUserAgent(c.user_agent, getOrgSetting(req.orgId, 'synthetic_user_agent', '')) : null };
   })));
 });
 
 router.post('/checks', sec.requireRole('lead'), async (req, res) => {
-  const { type, target, intervalS, timeoutMs, assertions, locationIds } = req.body || {};
+  const { type, target, intervalS, timeoutMs, assertions, locationIds, userAgent } = req.body || {};
   if (!['http', 'icmp', 'dns', 'tcp', 'traceroute'].includes(type)) return httpError(res, 400, 'bad type');
   if (!isStr(target, 300)) return httpError(res, 400, 'target required');
+  let ua = null;
+  try { ua = type === 'http' ? validateUserAgent(userAgent) : null; }
+  catch (e) { return httpError(res, 400, e.message); }
   const minIv = plans.minIntervalFor(req.org.plan); // plan-dependent cadence floor
   // The `checks` budget spans synthetic_checks AND reputation_assets, and both
   // counts live in the WHERE of this one statement — so two simultaneous
   // creations at 24 of 25 cannot both be told they are the twenty-fifth.
   const r = await plans.insertWithinLimit(req.orgId, req.org.plan, 'checks',
     `INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms,
-       enabled, assertions, created_at)
-     SELECT ?, ?, ?, ?, ?, 1, ?, ?`,
+       enabled, assertions, user_agent, created_at)
+     SELECT ?, ?, ?, ?, ?, 1, ?, ?, ?`,
     [req.orgId, type, target, clampInt(intervalS, minIv, 3600, Math.max(60, minIv)),
       clampInt(timeoutMs, 500, 60000, 5000),
-      type === 'http' ? cleanAssertions(assertions) : null, now()],
+      type === 'http' ? cleanAssertions(assertions) : null, ua, now()],
     '', { returningId: true });
   if (r.refused) return planLimitError(res, 'checks', r);
   // `RETURNING id` from the same statement that did the insert, not
@@ -323,13 +378,20 @@ router.patch('/checks/:id', sec.requireRole('lead'), async (req, res) => {
   if (!c) return httpError(res, 404, 'check not found');
   const b = req.body || {};
   const minIv = plans.minIntervalFor(req.org.plan);
+  let uaPatch = null;
+  try { uaPatch = b.userAgent !== undefined ? validateUserAgent(b.userAgent) : null; }
+  catch (e) { return httpError(res, 400, e.message); }
+  // Same CASE WHEN shape as `assertions`: sending the field sets it (an empty
+  // string clears it back to the default), omitting it leaves it alone.
   await q.prepare(`UPDATE synthetic_checks SET target = COALESCE(?, target),
       interval_s = COALESCE(?, interval_s), enabled = COALESCE(?, enabled),
-      assertions = CASE WHEN ? THEN ? ELSE assertions END WHERE id = ? AND org_id = ?`)
+      assertions = CASE WHEN ? THEN ? ELSE assertions END,
+      user_agent = CASE WHEN ? THEN ? ELSE user_agent END WHERE id = ? AND org_id = ?`)
     .run(isStr(b.target, 300) ? b.target : null,
       Number.isFinite(b.intervalS) ? clampInt(b.intervalS, minIv, 3600, Math.max(60, minIv)) : null,
       typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
       b.assertions !== undefined && c.type === 'http' ? 1 : 0, cleanAssertions(b.assertions),
+      b.userAgent !== undefined && c.type === 'http' ? 1 : 0, uaPatch,
       c.id, req.orgId);
   if (b.locationIds !== undefined) await setCheckLocations(req, c.id, b.locationIds);
   sec.audit(req.user.id, 'check_update', `check ${c.id}`, req.orgId);

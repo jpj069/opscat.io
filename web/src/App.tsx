@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { api, ApiError } from './api';
 import { useApp, type PageId } from './state';
 import { SEV, alpha, sevColor, age, fmtTime, fmtHistory, initials, logSevColor } from './format';
-import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Tabs, Input, Textarea} from './ui';
+import { Card, Button, Avatar, BrandMark, GlowDot, Modal, SevBadge, Spark, Field, Skeleton, Busy, Tabs, Input, Textarea, ImpersonationBar} from './ui';
 import { GoogleIcon, MicrosoftIcon, GitHubIcon } from './icons';
 import { topLayer } from './toplayer';
 import {
@@ -46,7 +46,7 @@ import {
   ZapIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { CaseRow, EventDetail, User } from './types';
+import type { CaseRow, EventDetail, User, Impersonating } from './types';
 import Monitor from './pages/Monitor';
 import Classic from './pages/Classic';
 import Dashboard from './pages/Dashboard';
@@ -169,8 +169,8 @@ export default function App() {
   const [booting, setBooting] = useState(true);
 
   useEffect(() => {
-    api.get<{ user: User; csrf: string }>('/api/auth/me')
-      .then((r) => app.setUser(r.user, r.csrf))
+    api.get<{ user: User; csrf: string; impersonating?: Impersonating }>('/api/auth/me')
+      .then((r) => app.setUser(r.user, r.csrf, r.impersonating ?? null))
       .catch(() => {})
       .finally(() => setBooting(false));
   }, []);
@@ -376,6 +376,7 @@ function Shell() {
   const [drawer, setDrawer] = useState(false); // phone: sidebar as slide-in drawer
   const [showPalette, setShowPalette] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [leaving, setLeaving] = useState(false); // returning to the platform account
   // Forced when an admin issued a password that is out there in a chat somewhere;
   // merely offered right after an activation link, where no such secret exists.
   const [showPwModal, setShowPwModal] = useState(() => {
@@ -431,6 +432,16 @@ function Shell() {
 
   return (
     <div className="shell">
+      {/* Above everything, including the rail: an operator must see this before
+          they see anything they might act on. */}
+      {app.impersonating && (
+        <ImpersonationBar
+          email={app.impersonating.operator ? app.user?.email ?? null : null}
+          org={app.impersonating.org}
+          canReturn={app.impersonating.canReturn}
+          busy={leaving}
+          onReturn={() => { setLeaving(true); app.stopImpersonating().catch(() => setLeaving(false)); }} />
+      )}
       {/* sidebar — on phones a slide-in drawer (.shell-rail in tokens.css) */}
       {drawer && <div className="overlay-dim" onClick={() => setDrawer(false)} />}
       <aside className={`shell-rail ${drawer ? 'open' : ''}`}
@@ -697,9 +708,7 @@ function Palette({ onClose }: { onClose: () => void }) {
       <div className="overlay-dim" onClick={onClose} />
       <div className="palette">
         <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Search pages, events, cases…"
-          style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--bg3)',
-            borderRadius: 0, background: 'transparent', padding: '12px 16px', fontSize: 'var(--t-md)' }} />
+          placeholder="Search pages, events, cases…" />
         <div style={{ maxHeight: 380, overflowY: 'auto', padding: 6 }}>
           {!q && <div className="micro text-2xs" style={{ padding: '6px 10px'}}>PAGES</div>}
           {navHits.map((n) => (

@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useOverlayParam } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, relTime, fmtDateTime } from '../format';
-import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput, Skeleton, Tabs, COL} from '../ui';
+import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, Input, HostInput, Skeleton, Tabs, Flyout, COL} from '../ui';
 import { Select } from '../Select';
 import {
   CheckIcon,
@@ -304,17 +304,13 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
   };
 
   return (
-    <Modal title={detail.name} onClose={onClose} width={520}>
-      <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <StatusPill text={ui.label} color={ui.color} />
-        <span className="mono text-xs text-text3">
-          checked {detail.lastCheckedAt ? relTime(detail.lastCheckedAt) : 'never'} · every {detail.intervalS}s</span>
-        {detail.pageUrl && (
-          <a href={detail.pageUrl} target="_blank" rel="noreferrer" className="row text-xs"
-            style={{ gap: 4, color: SEV.low }}>
-            status page <ExternalLinkIcon size={11} /></a>
-        )}
-      </div>
+    <Flyout title={detail.name} onClose={onClose} badges={<StatusPill text={ui.label} color={ui.color} />}
+      sub={`checked ${detail.lastCheckedAt ? relTime(detail.lastCheckedAt) : 'never'} · every ${detail.intervalS}s`}
+      actions={detail.pageUrl ? (
+        <a href={detail.pageUrl} target="_blank" rel="noreferrer" className="row text-xs"
+          style={{ gap: 4, color: SEV.low }}>
+          status page <ExternalLinkIcon size={11} /></a>
+      ) : undefined}>
       {detail.lastError && (
         <div className="mono text-sm" style={{ color: SEV.critical, marginBottom: 10 }}>
           feed error: {detail.lastError}</div>
@@ -383,6 +379,6 @@ function VendorDetailModal({ id, canEdit, onClose, onChanged }:
           </div>
         ))}
       </div>
-    </Modal>
+    </Flyout>
   );
 }

@@ -40,6 +40,12 @@
  *     is now a WHERE clause in two. `e2e-tenancy` guards the Postgres one; a
  *     foreign org's lines leaking through ClickHouse search would be a 200 with
  *     no log line, which is the exact failure shape that file was written for.
+ *   • THE ORPHANED POSTGRES ROWS. Switching the store on leaves whatever `logs`
+ *     already held behind, and the retention sweep stopped being able to see it
+ *     — it calls `purge`, and `purge` answers from ClickHouse. So the seam
+ *     sweeps both, and the six checks at the end of section 2 pin that it
+ *     honours the cutoff, stays scoped to one tenant, and then DISABLES itself
+ *     rather than issuing a DELETE per org forever.
  *
  * Port 3163.  cd server && node run-e2e.js logstore
  */
@@ -78,7 +84,7 @@ process.env.OPSCAT_SECRET = 'e2e-logstore-secret';
 delete process.env.RESEND_API_KEY;
 delete process.env.SMTP_HOST;
 
-const { chk, report, die, onExit } = require('./e2e-lib').harness();
+const { chk, report, die, onExit, count } = require('./e2e-lib').harness();
 
 const BASE = `http://127.0.0.1:${PORT}`;
 const ORG_A = require('./src/util').DEFAULT_ORG_ID;
@@ -106,18 +112,23 @@ async function parity(store, label, settle) {
   const org = newId();
   const other = newId();
   const T = Date.UTC(2026, 7, 17, 12, 0, 0);
-  const line = (n, dev, txt, sev, ts) => ({
-    orgId: n, ts, device: dev, line: txt, sev, source: 'e2e', meta: null,
+  const line = (n, dev, txt, sev, ts, source = 'e2e') => ({
+    orgId: n, ts, device: dev, line: txt, sev, source, meta: null,
   });
 
   await store.insert([
-    line(org, 'core-switch-01', 'BGP neighbor 10.0.0.1 Down - hold time expired', 3, T),
-    line(org, 'core-switch-01', 'connection to 10.0.0.2 TIMEOUT after 5000ms', 4, T + 1000),
-    line(org, 'edge-router-01', 'sshd: Accepted publickey for noc', 6, T + 2000),
+    /* `core-switch-01` deliberately arrives on TWO sources at different times.
+     * `lastSeenByDevice` has to report the newest one, and the two stores get
+     * there by different means — ClickHouse has `argMax`, Postgres does not and
+     * uses an ordered aggregate — so a fixture with one source per device would
+     * let either of them return anything and still pass. */
+    line(org, 'core-switch-01', 'BGP neighbor 10.0.0.1 Down - hold time expired', 3, T, 'site-a'),
+    line(org, 'core-switch-01', 'connection to 10.0.0.2 TIMEOUT after 5000ms', 4, T + 1000, 'site-b'),
+    line(org, 'edge-router-01', 'sshd: Accepted publickey for noc', 6, T + 2000, 'site-a'),
     // a second UTC day, so the bucket fold has something to fold
-    line(org, 'edge-router-01', 'kernel: bond0 link is down', 2, T + 86400000),
+    line(org, 'edge-router-01', 'kernel: bond0 link is down', 2, T + 86400000, 'site-a'),
     // a different tenant's line, present in every query below and welcome in none
-    line(other, 'foreign-device', 'FOREIGN tenant isolation probe TIMEOUT', 6, T + 3000),
+    line(other, 'foreign-device', 'FOREIGN tenant isolation probe TIMEOUT', 6, T + 3000, 'site-a'),
   ]);
   await settle();
 
@@ -144,7 +155,8 @@ async function parity(store, label, settle) {
   chk(`[${label}] ts comes back as a NUMBER, not a string`, typeof all[0].ts === 'number',
     `got ${typeof all[0].ts}`);
   chk(`[${label}] sev comes back as a NUMBER`, typeof all[0].sev === 'number');
-  chk(`[${label}] the row carries source`, all[0].source === 'e2e');
+  chk(`[${label}] the row carries the source it was written with`,
+    all[0].source === 'site-a', all[0].source);
 
   /* Case-insensitive by CONTRACT. Postgres reaches it with lower()/LIKE and
    * ClickHouse with ILIKE; the stored text is upper-case TIMEOUT and the term
@@ -191,6 +203,37 @@ async function parity(store, label, settle) {
     JSON.stringify([...m]));
   chk(`[${label}] lastSeenByDevice is org-scoped`, !m.has('foreign-device'));
   chk(`[${label}] lastSeenByDevice ls is a NUMBER`, typeof seen[0].ls === 'number');
+  /* The source is what Assets uses to answer "which site is this device behind?",
+   * and it has to be the NEWEST line's — a device that moved from one relay to
+   * another must read as the one it is on now. */
+  const src = new Map(seen.map((r) => [r.device, r.source]));
+  chk(`[${label}] lastSeenByDevice reports the NEWEST line's source`,
+    src.get('core-switch-01') === 'site-b', JSON.stringify([...src]));
+  chk(`[${label}] ...and the only source a single-source device has`,
+    src.get('edge-router-01') === 'site-a');
+
+  /* Lines per day for ONE source: "which site is sending too much", which the
+   * key name on every line was supposed to make answerable and until now was
+   * not. Same integer day arithmetic as dailyBuckets, so the same straddled
+   * midnight proves neither store reached for a date function. */
+  const bySrc = await store.dailyBySource({ orgId: org, source: 'site-a', since: 0 });
+  chk(`[${label}] dailyBySource folds one source into UTC days`, bySrc.length === 2,
+    JSON.stringify(bySrc));
+  chk(`[${label}] ...counting only that source`,
+    bySrc[0].c === 2 && bySrc[1].c === 1, JSON.stringify(bySrc.map((b) => b.c)));
+  chk(`[${label}] ...on the same UTC midnights as dailyBuckets`,
+    bySrc[0].bucket === Date.UTC(2026, 7, 17) && bySrc[1].bucket === Date.UTC(2026, 7, 18));
+  chk(`[${label}] ...ordered oldest first`, bySrc[0].bucket < bySrc[1].bucket);
+  chk(`[${label}] dailyBySource counts are NUMBERS, not ClickHouse's Int64 strings`,
+    typeof bySrc[0].c === 'number' && typeof bySrc[0].bucket === 'number');
+  chk(`[${label}] dailyBySource narrows to the source it was asked for`,
+    (await store.dailyBySource({ orgId: org, source: 'site-b', since: 0 }))
+      .reduce((n, b) => n + b.c, 0) === 1);
+  chk(`[${label}] dailyBySource is org-scoped`,
+    (await store.dailyBySource({ orgId: other, source: 'site-a', since: 0 }))
+      .reduce((n, b) => n + b.c, 0) === 1);
+  chk(`[${label}] dailyBySource of a source nobody used is empty, not everything`,
+    (await store.dailyBySource({ orgId: org, source: 'no-such-source', since: 0 })).length === 0);
 
   /* The day bucket is `ts - ts % 86400000` in both stores on purpose: a date
    * function would render in the server's timezone and the two engines would
@@ -377,8 +420,8 @@ async function main() {
     chk('GET /api/analytics buckets them', Array.isArray(ana.body.volume) && ana.body.volume.length >= 1);
     const assets = await req('GET', '/api/assets', { key: keyA });
     chk('GET /api/assets roll-calls them',
-      assets.body.filter((r) => r.kind === 'source').length === 2,
-      JSON.stringify(assets.body.filter((r) => r.kind === 'source').map((r) => r.name)));
+      assets.body.filter((r) => r.kind === 'log-source').length === 2,
+      JSON.stringify(assets.body.filter((r) => r.kind === 'log-source').map((r) => r.name)));
 
     // ── tenancy, the reason e2e-tenancy exists, re-asked of the new engine ──
     const bIng = await req('POST', '/v1/ingest/logs', { key: keyB, body: { logs: [
@@ -401,6 +444,67 @@ async function main() {
     const own = await req('GET', '/api/logs?hours=2&q=ORGB-CONFIDENTIAL', { key: keyB });
     chk('org B CAN see its own line (the check above is not vacuous)', own.body.length === 1);
 
+    // ── the orphaned Postgres rows ─────────────────────────────────────────
+    /* The leak that had no symptom. An instance that switches its log store on
+     * leaves whatever `logs` already held in PostgreSQL behind: nothing reads
+     * those rows again, and until the seam swept them, nothing deleted them
+     * either — retention called `purge`, `purge` answered from ClickHouse, and
+     * the Postgres table was pruned for the last time on the boot before the
+     * cutover. 144 MB of one customer's log lines, frozen past their own
+     * retention window, with no screen and no query that would ever say so.
+     *
+     * It cannot be reached through the app, because with ClickHouse answering
+     * nothing writes a log line to Postgres any more. The only way to hold
+     * leftovers is to have had them before the switch — so they are seeded
+     * directly, which is precisely the state an upgraded instance is in.
+     *
+     * The table is emptied first: the parity fixtures above are still in it,
+     * and the last check here is about the sweep DISABLING itself once the
+     * table is empty, which a stray fixture row would silently make vacuous. */
+    await q.exec('TRUNCATE TABLE logs');
+    logStore._setStoreForTests(logStore.chStore); // and reset the leftovers tri-state
+    const orgC = newId();
+    const orgD = newId();
+    const T0 = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const seed = q.prepare(`INSERT INTO logs (org_id, ts, device, line, sev, source)
+      VALUES (?, ?, 'pre-cutover', ?, 6, 'e2e')`);
+    const pgFor = async (o) =>
+      Number((await q.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?').get(o)).c);
+
+    await seed.run(orgC, T0, 'pre-cutover line, past its retention window');
+    await seed.run(orgC, T0 + 1000, 'pre-cutover line, past its retention window');
+    await seed.run(orgC, T0 + 90000, 'pre-cutover line, still inside the window');
+    await seed.run(orgD, T0, 'a second tenant, which org C\'s sweep may not touch');
+    chk('the pre-cutover Postgres rows are there to begin with',
+      await pgFor(orgC) === 3 && await pgFor(orgD) === 1);
+
+    await logStore.purge({ orgId: orgC, before: T0 + 2000 });
+    chk('the ClickHouse purge sweeps the orphaned Postgres rows too',
+      await pgFor(orgC) === 1, `postgres still holds ${await pgFor(orgC)}`);
+    /* Not a TRUNCATE dressed up as a sweep: it is retention, so a line the org
+     * is still entitled to has to survive it. */
+    const survivor = await q.prepare('SELECT ts FROM logs WHERE org_id = ?').get(orgC);
+    chk('the sweep honours the cutoff rather than emptying the org',
+      survivor && Number(survivor.ts) === T0 + 90000, `kept ts ${survivor && survivor.ts}`);
+    chk('the sweep does not touch another tenant\'s leftovers', await pgFor(orgD) === 1);
+
+    await logStore.purge({ orgId: orgC, before: T0 + 1e6 });
+    await logStore.purge({ orgId: orgD, before: T0 + 1e6 });
+    chk('sweeping every org empties the orphaned table',
+      await pgFor(orgC) === 0 && await pgFor(orgD) === 0);
+
+    /* AND THEN IT STOPS, which is what makes it affordable to leave in
+     * permanently rather than as a one-off script. Once the table is empty it
+     * stays empty — nothing in the product can write to it while ClickHouse is
+     * answering — so the seam stops issuing a DELETE per org per pass. A row
+     * that appears after that point did not come from OpsCat, and the sweep
+     * deliberately leaves it alone. */
+    await seed.run(orgC, T0, 'written after the table went empty — not ours to delete');
+    await logStore.purge({ orgId: orgC, before: T0 + 1e6 });
+    chk('once the table is empty the sweep disables itself', await pgFor(orgC) === 1,
+      'the leftovers sweep is still issuing a DELETE per org, per pass, forever');
+    await q.exec('TRUNCATE TABLE logs');
+
     chChecks = 1;
   }
 
@@ -408,12 +512,17 @@ async function main() {
     /* Not a skip in silence. The summary says what did not run and how to run
      * it, because the failure mode of a self-skipping check is that nobody
      * notices it stopped. */
-    console.log('\n!! CLICKHOUSE NOT CONFIGURED — 58 of this harness\'s 98 checks did NOT run.');
-    console.log('!! Ran: 40 Postgres parity checks.');
-    console.log('!! Did NOT run: 40 ClickHouse parity checks, 2 schema-idempotence checks,');
-    console.log('!!   the storage split (lines in ClickHouse, none in Postgres), the five');
-    console.log('!!   HTTP read paths, and 5 ClickHouse tenant-isolation checks.');
-    console.log('!! CI supplies ClickHouse, so the gate always runs all 98. Locally:');
+    /* The count is DERIVED, not typed. It used to read "64 of this harness's 104"
+     * and both numbers went stale the moment a parity assertion was added —
+     * quietly, in the one message whose whole job is to be believed about how
+     * much did not run. */
+    console.log(`\n!! CLICKHOUSE NOT CONFIGURED — only ${count()} of this harness's checks ran.`);
+    console.log('!! Ran: the Postgres half of the parity table.');
+    console.log('!! Did NOT run: the SAME parity table against ClickHouse (so roughly this');
+    console.log('!!   many again), the schema-idempotence checks, the storage split (lines in');
+    console.log('!!   ClickHouse, none in Postgres), the HTTP read paths, ClickHouse tenant');
+    console.log('!!   isolation, and the sweep of the orphaned Postgres rows.');
+    console.log('!! CI supplies ClickHouse, so the gate always runs all of them. Locally:');
     console.log('!!   OPSCAT_CH_URL=http://127.0.0.1:8123 node run-e2e.js logstore\n');
   }
   void before; void chChecks;

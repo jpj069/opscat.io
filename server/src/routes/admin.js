@@ -10,6 +10,7 @@ const { getOrgSetting, setOrgSetting,
 const config = require('../config');
 const { now, sha256, hashPassword, isEmail, isStr, optStr, clampInt, httpError, encrypt, newId, isId } = require('../util');
 const sec = require('../security');
+const tokens = require('../lib/tokens');
 const pipelineEngine = require('../engine/pipeline');
 const automationEngine = require('../engine/automations');
 const scoutEngine = require('../engine/scout');
@@ -17,10 +18,14 @@ const llm = require('../llm');
 const voice = require('../voice');
 const statusScale = require('../lib/status-scale');
 const branding = require('../lib/status-branding');
+const orgAvatar = require('../lib/org-avatar');
+const { createRouteRegistrar, ApiProblem } = require('../lib/route-schema');
 const statusPages = require('../lib/status-pages');
 const statusDomains = require('../lib/status-domains');
 
 const plans = require('../plans');
+const { validateSshKey, parseCidrs } = require('../lib/sshaccess');
+const { validateUserAgent } = require('../lib/useragent');
 const invites = require('../lib/invites');
 
 const router = express.Router();
@@ -187,6 +192,13 @@ router.post('/apikeys', sec.requireRole('lead'), async (req, res) => {
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
   // `api` lets the key drive the full operations REST API (see security.js
   // requireSessionOrToken), so it also carries the ROLE it acts with.
+  // `collector` is deliberately NOT here. A collector key must always have a
+  // `syslog_endpoints` row, and this route cannot write one — a key minted here
+  // with that scope would be a live credential belonging to nothing, which is
+  // the shape of the orphaned `agents` row e2e-sensors exists to catch. The
+  // only way to get one is POST /api/syslog/endpoints, which writes both rows
+  // in one transaction. An unknown scope is filtered out and the request then
+  // fails as "at least one valid scope required"; e2e-collector pins that.
   const allowed = ['ingest', 'agent', 'probe', 'api'];
   const sc = (Array.isArray(scopes) ? scopes : ['ingest']).filter((s) => allowed.includes(s));
   if (!sc.length) return httpError(res, 400, 'at least one valid scope required');
@@ -197,7 +209,7 @@ router.post('/apikeys', sec.requireRole('lead'), async (req, res) => {
     return httpError(res, 403, 'cannot grant a key a higher role than your own');
   }
   if (!(await withinPlan(req, res, 'apiKeys'))) return undefined;
-  const key = 'ock_' + crypto.randomBytes(24).toString('hex');
+  const key = tokens.mint('apiKey');
   await q.prepare(`INSERT INTO api_keys (org_id, name, prefix, key_hash, scopes, role, active, created_by, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
     .run(req.orgId, name, key.slice(0, 12), sha256(key), sc.join(','), wanted, req.user.id, now());
@@ -249,7 +261,70 @@ const PUBLIC_SETTINGS = ['org_name', 'backend_label', 'status_published', 'reten
 const ADMIN_SETTINGS = [...PUBLIC_SETTINGS, 'onboarding_role', 'onboarding_goal', 'onboarding_source',
   'alert_email_from', 'auth_email_from', 'msteams_webhook_url', 'telegram_bot_token', 'pushover_token', 'classifiers',
   'status_reports_enabled', 'status_reports_public', 'status_reports_threshold',
-  'status_subscribers_enabled'];
+  'status_subscribers_enabled', 'sensor_ssh_key', 'sensor_ssh_cidrs', 'synthetic_user_agent'];
+
+// ---- the organisation's avatar --------------------------------------------
+// Identity, not branding, so there is no plan gate: the same reasoning that
+// keeps a status page's logo free on every tier (docs/ARCHITECTURE.md § Status
+// pages). Uploads arrive base64 in a JSON body, like the status-page assets,
+// and the bytes are sniffed rather than believed.
+//
+// Schema-first (docs/API-CONTRACT.md), which is why this file now has a
+// registrar even though its other 64 routes are still raw: the gate is a
+// RATCHET on the raw count, so a new route added the old way makes the build
+// red. That is the point of it — the conversion is opt-in for what exists and
+// mandatory for what is added.
+const orgRoute = createRouteRegistrar(router, '/api/admin');
+const SOrg = require('../schemas/org');
+
+orgRoute({
+  method: 'get', path: '/org/avatar',
+  summary: "The organisation's avatar",
+  description: 'Initials and a derived colour, plus the uploaded image if there is one. '
+    + '`url: null` is the DEFAULT, not a missing value.',
+  tags: ['Organization'], auth: 'session',
+  responses: { 200: SOrg.OrgAvatarResponse },
+}, async ({ req }) => orgAvatar.dtoFor(req.orgId, req.org && req.org.name));
+
+orgRoute({
+  method: 'put', path: '/org/avatar',
+  summary: "Replace the organisation's avatar",
+  description: 'PNG, JPEG, WebP or ICO, up to 512 KB. The bytes are sniffed, so an SVG is '
+    + 'refused whatever it calls itself — this image is served from our own origin.',
+  tags: ['Organization'], auth: 'session',
+  middleware: [sec.requireRole('admin')],
+  body: SOrg.OrgAvatarUploadBody,
+  responses: { 200: SOrg.OrgAvatarResponse, 400: SOrg.ErrorResponse, 403: SOrg.ErrorResponse },
+}, async ({ req }) => {
+  const data = req.body?.data;
+  // The bound is DERIVED from the byte limit, never defaulted: `isStr(data)`
+  // caps at 500 characters, i.e. ~375 bytes of image, which refused every real
+  // logo anyone ever picked on the status-page route until it was found.
+  if (!isStr(data, orgAvatar.MAX_ASSET_B64_CHARS)) {
+    throw new ApiProblem(400, 'image data required (base64 or a data: URI, max 512 KB)');
+  }
+  const b64 = data.replace(/^data:[^;,]*;base64,/, '');
+  let buf;
+  try { buf = Buffer.from(b64, 'base64'); } catch { throw new ApiProblem(400, 'data is not valid base64'); }
+  const r = await orgAvatar.putAvatar(req.orgId, buf);
+  if (!r.ok) throw new ApiProblem(400, r.error);
+  sec.audit(req.user.id, 'org_avatar_upload', `${r.mime}, ${r.bytes} bytes`, req.orgId);
+  return orgAvatar.dtoFor(req.orgId, req.org && req.org.name);
+});
+
+orgRoute({
+  method: 'delete', path: '/org/avatar',
+  summary: "Remove the organisation's uploaded avatar",
+  description: 'Reverts to initials on the derived colour. It does not clear the avatar, '
+    + 'because the default is derived rather than stored.',
+  tags: ['Organization'], auth: 'session',
+  middleware: [sec.requireRole('admin')],
+  responses: { 200: SOrg.OrgAvatarResponse, 403: SOrg.ErrorResponse },
+}, async ({ req }) => {
+  await orgAvatar.deleteAvatar(req.orgId);
+  sec.audit(req.user.id, 'org_avatar_delete', 'reverted to initials', req.orgId);
+  return orgAvatar.dtoFor(req.orgId, req.org && req.org.name);
+});
 
 router.get('/settings', async (req, res) => {
   const keys = req.user.role === 'admin' ? ADMIN_SETTINGS : PUBLIC_SETTINGS;
@@ -277,6 +352,32 @@ router.patch('/settings', sec.requireRole('admin'), async (req, res) => {
       if (!Array.isArray(arr)) throw new Error();
       for (const c of arr) new RegExp(c.pattern, c.flags || 'i');
     } catch { return httpError(res, 400, 'classifiers must be a JSON array of valid patterns'); }
+  }
+  // Break-glass SSH for auto-provisioned sensors. Validated HERE and not only at
+  // provisioning time, because the failure it prevents is silent: a key that
+  // does not parse, or a range typed as 0.0.0.0/0, would sit in the settings
+  // looking configured until the next node came up wrong — or open. The pair is
+  // checked together for the same reason (see lib/sshaccess.js).
+  if (b.sensor_ssh_key !== undefined || b.sensor_ssh_cidrs !== undefined) {
+    const key = (b.sensor_ssh_key !== undefined ? b.sensor_ssh_key
+      : getOrgSetting(req.orgId, 'sensor_ssh_key', '')).trim();
+    const cidrs = (b.sensor_ssh_cidrs !== undefined ? b.sensor_ssh_cidrs
+      : getOrgSetting(req.orgId, 'sensor_ssh_cidrs', '')).trim();
+    try {
+      if (key || cidrs) {
+        if (!key) throw new Error('add the public key too, or clear the source ranges');
+        if (!cidrs) throw new Error('add at least one source range too, or clear the key');
+        validateSshKey(key);
+        parseCidrs(cidrs);
+      }
+    } catch (e) { return httpError(res, 400, e.message); }
+  }
+  // The org-wide default User-Agent for HTTP checks. Same validation as the
+  // per-check one — it ends up in a header either way, and a newline there is
+  // header injection.
+  if (b.synthetic_user_agent !== undefined) {
+    try { validateUserAgent(b.synthetic_user_agent); }
+    catch (e) { return httpError(res, 400, e.message); }
   }
   // Log retention: a number, and never longer than the plan sells. Shortening is
   // the org's own business ("keep three days"); lengthening is what the tier is
@@ -1180,7 +1281,7 @@ router.post('/agents', sec.requireRole('lead'), async (req, res) => {
     return httpError(res, 409, 'agent name already exists');
   }
   if (!(await withinPlan(req, res, 'agents'))) return undefined;
-  const token = 'oca_' + crypto.randomBytes(24).toString('hex');
+  const token = tokens.mint('agentToken');
   const id = await q.prepare(`INSERT INTO agents (org_id, name, grp, token_hash, auto_update, created_at)
     VALUES (?, ?, ?, ?, ?, ?)`)
     .insert(req.orgId, name, isStr(group, 100) ? group : 'default', sha256(token),

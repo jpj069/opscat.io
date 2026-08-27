@@ -5,7 +5,7 @@ import { api, ApiError } from '../api';
 import { useApp } from '../state';
 import { SEV, alpha, fmtBytes, fmtHistory, relTime, sevColor } from '../format';
 import { Card, Button, ChartSkeleton, Toggle,
-  KpiCard, LineChart, Modal, Field, TableScroll, TableSkeleton, Input, Tabs, Segmented,
+  KpiCard, LineChart, Modal, Flyout, Field, TableScroll, TableSkeleton, Input, Tabs, Segmented,
   PageHeader, COL } from '../ui';
 import { Select } from '../Select';
 import { useTab } from '../state';
@@ -104,7 +104,7 @@ function Throughput() {
         </span>
         <Segmented label="Time range" value={range} onChange={setRange} options={RANGES} />
       </div>
-      <div style={{ gap: 12,
+      <div style={{ display: 'grid', gap: 12,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))' }}>
         <KpiCard label="LOG LINES" value={stats ? fmtCount(lines) : null} color={SEV.cyan}
           spark={stats?.buckets.map((b) => b.lines)}
@@ -124,7 +124,7 @@ function Throughput() {
             ? `≈ ${peakMin.perSecond.toFixed(peakMin.perSecond < 10 ? 1 : 0)} lines/s · ${fmtHistory(peakMin.at!)}`
             : 'minute counters only cover the last 48h'} />
       </div>
-      <div style={{ gap: 14,
+      <div style={{ display: 'grid', gap: 14,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))' }}>
         <Card title={`Log lines per ${stepLabel}`}>
           <LineChart points={stats?.buckets.map((b) => b.lines) ?? null} labels={labels} tips={tips}
@@ -326,7 +326,7 @@ function DryRunResult({ run }: { run: DryRun }) {
   );
   return (
     <>
-      <div style={{ gap: 8, marginTop: 10,
+      <div style={{ display: 'grid', gap: 8, marginTop: 10,
         gridTemplateColumns: 'repeat(auto-fit, minmax(min(130px, 100%), 1fr))' }}>
         {cell('MATCHED', run.matched, SEV.cyan, `of ${run.scanned.toLocaleString()} lines`)}
         {cell('NEW', run.fresh, SEV.green, 'unclassified today')}
@@ -380,8 +380,10 @@ function DryRunModal({ rule, onClose }: { rule: ClassifierRule; onClose: () => v
     }).then(setRun).catch((e) => setErr(e instanceof ApiError ? e.message : 'network error'));
   }, [rule, hours]);
 
+  // An analysis, not a form: shadowed / takeover / fresh is read AGAINST the rule
+  // list it came from, so it belongs beside it rather than over it.
   return (
-    <Modal title={`Dry run · ${rule.name || 'unnamed rule'}`} onClose={onClose} width={640}>
+    <Flyout title={`Dry run · ${rule.name || 'unnamed rule'}`} onClose={onClose} width={640}>
       <div className="mono text-xs text-text2" style={{ background: 'var(--bg2)',
         border: '1px solid var(--bg3)', borderRadius: 6, padding: '8px 10px',
         wordBreak: 'break-all' }}>/{rule.pattern}/{rule.flags || 'i'}</div>
@@ -394,7 +396,7 @@ function DryRunModal({ rule, onClose }: { rule: ClassifierRule; onClose: () => v
       {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
       {!err && run === null && <ChartSkeleton h={120} />}
       {run && <DryRunResult run={run} />}
-    </Modal>
+    </Flyout>
   );
 }
 

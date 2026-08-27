@@ -649,6 +649,28 @@ async function main() {
     opsNote.status === 200 && mcpNote.status === 200, `${opsNote.status}/${mcpNote.status}`);
   const noteOf = async () => (await q.prepare(
     "SELECT note FROM cases WHERE event_id = ? AND status != 'closed'").get(ev4.id)).note;
+  /* Waits, for exactly the reason the timeline check below already waits — and
+   * the reason this block did NOT is that the note is written by the handler
+   * while the timeline entry was known to lag. That distinction did not hold:
+   * these three checks went red in CI (PR #192, a syslog change that touches
+   * neither cases.js nor the MCP note path), with the operator's note present
+   * and the agent's absent.
+   *
+   * A lost update is excluded by the SQL: the append is ONE statement
+   * (`SET note = COALESCE(NULLIF(note,'') || ?, '') || ?`), and Postgres blocks
+   * the second writer on the row lock and re-evaluates it against the version
+   * the first one committed. What is left is that the MCP response can return
+   * before its write is visible here — so the read waits, and the assertions
+   * are unchanged.
+   *
+   * If this goes red again AFTER the wait, the wait is not the answer and the
+   * note itself is being lost. The detail therefore reports the note verbatim,
+   * so the next occurrence starts with evidence rather than with this comment. */
+  await untilAsync(async () => {
+    const n = String(await noteOf());
+    return n.includes('OPERATOR-SAW-IT') && n.includes('AGENT-SAW-IT');
+  });
+  await settle();
   const noteText = await noteOf();
   chk('the operator note survived the agent writing at the same moment',
     String(noteText).includes('OPERATOR-SAW-IT'), JSON.stringify(noteText));

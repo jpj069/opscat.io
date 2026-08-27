@@ -63,6 +63,15 @@ const { httpError } = require('../util');
  * @property {Record<number, any>} responses     status → zod schema. Exactly one 2xx.
  * @property {number} [successStatus]            Required when more than one 2xx is declared.
  * @property {boolean} [internal]                Keep out of the public spec.
+ * @property {string} [contentType]              Media type of the SUCCESS response, when it is not JSON.
+ *                                               Only meaningful for a handler that answers through `res`
+ *                                               itself and returns undefined (the escape hatch below) —
+ *                                               the registrar's own reply is always `res.json`. It exists
+ *                                               so a route that serves something else can still be
+ *                                               registered instead of staying raw: `/v1/agents/update`
+ *                                               and `/v1/synthetics/agent` ship a JavaScript file, and
+ *                                               declaring them `application/json` would put a lie in the
+ *                                               spec, which is worse than being absent from it.
  *
  * @typedef {RouteSpec & { fullPath: string, successStatus: number }} RegisteredRoute
  */

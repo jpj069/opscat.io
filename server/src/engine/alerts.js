@@ -12,6 +12,7 @@ const store = require('../db/shim');
 const config = require('../config');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const mailer = require('../mailer');
+const alertMail = require('../lib/alert-mail');
 const pipeline = require('./pipeline');
 const { safeFetch } = require('../lib/ssrf');
 
@@ -35,10 +36,46 @@ function severityLabel(s) {
   return s >= 80 ? 'Critical' : s >= 60 ? 'High' : s >= 40 ? 'Medium' : s >= 20 ? 'Low' : 'Info';
 }
 
-async function sendEmail(recipients, subject, html, orgId = DEFAULT_ORG_ID) {
+// `mail` is a built message from lib/alert-mail — subject, html, text and
+// headers together. It takes the whole object rather than a subject and a
+// string of HTML so that a caller cannot render the body one way and the
+// plaintext another; that split is exactly how the two e-mail call sites here
+// drifted into two copies of the same `<pre>`.
+async function sendEmail(recipients, mail, orgId = DEFAULT_ORG_ID) {
   if (!mailer.mailConfigured()) throw new Error('no mail transport configured (RESEND_API_KEY or SMTP_HOST)');
   const from = getOrgSetting(orgId, 'alert_email_from', 'OpsCat <onboarding@resend.dev>');
-  await mailer.sendMail({ from, to: recipients, subject, html });
+  await mailer.sendMail({ from, to: recipients, subject: mail.subject,
+    html: mail.html, text: mail.text, headers: mail.headers });
+}
+
+const orgAvatar = require('../lib/org-avatar');
+const orgLabel = (orgId) => getOrgSetting(orgId, 'org_name', 'OpsCat');
+
+// The org's identity for the mail header. `absolute: true` because a mail has
+// no origin — the URL it carries is unused today (lib/alert-mail.js renders
+// the initials and explains why the uploaded image is not in a mail), but a
+// DTO that silently held a relative path would be a trap for whoever decides
+// otherwise later.
+//
+// A failure here must not cost the alert: this is the badge on a message whose
+// job is to page somebody, so an unreadable row degrades to no badge rather
+// than throwing out of dispatch.
+async function avatarFor(orgId) {
+  try { return await orgAvatar.dtoFor(orgId, null, { absolute: true }); } catch { return null; }
+}
+
+// A deep link, or nothing. `?case=` and `?event=` are the overlay parameters
+// the app already reads (web/src/pages/Cases.tsx, web/src/state.tsx), so the
+// link opens the record rather than the list it is somewhere in — which is
+// the question the mail raises and used not to answer.
+//
+// The id guard is not decoration: the rule TEST fires a synthetic event with
+// `id: 0` (routes/ops.js), and `?event=0` is a link to a record that does not
+// exist. A test mail gets the plain app link instead.
+function deepLink(kind, id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return kind === 'case' ? `${config.baseUrl}/app/cases?case=${n}` : `${config.baseUrl}/app/monitor?event=${n}`;
 }
 
 // Every channel below posts to a URL a `lead` typed into a rule, so all of them
@@ -134,7 +171,7 @@ async function sendPushover(appToken, userKey, title, text, severity) {
  * caller can log what the night cost.
  */
 async function sendVia(kind, address, { title, text, severity = 0, orgId = DEFAULT_ORG_ID,
-  token = null, methodId = null } = {}) {
+  token = null, methodId = null, mail = null } = {}) {
   if (kind === 'sms') {
     const r = await require('../lib/telephony').sendSms(orgId, address, text);
     return { costMicros: r.costMicros ?? null };
@@ -153,10 +190,16 @@ async function sendVia(kind, address, { title, text, severity = 0, orgId = DEFAU
     return { costMicros: 0 };
   }
   if (kind === 'email') {
-    const html = `<h2 style="font-family:sans-serif">${title}</h2>
-<pre style="font-family:monospace;background:#f4f4f4;padding:12px;border-radius:6px">${text
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`;
-    await sendEmail([address], title, html, orgId);
+    // `mail` lets a caller that HAS structure pass it (the on-call chain names
+    // its facts and its acknowledgement link); a caller that only ever had a
+    // message — the contact-method test — passes nothing and the message
+    // renders as a block. Same shell either way, so there is one layout.
+    await sendEmail([address], alertMail.build({
+      subject: title, orgName: orgLabel(orgId), avatar: await avatarFor(orgId), headline: title,
+      severity, sevLabel: severityLabel(severity), bodyText: text,
+      footer: `${orgLabel(orgId)} · sent to a contact method on your on-call profile`,
+      ...(mail || {}),
+    }), orgId);
     return { costMicros: null };
   }
   if (kind === 'ntfy') { await sendNtfy(address, title, text, severity); return { costMicros: null }; }
@@ -175,6 +218,82 @@ async function sendVia(kind, address, { title, text, severity = 0, orgId = DEFAU
   throw new Error(`channel "${kind}" is not available yet`);
 }
 
+/**
+ * The rule alert as an e-mail — layout "Severity Rail" (lib/alert-mail.js).
+ *
+ * The SUBJECT is deliberately unchanged. It is what every mail rule, filter
+ * and saved search a customer has built points at, and a layout change is no
+ * reason to break them.
+ *
+ * Everything else is new, and each piece answers a question the old mail
+ * raised without answering:
+ *
+ *  - WHEN, and for HOW LONG. `first_seen` was in the row and in no mail; with
+ *    "Hits: 10" and no time, "is this ten seconds or ten hours" had no answer.
+ *  - WHICH record. The link was `/app/monitor` — the list, never the case.
+ *  - WHICH rule. With twenty rules, "make this stop" needs a name.
+ */
+async function buildRuleMail(rule, ev, orgId, caseRow, caseLabel, subject, sevLabel) {
+  const at = Number(ev.last_seen) || now();
+  const caseUrl = caseRow ? deepLink('case', caseRow.id) : null;
+  const eventUrl = deepLink('event', ev.id);
+  const facts = [
+    { label: 'Device', value: ev.device, hint: ev.ip ? `(${ev.ip})` : '', mono: true },
+    { label: 'Target', value: ev.target || '', mono: true },
+    { label: 'First seen', value: alertMail.absTime(ev.first_seen), hint: relHint(ev.first_seen, at) },
+    // Only when it differs: on the first hit the two instants are the same,
+    // and a row repeating the one above it reads as a rendering fault.
+    { label: 'Last seen',
+      value: Number(ev.last_seen) !== Number(ev.first_seen) ? alertMail.absTime(ev.last_seen) : '',
+      hint: relHint(ev.last_seen, now()) },
+    { label: 'Hits', value: ev.hits == null ? '' : String(ev.hits) },
+    { label: 'Case', value: caseLabel || '' },
+  ];
+  // The case is the primary destination when there is one: it is the object a
+  // human acts ON, and the event is the evidence behind it.
+  const primary = caseUrl ? { label: `Open case ${caseLabel}`, url: caseUrl }
+    : eventUrl ? { label: 'Open event', url: eventUrl }
+      : { label: 'Open OpsCat', url: `${config.baseUrl}/app/monitor` };
+  const secondary = caseUrl && eventUrl ? { label: 'View event', url: eventUrl } : null;
+  return alertMail.build({
+    subject,
+    orgName: orgLabel(orgId),
+    avatar: await avatarFor(orgId),
+    headline: ev.name,
+    summary: ev.description || '',
+    severity: ev.severity,
+    sevLabel,
+    facts,
+    primary,
+    secondary,
+    at,
+    footer: `Sent because rule "${rule.name}" matched. Recipients are configured on the rule.`,
+    headers: {
+      'X-OpsCat-Rule': rule.name,
+      'X-OpsCat-Event': ev.name,
+      ...(caseLabel ? { 'X-OpsCat-Case': caseLabel } : {}),
+      // Ten mails about C-1010 become one thread instead of ten. Nothing
+      // depends on it — a client that ignores References simply gets what it
+      // gets today.
+      ...(caseRow ? { References: `<opscat-case-${caseRow.id}@${mailHost()}>` } : {}),
+    },
+  });
+}
+
+// "(16m ago)" beside an absolute time. Parenthesised here rather than in the
+// builder because the builder renders a hint verbatim and other callers may
+// want a different one.
+function relHint(ms, at) {
+  const r = alertMail.relTime(ms, at);
+  return r ? `(${r})` : '';
+}
+
+// The right-hand side of the synthetic message id used for threading. Derived
+// from the configured base URL so a self-hoster's threads are their own.
+function mailHost() {
+  try { return new URL(config.baseUrl).hostname || 'opscat.io'; } catch { return 'opscat.io'; }
+}
+
 async function dispatch(rule, ev) {
   const orgId = rule.org_id || 1;
   const sevLabel = severityLabel(ev.severity);
@@ -189,10 +308,7 @@ async function dispatch(rule, ev) {
 
   if (rule.channel === 'email') {
     if (!recipients.length) throw new Error('rule has no e-mail recipients');
-    const html = `<h2 style="font-family:sans-serif">${title}</h2>
-<pre style="font-family:monospace;background:#f4f4f4;padding:12px;border-radius:6px">${text
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`;
-    await sendEmail(recipients, title, html, orgId);
+    await sendEmail(recipients, await buildRuleMail(rule, ev, orgId, caseRow, caseLabel, title, sevLabel), orgId);
   } else if (rule.channel === 'msteams') {
     const url = recipients[0] || getOrgSetting(orgId, 'msteams_webhook_url');
     if (!url) throw new Error('no Microsoft Teams webhook URL configured');

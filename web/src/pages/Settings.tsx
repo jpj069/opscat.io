@@ -9,20 +9,24 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useApp, useTab } from '../state';
 import { SEV, fmtBytes, fmtDuration, relTime } from '../format';
-import { Card, Button,
-  Modal, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy,
-  PageHeader, Tabs, Input, HostInput, DateTime, COL, FormRow, CardNote, SwitchRow } from '../ui';
+import { Card, Button, Spark,
+  Modal, Flyout, Field, Toggle, StatusPill, TableScroll, TableSkeleton, ListSkeleton, Skeleton, Busy,
+  PageHeader, Tabs, Segmented, Input, HostInput, DateTime, COL, FormRow, CardNote, SwitchRow,
+  Avatar, ImageUpload, Skeleton as Shimmer } from '../ui';
 import { Select } from '../Select';
 import type {
   AgentRow, ApiKeyRow, BillingStatus, PlanInfo, PlanLimits, PlansResponse,
   MaintenanceWindow, McpConnection, Settings as SettingsMap, SnmpTarget,
-  TelephonyConfig,
+  SyslogEndpoint, SyslogEndpointWithConfig, SyslogMode, SyslogSnippets, SyslogThroughput,
+  TelephonyConfig, OrgAvatar,
 } from '../types';
 import {
   CheckIcon,
   PlusIcon,
+  RefreshCwIcon,
   XIcon,
 } from 'lucide-react';
+import { useOverlayParam } from '../state';
 
 const RANK: Record<string, number> = { analyst: 1, lead: 2, cto: 3, admin: 4 };
 
@@ -34,6 +38,26 @@ const AGENTS_GRID = [COL.text, COL.label, COL.textWide, COL.label, COL.status, C
 // Name | Host | Port | Interval | Enabled | Last status | delete
 const TARGETS_GRID = [COL.text, COL.textWide, COL.num, COL.num,
   COL.toggle, COL.status, COL.actions].join(' ');
+// Name | Key | Device prefix | Last seen | Enabled | rotate+delete
+/* Name · Mode · Key · Device prefix · Last seen · Enabled · actions.
+ *
+ * `minWidth` is 950 and not 820 because the seventh track has to come from
+ * somewhere: seven tracks floor at 762px, so at 820 the slack left for the
+ * three 0.6fr labels is 58px and each resolves to ~102px — narrower than
+ * "Straight to OpsCat" renders, and the phone type scale is one step larger
+ * again. 950 restores the ~130px the two label tracks have today. */
+const SYSLOG_GRID = [COL.text, COL.label, COL.label, COL.label, COL.age, COL.toggle,
+  COL.actionsWide].join(' ');
+
+/* ONE vocabulary for the three modes, read by the Add dialog's Segmented AND by
+ * the table. A shorter second wording for the column is precisely the third
+ * noun for one thing that this repo's rules warn about — and the column is
+ * where a reader meets it FIRST, so it is the copy that would win. */
+const SYSLOG_MODE_LABELS: Record<SyslogMode, string> = {
+  collector: 'Own collector',
+  managed: 'Straight to OpsCat',
+  tunnel: 'Through a tunnel',
+};
 // Application | Permissions | Connected | Last used | revoke
 const CONNECTIONS_GRID = [COL.text, COL.textWide, COL.age, COL.age, COL.actions].join(' ');
 
@@ -44,7 +68,7 @@ const SETTINGS_TABS = [
   ['notifications', 'Notifications'],
   ['ai', 'AI & Voice'],
   ['access', 'API & Access'],
-  ['collectors', 'Agents & SNMP'],
+  ['collectors', 'Agents, SNMP & Syslog'],
   ['billing', 'Billing'],
 ] as const;
 type Tab = (typeof SETTINGS_TABS)[number][0];
@@ -204,6 +228,52 @@ function SaveBar({ d }: { d: SettingsDraft }) {
 
 // ---------------------------------------------------------------- general
 
+/**
+ * The organisation's avatar.
+ *
+ * There is no "none" state to render: with no upload the default is initials
+ * over a colour derived from the org id, resolved server-side
+ * (server/src/lib/org-avatar.js) so the preview here, the workspace switcher,
+ * the platform console and the alert mail cannot show one org four ways.
+ * Removing an upload therefore does not clear the avatar, it reverts it — and
+ * the button says exactly that.
+ *
+ * `reloadOrgs()` after a change is not a nicety: the switcher in the shell
+ * renders from `app.orgs`, so without it the new logo appears here and nowhere
+ * else until the next reload, which reads as the upload not having worked.
+ */
+function OrgAvatarField({ isAdmin, orgName }: { isAdmin: boolean; orgName: string }) {
+  const app = useApp();
+  const [av, setAv] = useState<OrgAvatar | null>(null);
+  const load = () => api.get<OrgAvatar>('/api/admin/org/avatar').then(setAv).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const after = async (next: OrgAvatar) => { setAv(next); await app.reloadOrgs(); };
+
+  return (
+    <FormRow label="Avatar" hint={av?.url
+      ? 'Shown in the workspace switcher, the platform console and every alert e-mail. PNG, JPEG, WebP or ICO, up to 512 KB.'
+      : 'Initials on a colour derived from this organisation, until you upload something. Shown in the workspace switcher, the platform console and every alert e-mail.'}>
+      {av === null ? <Shimmer w={200} h={34} /> : (
+        <ImageUpload
+          label="organization avatar"
+          hasAsset={!!av.url}
+          disabled={!isAdmin}
+          preview={<Avatar size={34} square i={av.initials} c={av.color} src={av.url} alt={orgName} />}
+          onUpload={async (data) => {
+            try { after(await api.put<OrgAvatar>('/api/admin/org/avatar', { data })); }
+            catch (e) { throw new Error(e instanceof ApiError ? e.message : 'upload failed'); }
+          }}
+          onRemove={async () => {
+            try { after(await api.del<OrgAvatar>('/api/admin/org/avatar')); }
+            catch (e) { throw new Error(e instanceof ApiError ? e.message : 'could not remove'); }
+          }}
+        />
+      )}
+    </FormRow>
+  );
+}
+
 function GeneralTab({ d, isAdmin }: { d: SettingsDraft; isAdmin: boolean }) {
   return (
     <>
@@ -213,6 +283,7 @@ function GeneralTab({ d, isAdmin }: { d: SettingsDraft; isAdmin: boolean }) {
         {d.settings === null ? <FormSkeleton rows={4} /> : (
           <>
             <TextRow d={d} isAdmin={isAdmin} k="org_name" label="Organization name" />
+            <OrgAvatarField isAdmin={isAdmin} orgName={d.val('org_name') || 'Organization'} />
             <TextRow d={d} isAdmin={isAdmin} k="backend_label" label="Backend label"
               hint="Free-text label for this deployment, e.g. nbg1 · PRIMARY" />
             {/* The hint states the PLAN's ceiling, because that is the number the
@@ -495,10 +566,339 @@ function CollectorsTab({ leadPlus }: { leadPlus: boolean }) {
         </Card>
       )}
 
+      {leadPlus && <SyslogCard />}
+
       {modal === 'agent' && <RegisterAgentModal onClose={() => setModal(null)} onCreated={reloadAgents} onSecret={setSecret} />}
       {modal === 'target' && <AddTargetModal onClose={() => setModal(null)} onCreated={reloadTargets} />}
       {secret && <OnceSecretModal {...secret} onClose={() => setSecret(null)} />}
     </>
+  );
+}
+
+
+// ------------------------------------------------------- syslog collectors
+
+/**
+ * Syslog endpoints — one per relay a customer points at OpsCat.
+ *
+ * Two shapes, and which is which follows the rule rather than the amount of
+ * content: **creating** an endpoint is a task with a commit point, so it is a
+ * `Modal`; an endpoint itself is a record you LOOK at — you come back to it to
+ * re-read the relay config — so it is a `Flyout` with its id in the URL. "Which
+ * endpoint is on your screen" is answerable with a link.
+ *
+ * The key is held in memory and only ever after the request that minted it.
+ * Re-opening a stored endpoint shows the snippets with a placeholder, which is
+ * why the flyout takes `minted` separately from the row: the screen stays useful
+ * without becoming a place where a secret can be read a second time.
+ */
+function SyslogCard() {
+  const [rows, setRows] = useState<SyslogEndpoint[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [open, setOpen] = useOverlayParam('endpoint');
+  // The freshly-minted credential, if the open flyout is the one we just made.
+  const [minted, setMinted] = useState<SyslogEndpointWithConfig | null>(null);
+
+  const reload = () => api.get<SyslogEndpoint[]>('/api/syslog/endpoints').then(setRows).catch(() => setRows([]));
+  useEffect(() => { reload(); }, []);
+
+  const openRow = (id: number) => { setMinted(null); setOpen(id); };
+  const afterMint = (e: SyslogEndpointWithConfig) => {
+    setMinted(e); setOpen(e.id); reload();
+  };
+
+  const row = rows?.find((r) => r.id === open) || null;
+
+  return (
+    <>
+      <Card title="Syslog Endpoints"
+        actions={<Button size="sm" onClick={() => setCreating(true)}><PlusIcon size={13} /> Add endpoint</Button>}>
+        <CardNote>One endpoint per site. Your relay keeps every input it has — this is one
+          more destination on it. If the relay can reach the internet over TLS it sends
+          straight here; if it cannot, a small collector runs in your network and does the
+          outward half for it.</CardNote>
+        <TableScroll cols={SYSLOG_GRID} minWidth={950}>
+          <div className="tbl-head" style={{ padding: '8px 0' }}>
+            <span>Name</span><span>Mode</span><span>Key</span><span>Device prefix</span>
+            <span>Last seen</span><span>Enabled</span><span></span>
+          </div>
+          {rows === null && <TableSkeleton rows={2} flush />}
+          {rows?.length === 0 && <Empty>No syslog endpoints yet.</Empty>}
+          {rows?.map((e) => (
+            <div key={e.id} className="tbl-row" style={{ padding: 'var(--row-py) 0', cursor: 'pointer' }}
+              onClick={() => openRow(e.id)}>
+              <span className="text-sm text-text0">{e.name}</span>
+              <span className="text-xs text-text2">{SYSLOG_MODE_LABELS[e.mode] || e.mode}</span>
+              <span className="mono text-xs text-text2">{e.keyPrefix ? `${e.keyPrefix}…` : 'revoked'}</span>
+              <span className="mono text-xs text-text2">{e.devicePrefix || '—'}</span>
+              <span className="mono text-xs text-text2">{relTime(e.lastSeenAt)}</span>
+              <Toggle on={e.enabled}
+                onClick={() => api.patch(`/api/syslog/endpoints/${e.id}`, { enabled: !e.enabled }).then(reload)} />
+              <span className="row" style={{ gap: 6 }} onClick={(ev) => ev.stopPropagation()}>
+                <Button size="sm" title="Issue a new key; the current one stops working"
+                  onClick={() => {
+                    if (!confirm(`Rotate the key for "${e.name}"? The current key stops working immediately.`)) return;
+                    api.post<SyslogEndpointWithConfig>(`/api/syslog/endpoints/${e.id}/rotate`, {}).then(afterMint);
+                  }}><RefreshCwIcon size={13} /> Rotate</Button>
+                <button title="Delete endpoint" style={{ color: SEV.critical, display: 'inline-flex' }}
+                  onClick={() => {
+                    if (confirm(`Delete "${e.name}"? Its collector key is revoked immediately.`)) {
+                      api.del(`/api/syslog/endpoints/${e.id}`).then(reload);
+                    }
+                  }}><XIcon size={15} /></button>
+              </span>
+            </div>
+          ))}
+        </TableScroll>
+      </Card>
+
+      {creating && <AddSyslogEndpointModal onClose={() => setCreating(false)} onCreated={afterMint} />}
+      {open !== null && row && (
+        <SyslogEndpointFlyout row={row} minted={minted && minted.id === row.id ? minted : null}
+          onClose={() => { setMinted(null); setOpen(null); }} onChanged={reload} />
+      )}
+    </>
+  );
+}
+
+function AddSyslogEndpointModal({ onClose, onCreated }: {
+  onClose: () => void; onCreated: (e: SyslogEndpointWithConfig) => void;
+}) {
+  const { syslogManaged, syslogTunnel } = useApp();
+  const [name, setName] = useState('');
+  const [mode, setMode] = useState<SyslogMode>('collector');
+  const [peerKey, setPeerKey] = useState('');
+  const [devicePrefix, setDevicePrefix] = useState('');
+  const [collectorHost, setCollectorHost] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    setBusy(true); setErr('');
+    api.post<SyslogEndpointWithConfig>('/api/syslog/endpoints',
+      { name: name.trim(), mode,
+        peerPublicKey: mode === 'tunnel' ? peerKey.trim() : undefined,
+        devicePrefix: devicePrefix.trim() || undefined,
+        collectorHost: collectorHost.trim() || undefined })
+      .then((e) => { onClose(); onCreated(e); })
+      .catch((e) => setErr(e instanceof ApiError ? e.message : 'could not create endpoint'))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal title="Add syslog endpoint" onClose={onClose}>
+      <form onSubmit={submit}>
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="RZ Frankfurt" autoFocus width="100%" />
+        </Field>
+        <CardNote>This name becomes the log <span className="mono">source</span> of every line
+          from this site, so it is what you filter and search by later.</CardNote>
+        {(syslogManaged || syslogTunnel) && (
+          <>
+            <Field label="How this site sends">
+              {/* `Field` is a column flex, so a bare child is a stretched flex item —
+                  which blockifies `.seg` from inline-flex to flex and leaves an empty
+                  bordered track after the last segment (31px at 390px, 127px at
+                  1280px). The row wrapper puts it back in a context where it sizes to
+                  its segments. Measured, not reasoned: the computed `display` is the
+                  only visible symptom. */}
+              <div className="row row-wrap">
+                <Segmented<SyslogMode> value={mode} onChange={setMode} options={[
+                  ['collector', SYSLOG_MODE_LABELS.collector],
+                  ...(syslogManaged ? [['managed', SYSLOG_MODE_LABELS.managed] as const] : []),
+                  ...(syslogTunnel ? [['tunnel', SYSLOG_MODE_LABELS.tunnel] as const] : []),
+                ]} />
+              </div>
+            </Field>
+            <CardNote>{mode === 'collector'
+              ? 'You run a small collector inside your network. Your relay keeps sending plain '
+                + 'syslog on the LAN, and only the collector talks to the internet — the right '
+                + 'answer when the relay cannot do TLS.'
+              : mode === 'managed'
+                ? 'Your relay sends TLS straight to OpsCat and you install nothing. It needs to '
+                  + 'reach the internet on port 6514 and to speak RFC 5424 over TLS.'
+                : 'A WireGuard tunnel from your relay to OpsCat. Inside it you can send plain '
+                  + 'UDP — which is what your devices already speak — because the tunnel itself '
+                  + 'proves who is sending. Nothing of ours ends up in your relay\u2019s config.'}</CardNote>
+          </>
+        )}
+        {mode === 'tunnel' && (
+          <>
+            <Field label="Relay public key">
+              <Input className="mono" value={peerKey} onChange={(e) => setPeerKey(e.target.value)}
+                placeholder="wg genkey | wg pubkey" width="100%" />
+            </Field>
+            <CardNote>Run <span className="mono">wg genkey | sudo tee /etc/wireguard/opscat.key
+              | wg pubkey</span> on the relay and paste what it prints. The private half stays
+              on that machine \u2014 we neither need it nor want it.</CardNote>
+          </>
+        )}
+        {mode === 'collector' && (
+          <>
+            <Field label="Collector address (optional)">
+              <HostInput value={collectorHost} onChange={(e) => setCollectorHost(e.target.value)}
+                placeholder="10.10.0.42" width="100%" />
+            </Field>
+            <CardNote>Where your relay will reach the collector. Used only to fill in the
+              configuration shown next — you can change it there.</CardNote>
+          </>
+        )}
+        <Field label="Device prefix (optional)">
+          <Input value={devicePrefix} onChange={(e) => setDevicePrefix(e.target.value)}
+            placeholder="fra-" width="100%" />
+        </Field>
+        <CardNote>Prepended to every device name from this endpoint, so two sites with a
+          <span className="mono"> core-sw-01</span> each stay apart.</CardNote>
+        {err && <div className="text-sm" style={{ color: SEV.critical, marginTop: 8 }}>{err}</div>}
+        <Button type="submit" variant="primary" block
+          disabled={busy || name.trim().length === 0 || (mode === 'tunnel' && peerKey.trim().length === 0)}
+          style={{ marginTop: 12 }}>{busy ? '…' : 'Create endpoint'}</Button>
+      </form>
+    </Modal>
+  );
+}
+
+/* A label per flavour the generator can return. The TAB LIST itself is derived
+ * from the response rather than written here: the two modes offer different
+ * flavours, and a hardcoded list would either show a tab with nothing behind it
+ * or hide one the server rendered. An unknown key falls back to its own name,
+ * so adding a flavour server-side needs no frontend release. */
+const SYSLOG_FLAVOUR_LABELS: Record<string, string> = {
+  docker: 'Docker', systemd: 'systemd',
+  rsyslog: 'rsyslog', 'syslog-ng': 'syslog-ng', test: 'Test it',
+  wireguard: 'WireGuard', verify: 'Verify',
+};
+
+function SyslogEndpointFlyout({ row, minted, onClose, onChanged }: {
+  row: SyslogEndpoint; minted: SyslogEndpointWithConfig | null;
+  onClose: () => void; onChanged: () => void;
+}) {
+  const [snippets, setSnippets] = useState<SyslogSnippets | null>(minted ? minted.snippets : null);
+  const [flavour, setFlavour] = useState<string>('');
+  const [tp, setTp] = useState<SyslogThroughput | null>(null);
+
+  useEffect(() => {
+    if (minted) { setSnippets(minted.snippets); return; }
+    setSnippets(null);
+    api.get<SyslogSnippets>(`/api/syslog/endpoints/${row.id}/config`).then(setSnippets).catch(() => setSnippets({}));
+  }, [row.id, minted]);
+
+  useEffect(() => {
+    setTp(null);
+    api.get<SyslogThroughput>(`/api/syslog/endpoints/${row.id}/throughput?days=14`)
+      .then(setTp).catch(() => setTp(null));
+  }, [row.id]);
+
+  const flavours = snippets ? Object.keys(snippets) : [];
+  // The selection is only reset when it no longer exists — switching endpoints
+  // between two of the same mode should not walk the reader back to tab one.
+  const active = flavours.includes(flavour) ? flavour : (flavours[0] || '');
+  const blocks = snippets ? snippets[active] || [] : null;
+
+  return (
+    <Flyout title={row.name} onClose={onClose}
+      badges={<StatusPill text={row.enabled ? 'enabled' : 'disabled'}
+        color={row.enabled ? SEV.green : SEV.medium} />}
+      /* The mode leads, in every case. It decides what the customer installs and
+       * it is changeable through PATCH, so a panel that only implies it — by
+       * which config tabs happen to render — makes the reader infer the one
+       * fact the screen exists to state. */
+      sub={`${SYSLOG_MODE_LABELS[row.mode] || row.mode} · ${row.mode === 'tunnel'
+        ? `${row.tunnelIp ?? '—'} · last seen ${relTime(row.lastSeenAt)}`
+        : row.keyPrefix ? `${row.keyPrefix}… · last seen ${relTime(row.lastSeenAt)}` : 'key revoked'}`}
+      actions={
+        <Button size="sm" onClick={() => {
+          if (!confirm(`Rotate the key for "${row.name}"? The current key stops working immediately.`)) return;
+          api.post(`/api/syslog/endpoints/${row.id}/rotate`, {}).then(onChanged);
+        }}><RefreshCwIcon size={13} /> Rotate key</Button>
+      }>
+      {minted?.key && (
+        <div style={{ marginBottom: 14 }}>
+          <div className="text-sm font-semibold text-text2" style={{ marginBottom: 6 }}>
+            Collector key — shown once</div>
+          <div className="mono text-md text-text0" style={{ background: 'var(--bg3)',
+            border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px',
+            userSelect: 'all', wordBreak: 'break-all' }}>{minted.key}</div>
+          <CardNote>Copy the block below now — it already contains this key. Afterwards the
+            configuration is still here, but the key is not: rotate to get a new one.</CardNote>
+        </div>
+      )}
+
+      <ThroughputStrip tp={tp} />
+
+      <Tabs value={active} onChange={setFlavour}
+        tabs={flavours.map((f) => [f, SYSLOG_FLAVOUR_LABELS[f] || f] as const)} />
+      {blocks === null && <ListSkeleton rows={2} />}
+      {blocks?.map((b) => <SnippetBlock key={b.label} label={b.label} text={b.text} />)}
+
+      <CardNote>Start with a single facility as shown, confirm the lines arrive under
+        Logs, then widen the filter. A relay switched straight to <span className="mono">*.*</span> can
+        use up a daily allowance before anyone has looked at the result.</CardNote>
+    </Flyout>
+  );
+}
+
+/**
+ * Fourteen days of line counts for one endpoint.
+ *
+ * `logs.source` has held the key's name since the first collector shipped, and
+ * the write-up said "which site is sending too much is answerable with no new
+ * column anywhere". It was answerable in PRINCIPLE and nowhere on screen, which
+ * is the same distance as not answerable.
+ *
+ * The gaps matter more than the line. A day with no lines is absent from the
+ * response, so it is filled with a zero here rather than skipped: a relay that
+ * stopped for two days is a flat gap in the middle of the series, and a chart
+ * that quietly closed it up would draw a healthy endpoint.
+ */
+function ThroughputStrip({ tp }: { tp: SyslogThroughput | null }) {
+  if (!tp) return <Skeleton w="100%" h={34} />;
+  const DAY = 86400000;
+  const end = Math.floor(Date.now() / DAY) * DAY;
+  const byDay = new Map(tp.buckets.map((b) => [b.day, b.lines]));
+  const series = Array.from({ length: tp.days },
+    (_, i) => byDay.get(end - (tp.days - 1 - i) * DAY) ?? 0);
+  const total = series.reduce((a, b) => a + b, 0);
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div className="row row-wrap" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+        <span className="micro text-2xs">LINES · LAST {tp.days} DAYS</span>
+        <span className="mono text-sm text-text1"
+          style={{ fontVariantNumeric: 'tabular-nums' }}>{total.toLocaleString()}</span>
+      </div>
+      <Spark data={series} fluid h={34} fill color={SEV.green} />
+      {total === 0 && (
+        <CardNote>Nothing has arrived yet. The configuration below is what the relay
+          needs; check it there before looking anywhere else.</CardNote>
+      )}
+    </div>
+  );
+}
+
+/** A copy-paste block. Same shape as the onboarding snippets, deliberately. */
+function SnippetBlock({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6, gap: 10 }}>
+        <span className="text-sm font-semibold text-text2" style={{ minWidth: 0 }}>{label}</span>
+        <Button size="sm" onClick={() => {
+          navigator.clipboard?.writeText(text);
+          setCopied(true); window.setTimeout(() => setCopied(false), 1500);
+        }}>{copied ? <>Copied <CheckIcon size={13} /></> : 'Copy'}</Button>
+      </div>
+      <pre style={{ margin: 0, background: 'var(--bg1)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: '12px 14px', overflowX: 'auto' }}>
+        <code className="mono text-sm" style={{ lineHeight: 1.7, whiteSpace: 'pre' }}>
+          {text.split('\n').map((ln, i) => (
+            <span key={i} style={{ display: 'block',
+              color: ln.trimStart().startsWith('#') ? 'var(--text3)' : 'var(--text1)' }}>{ln || ' '}</span>
+          ))}
+        </code>
+      </pre>
+    </div>
   );
 }
 
@@ -580,25 +980,25 @@ function TelephonyCard() {
           {provider === 'webhook' ? (
             <Row label="Gateway URL" hint="POSTed {kind, to, text, ackUrl}; answer 2xx when accepted">
               <HostInput className="mono" value={webhookUrl} placeholder="https://sms-gw.internal/send"
-                onChange={(e) => touch(setWebhookUrl)(e.target.value)} style={{ width: '100%' }} />
+                onChange={(e) => touch(setWebhookUrl)(e.target.value)} width="100%" />
             </Row>
           ) : provider ? (
             <>
               <Row label={provider === 'twilio' ? 'Account SID' : 'API key'}>
                 <Input className="mono" value={account}
                   placeholder={provider === 'twilio' ? 'AC…' : 'a1b2c3d4'}
-                  onChange={(e) => touch(setAccount)(e.target.value)} style={{ width: '100%' }} />
+                  onChange={(e) => touch(setAccount)(e.target.value)} width="100%" />
               </Row>
               <Row label={cfg.hasSecret
                 ? (provider === 'twilio' ? 'Auth token (stored)' : 'API secret (stored)')
                 : (provider === 'twilio' ? 'Auth token' : 'API secret')}>
                 <Input type="password" className="mono" value={secret}
                   placeholder={cfg.hasSecret ? '•••••••• (set — enter to replace)' : ''}
-                  onChange={(e) => touch(setSecret)(e.target.value)} style={{ width: '100%' }} />
+                  onChange={(e) => touch(setSecret)(e.target.value)} width="100%" />
               </Row>
               <Row label="Send from" hint="The number people see at 03:00. International format.">
                 <HostInput className="mono" value={from} placeholder="+4915112345678"
-                  onChange={(e) => touch(setFrom)(e.target.value)} style={{ width: '100%' }} />
+                  onChange={(e) => touch(setFrom)(e.target.value)} width="100%" />
               </Row>
             </>
           ) : null}
@@ -694,11 +1094,11 @@ function AiCard() {
         <>
           <Row label="Base URL">
             <HostInput className="mono" value={baseUrl} placeholder="https://openrouter.ai/api/v1"
-              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} width="100%" />
           </Row>
           <Row label="Model">
             <Input className="mono" value={model} placeholder="anthropic/claude-haiku-4.5"
-              onChange={(e) => { setModel(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+              onChange={(e) => { setModel(e.target.value); setDirty(true); }} width="100%" />
           </Row>
           <Row label={status.org.hasKey ? 'API key (stored)' : 'API key'}>
             <div className="row" style={{ gap: 8 }}>
@@ -793,11 +1193,11 @@ function VoiceCard() {
         <>
           <Row label="Base URL">
             <HostInput className="mono" value={baseUrl} placeholder="https://api.openai.com/v1"
-              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+              onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }} width="100%" />
           </Row>
           <Row label="Model">
             <Input className="mono" value={model} placeholder="gpt-4o-mini-transcribe"
-              onChange={(e) => { setModel(e.target.value); setDirty(true); }} style={{ width: '100%' }} />
+              onChange={(e) => { setModel(e.target.value); setDirty(true); }} width="100%" />
           </Row>
           <Row label={status.org.hasKey ? 'API key (stored)' : 'API key'}>
             <div className="row" style={{ gap: 8 }}>
@@ -1049,7 +1449,7 @@ function BillingCard() {
       <Card title="Plan &amp; Billing">
         {bannerEl}
         <Skeleton w={92} h={18} radius={10} />
-        <div style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
           gap: 14, marginTop: 16 }}>
           {USAGE_METRICS.map((m) => <UsageBar key={m.key} label={m.label} used={null} limit={0} />)}
         </div>
@@ -1098,7 +1498,7 @@ function BillingCard() {
       </div>
 
       {/* usage grid */}
-      <div style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))',
         gap: 14, marginTop: 16 }}>
         {USAGE_METRICS.map((m) => (
           <UsageBar key={m.key} label={m.label} used={s.usage[m.key]} limit={s.limits[m.key]} />

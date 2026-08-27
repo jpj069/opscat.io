@@ -1,9 +1,9 @@
 // Cases — triage queue with status tabs and an inline case editor.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp, useTab } from '../state';
+import { useApp, useTab, useOverlayParam } from '../state';
 import { api } from '../api';
 import { sevColor, fmtDuration, alertStatusLabel, alertStatusColor, SEV } from '../format';
-import { Card, Button, SevBadge, StatusPill, Avatar, Modal, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, Textarea, COL} from '../ui';
+import { Card, Button, SevBadge, StatusPill, Avatar, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Flyout, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { CaseRow, UserRow } from '../types';
 
@@ -22,7 +22,9 @@ export default function Cases() {
   const app = useApp();
   const [tab, setTab] = useTab(TABS);
   const [cases, setCases] = useState<CaseRow[] | null>(null);
-  const [editing, setEditing] = useState<CaseRow | null>(null);
+  // The case on your screen is the first question of every handover, so it is an
+  // address, not component state.
+  const [editId, setEditId] = useOverlayParam('case');
 
   const load = () => api.get<CaseRow[]>('/api/cases').then(setCases).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -37,6 +39,11 @@ export default function Cases() {
     cases.forEach((x) => { c[x.status]++; });
     return c;
   }, [cases]);
+
+  // Derived, not stored: a deep link arrives with an id and no row yet, and the
+  // panel must appear as soon as the list lands. Holding the ROW in state would
+  // also show a stale copy after a save.
+  const editing = cases?.find((c) => c.id === editId) ?? null;
 
   const rows = useMemo(() => {
     if (!cases) return [];
@@ -66,7 +73,7 @@ export default function Cases() {
           </div>
         ) : rows.map((c) => (
           <div key={c.id} className="tbl-row" style={{ cursor: 'pointer' }}
-            onClick={() => setEditing(c)}>
+            onClick={() => setEditId(c.id)}>
             <span className="mono text-sm" style={{ color: '#388bfd' }}>{c.label}</span>
             <SevBadge score={c.severity} />
             <span className="mono text-sm" style={{ color: sevColor(c.severity), overflow: 'hidden',
@@ -96,8 +103,8 @@ export default function Cases() {
       </Card>
 
       {editing && (
-        <CaseEditor c={editing} users={app.users} onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }} />
+        <CaseEditor c={editing} users={app.users} onClose={() => setEditId(null)}
+          onSaved={() => { setEditId(null); load(); }} />
       )}
     </div>
   );
@@ -148,16 +155,32 @@ function CaseEditor({ c, users, onClose, onSaved }:
   };
 
   return (
-    <Modal title={`Edit ${c.label}`} onClose={onClose} width={460}>
-      <div className="row" style={{ marginBottom: 12, justifyContent: 'space-between', gap: 8 }}>
-        <span className="text-sm text-text2" style={{ minWidth: 0, overflow: 'hidden',
-          textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          <span className="mono" style={{ color: sevColor(c.severity) }}>{c.name}</span>
-          <span className="mono text-text3"> · {c.device}</span>
-        </span>
+    <Flyout title={c.label} onClose={onClose}
+      badges={<><SevBadge score={c.severity} />
+        <StatusPill text={c.status} color={STATUS_COLORS[c.status]} /></>}
+      sub={<><span style={{ color: sevColor(c.severity) }}>{c.name}</span>
+        <span className="text-text3"> · {c.device}</span></>}
+      actions={<>
+        <Button size="sm" disabled={!!c.ackedAt || acking} onClick={acknowledge}
+          title="Stop the escalation. Does not assign the case to you.">
+          {c.ackedAt ? 'Acknowledged' : acking ? 'Acknowledging…' : 'Acknowledge'}
+        </Button>
+        {c.ackedAt && c.ackedBy && (<span className="text-sm text-text3">by {c.ackedBy.n}</span>)}
+        {c.alert && (
+          <StatusPill text={alertStatusLabel(c.alert.status)} color={alertStatusColor(c.alert.status)} />
+        )}
+        {c.alert && c.alert.status === 'active' && (
+          <span className="text-xs" style={{ color: SEV.critical }}>
+            step {c.alert.step + 1} of {c.alert.policyName ?? 'the policy'}
+          </span>
+        )}
+        {/* Promote belongs with Acknowledge: both act on the CASE as a whole, unlike
+            the fields below, which are edited and then saved. Left in the body it sat
+            right-aligned above the first label and read as belonging to Status. */}
+        <span style={{ flex: 1 }} />
         {c.incident ? (
           <span className="pill mono text-xs" title="This case was promoted to an incident"
-            style={{ color: '#388bfd', background: 'rgba(56,139,253,0.1)',
+            style={{ color: 'var(--low)', background: 'rgba(56,139,253,0.1)',
               border: '1px solid rgba(56,139,253,0.3)', flexShrink: 0 }}>
             {c.incident.label}
           </span>
@@ -167,24 +190,7 @@ function CaseEditor({ c, users, onClose, onSaved }:
             {promoting ? 'Promoting…' : 'Promote to Incident'}
           </Button>
         )}
-      </div>
-      <div className="row row-wrap" style={{ gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <Button size="sm" disabled={!!c.ackedAt || acking} onClick={acknowledge}
-          title="Stop the escalation. Does not assign the case to you.">
-          {c.ackedAt ? 'Acknowledged' : acking ? 'Acknowledging…' : 'Acknowledge'}
-        </Button>
-        {c.ackedAt && c.ackedBy && (
-          <span className="text-sm text-text3">by {c.ackedBy.n}</span>
-        )}
-        {c.alert && (
-          <StatusPill text={alertStatusLabel(c.alert.status)} color={alertStatusColor(c.alert.status)} />
-        )}
-        {c.alert && c.alert.status === 'active' && (
-          <span className="text-xs" style={{ color: SEV.critical }}>
-            step {c.alert.step + 1} of {c.alert.policyName ?? 'the policy'}
-          </span>
-        )}
-      </div>
+      </>}>
       <Field label="Status">
         <Select title="Status" value={status}
           onChange={(v) => setStatus(v as CaseRow['status'])}
@@ -206,11 +212,14 @@ function CaseEditor({ c, users, onClose, onSaved }:
       <Field label="Note">
         <Textarea className="rca" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
-      <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
-        <Button onClick={onClose}>Cancel</Button>
+      {/* No "Cancel": a flyout is dismissed by the ×, Escape, the backdrop or Back —
+          four ways already, and a fifth button that only closes reads as "discard",
+          which is a promise this form cannot keep (Acknowledge and Promote have
+          already written by then). */}
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 6 }}>
         <Button variant="primary" disabled={saving} onClick={save}>
           {saving ? 'Saving…' : 'Save'}</Button>
       </div>
-    </Modal>
+    </Flyout>
   );
 }

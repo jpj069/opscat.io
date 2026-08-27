@@ -130,8 +130,15 @@ export default function LogsPage() {
           ) : rows.map((l, i) => (
             <div key={`${l.ts}-${i}`} className="tbl-row" style={{ padding: 'var(--log-py) 16px' }}>
               <span className="mono text-xs text-text3">{fmtDateTime(l.ts)}</span>
-              <span className="mono text-xs text-text1" style={{ overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.device}</span>
+              {/* The device is the one field on a log line that is worth narrowing to,
+                  and it is already the search the box would run — so it is a button
+                  rather than a new panel. A log line has no id and no record behind
+                  it, so there is nothing a flyout could show that this row does not
+                  already print in full. */}
+              <button className="mono text-xs text-text1 link-cell" title={`Only ${l.device}`}
+                onClick={() => setParams({ q: l.device })}
+                style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  textAlign: 'left' }}>{l.device}</button>
               <span className="mono text-xs" style={{ color: logSevColor(l.sev), wordBreak: 'break-all' }}>
                 {l.line}</span>
             </div>

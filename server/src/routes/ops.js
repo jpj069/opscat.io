@@ -2,7 +2,6 @@
 // Session-authenticated operations API: events, cases, logs, dashboard,
 // analytics, alert rules, notifications, incidents, live stream (SSE).
 const express = require('express');
-const crypto = require('crypto');
 // The shim is bound to `store` rather than the usual `q`: GET /logs already has a
 // local `q` (the search term), and a module-scope statement table shadowed by a
 // local would turn a statement lookup into a query-parameter lookup silently.
@@ -14,6 +13,7 @@ const logs = require('../db/log-store');
 const { now, sha256, clampInt, isStr, optStr, SseHub, RateLimiter, isId, utcDaySql, utcDayLabel } = require('../util');
 const config = require('../config');
 const sec = require('../security');
+const tokens = require('../lib/tokens');
 const pipeline = require('../engine/pipeline');
 const inc = require('../lib/incidents');
 const cases = require('../lib/cases');
@@ -697,7 +697,7 @@ route({
 }, async ({ req }) => {
   const { name, intervalS, graceS } = req.body || {};
   if (!isStr(name, 100)) throw new ApiProblem(400, 'name required');
-  const token = 'och_' + crypto.randomBytes(24).toString('hex');
+  const token = tokens.mint('heartbeat');
   const id = await store.prepare(`INSERT INTO heartbeats (org_id, name, token_hash, interval_s, grace_s,
     enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)`)
     .insert(req.orgId, name, sha256(token), clampInt(intervalS, 30, 30 * 86400, 3600),
@@ -895,17 +895,55 @@ route({
       status: !v.enabled ? 'disabled' : v.last_error ? 'error' : v.status,
       lastSeen: v.last_checked_at || null });
   }
-  const sources = new Map();
+  // A log source is DERIVED, not stored: a device name that has sent log lines or
+  // produced events, minus everything an agent already covers. There is no row
+  // anywhere, which is why it carries no id — the name IS the identity.
+  //
+  // The detail says which of the two it actually is. It used to be the constant
+  // string 'logs / events' for every row, i.e. the one column with room to explain
+  // the category said nothing — while the merge below knew the answer and threw it
+  // away. "no agent" is the other half: it is the rule this list is built on
+  // (`agentNames.has`) and the reason the row cannot be opened like the others.
+  const sources = new Map();   // device -> { ls, logs, events }
   for (const r of await logs.lastSeenByDevice({ orgId: req.orgId })) {
-    sources.set(r.device, r.ls);
+    sources.set(r.device, { ls: r.ls, logs: true, events: false, via: r.source || null });
   }
   for (const r of await store.prepare('SELECT device, MAX(last_seen) AS ls FROM events WHERE org_id = ? GROUP BY device').all(req.orgId)) {
-    if ((sources.get(r.device) || 0) < r.ls) sources.set(r.device, r.ls);
+    const cur = sources.get(r.device);
+    if (!cur) sources.set(r.device, { ls: r.ls, logs: false, events: true });
+    else { cur.events = true; if (cur.ls < r.ls) cur.ls = r.ls; }
   }
-  for (const [device, ls] of sources) {
+  for (const [device, s] of sources) {
     if (agentNames.has(device)) continue; // agent hosts are already listed above
-    rows.push({ kind: 'source', id: null, name: device, detail: 'logs / events',
-      status: 'active', lastSeen: ls });
+    const what = s.logs && s.events ? 'logs + events' : s.logs ? 'logs' : 'events';
+    /* "which site is that behind?" is the first question anyone asks about a
+     * device name they do not recognise, and until `lastSeenByDevice` returned
+     * the source there was nowhere to get the answer — so this column said
+     * `no agent` for every row, which explains why the row is not clickable and
+     * nothing about the device. It is the NEWEST line's source, so a device
+     * that has been moved between relays reads as the one it is on now. */
+    const via = s.via ? ` · via ${s.via}` : ' · no agent';
+    rows.push({ kind: 'log-source', id: null, name: device, detail: `${what}${via}`,
+      status: 'active', lastSeen: s.ls });
+  }
+  /* A syslog endpoint IS a record, unlike the derived rows above — so it gets an
+   * id and a row of its own rather than being inferred from the lines it wrote.
+   * Without it the one thing an operator configures in this whole path was the
+   * one thing missing from the directory of things they have. */
+  for (const e of await store.prepare(
+    `SELECT e.id, e.name, e.mode, e.enabled, e.tunnel_ip, k.last_used_at
+       FROM syslog_endpoints e LEFT JOIN api_keys k ON k.id = e.api_key_id AND k.active = 1
+      WHERE e.org_id = ? ORDER BY e.id`).all(req.orgId)) {
+    const where = e.mode === 'tunnel' ? `tunnel ${e.tunnel_ip || '—'}`
+      : e.mode === 'managed' ? 'managed endpoint' : 'own collector';
+    rows.push({
+      kind: 'syslog', id: Number(e.id), name: e.name, detail: `syslog · ${where}`,
+      /* `waiting` and not `active` until something has actually arrived: an
+       * endpoint that was configured and never connected is the single most
+       * common support case in this feature, and "active" would hide it. */
+      status: !e.enabled ? 'disabled' : e.last_used_at ? 'active' : 'waiting',
+      lastSeen: e.last_used_at || null,
+    });
   }
   rows.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
   return rows;

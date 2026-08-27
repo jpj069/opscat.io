@@ -27,6 +27,59 @@ router.get('/api/health', (req, res) => {
 // about liveness: `curl -s https://opscat.io/api/version`.
 router.get('/api/version', (req, res) => res.json(INFO));
 
+// ---- the organisation's avatar ----------------------------------------------
+//
+// UNAUTHENTICATED on purpose, and that is the interesting part. A mail client
+// fetching an image carries no session and never will, so an avatar that needs
+// one is an avatar that shows up broken in every alert mail. The address is the
+// org's uuid, which is unguessable, and what it discloses is a logo the org
+// chose to put on its own outgoing mail — the same trade a status page's logo
+// already makes, one tier less public.
+//
+// It answers 404 for an org with no upload rather than redirecting to a
+// generated image: the DEFAULT is initials, which every surface draws itself
+// from `initials()` + `colorOf()`. Rendering them into a PNG here would be a
+// second implementation of the thing that must not drift.
+const orgAvatar = require('../lib/org-avatar');
+const { createRouteRegistrar } = require('../lib/route-schema');
+const SOrg = require('../schemas/org');
+// Mounted at the root (index.js), so the base path is empty.
+const pubRoute = createRouteRegistrar(router, '');
+
+pubRoute({
+  method: 'get', path: '/org-avatar/:orgId',
+  summary: "An organisation's uploaded avatar",
+  description: 'The image bytes, or 404 if the organisation has uploaded nothing — the '
+    + 'default avatar is initials, derived by every surface rather than rendered here. '
+    + 'Unauthenticated: a mail client fetching an image carries no session.',
+  tags: ['Organization'], auth: 'none',
+  params: SOrg.OrgAvatarParam,
+  responses: { 200: SOrg.OrgAvatarBinary, 404: SOrg.NotFoundText },
+  // The handler writes bytes and returns undefined — the registrar's escape
+  // hatch for a response that is not JSON.
+}, async ({ req, res }) => {
+  const a = await orgAvatar.getAvatar(req.params.orgId).catch(() => null);
+  if (!a) { res.status(404).send('not found'); return undefined; }
+  const etag = `W/"oa-${req.params.orgId}-${a.updated_at}"`;
+  if (req.headers['if-none-match'] === etag) { res.status(304).end(); return undefined; }
+  res.setHeader('Content-Type', a.mime);
+  res.setHeader('ETag', etag);
+  // The path is stable per org, so only the `v=` makes a replaced logo visible
+  // through a cache. With one, a long life is safe and is what keeps a mail
+  // image proxy from re-fetching; without one, this is a bare URL somebody
+  // typed and must not be pinned for a day.
+  res.setHeader('Cache-Control', req.query.v ? 'public, max-age=86400' : 'public, max-age=300');
+  // `X-Content-Type-Options: nosniff` is NOT set here: `securityHeaders` in
+  // security.js already puts it on every response, and a second setHeader that
+  // changes nothing is a line that reads as the guard living here. It does not
+  // — which is exactly why e2e-branding asserts the header on the SERVED
+  // response rather than trusting either place. (Measured: deleting a
+  // per-route copy leaves the harness green, because the middleware covers it.)
+  res.setHeader('Content-Disposition', 'inline; filename="avatar"');
+  res.send(a.bytes);
+  return undefined;
+});
+
 // ---- public vendor-status grid (marketing / community output) ----------------
 // Aggregated live status of every vendor the platform org (org 1) monitors.
 // Off by default: publish with setting vendor_grid_published=1 (or env

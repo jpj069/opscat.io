@@ -18,7 +18,7 @@ import { api } from '../api';
 import { SEV, relTime } from '../format';
 import { Card, Button,
   PageHeader, TableScroll, TableSkeleton, Modal, Field, GlowDot, StatusPill,
-  Toggle, KpiCard, Chip, Input, HostInput, COL} from '../ui';
+  Toggle, KpiCard, Chip, Flyout, Input, HostInput, COL} from '../ui';
 import { Select } from '../Select';
 import type {
   BulkAddResult, ReputationAsset, ReputationDiscovery, ReputationListing,
@@ -303,35 +303,17 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
   const actionable = asset.listings.filter((l) => l.tier !== 'informational');
   const info = asset.listings.filter((l) => l.tier === 'informational');
 
-  // Close on Escape — every other slide-over in the app is dismissible that way.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
+  // (Escape now comes from Flyout — and the claim this comment used to make, that
+  // "every other slide-over is dismissible that way", was not true until it did.)
   return (
-    <>
-      <div className="overlay-dim" onClick={onClose} />
-      <div className="slide-over" style={{ width: 560 }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--bg3)',
-          position: 'sticky', top: 0, background: 'var(--bg1)', zIndex: 'var(--z-sticky)' }}>
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="row" style={{ gap: 8, minWidth: 0 }}>
-              <span className="mono text-md font-bold text-text0" style={{
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.target}</span>
-              <StatusPill text={asset.kind || 'asset'} color={SEV.info} />
-              <StatusPill text={asset.enabled ? ui.label : 'paused'}
-                color={asset.enabled ? ui.color : 'var(--text3)'} />
-            </div>
-            <button className="text-text2" aria-label="Close" onClick={onClose}
-              style={{ display: 'inline-flex' }}><XIcon size={17} /></button>
-          </div>
-          {asset.rdns && (
-            <div className="mono text-2xs text-text3" style={{ marginTop: 4 }}>{asset.rdns}</div>
-          )}
-          {canWrite && (
-            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+    <Flyout title={asset.target} onClose={onClose} sub={asset.rdns || undefined}
+      badges={<>
+        <StatusPill text={asset.kind || 'asset'} color={SEV.info} />
+        <StatusPill text={asset.enabled ? ui.label : 'paused'}
+          color={asset.enabled ? ui.color : 'var(--text3)'} />
+      </>}
+      actions={canWrite ? (
+        <>
               <span className="row" style={{ gap: 6 }}>
                 <Toggle on={asset.enabled} onClick={onToggle} />
                 <span className="mono text-2xs text-text2">
@@ -353,11 +335,9 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
               </span>
               <span style={{ flex: 1 }} />
               <Button size="sm" variant="danger" onClick={onDelete} >Delete</Button>
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        </>
+      ) : undefined}>
+      <>
           {/* stats */}
           <div className="row" style={{ gap: 20, flexWrap: 'wrap' }}>
             {([
@@ -483,9 +463,8 @@ function AssetFlyout({ asset, canWrite, busy, zones, onToggle, onDelete, onInter
             {asset.lastDurationMs != null && <> · took {Math.round(asset.lastDurationMs)}ms</>}<br />
             runs on the OpsCat server — a blocklist answer does not vary by vantage point
           </div>
-        </div>
-      </div>
-    </>
+      </>
+    </Flyout>
   );
 }
 

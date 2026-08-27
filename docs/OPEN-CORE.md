@@ -84,6 +84,30 @@ public repo ("Sync community core from internal repo @ <sha>"). The EE code
 never leaves the private repo; the public repo is always buildable and runs
 standalone as the community edition.
 
+**The public repo carries exactly one workflow, and it is generated.** `.github`
+is on the exclusion list, and every sync replaces the whole tree — so a file
+added to the public repo by hand survives until the next publish and no longer.
+`scripts/publish/release-sdk.workflow.yml` is therefore copied in as
+`.github/workflows/release-sdk.yml`, and it is what publishes `@opscat/sdk` to
+npm on a `v*` tag. It lives there rather than beside the collector release in
+the private repo because npm refuses to mint a provenance attestation unless
+`package.json`'s `repository` matches — case-sensitively — the repository the
+workflow runs in, and `sdk/js/package.json` points at `jpj069/opscat.io`. That
+is the right way round: an attestation exists so a stranger can follow it to the
+source, and a link into a private repository 404s for every one of them. The
+public repo needs an `NPM_TOKEN` secret of its own for the same reason.
+
+A release is therefore two tags in two repositories, one per artefact:
+
+```
+git tag v0.2.0 && git push origin v0.2.0     # ghcr.io/jpj069/opscat-collector
+scripts/publish-community.sh --tag v0.2.0    # @opscat/sdk (syncs, then tags)
+```
+
+`--tag` refuses a tag that already exists and one that disagrees with
+`sdk/js/package.json`, because a published npm version is immutable and a moved
+tag would silently stop describing what is on the registry.
+
 Keep the exclusion list in `scripts/publish-community.sh` in sync with this
 document. Internal planning documents stay private — `docs/BACKLOG.md`,
 `docs/BRIDGE.md`, `docs/INCIDENTS-V2.md`, `docs/AUTOMATION-V1.md`,

@@ -40,19 +40,19 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-contract-'));
 process.env.OPSCAT_DATA_DIR = tmp;
 onExit(() => fs.rmSync(tmp, { recursive: true, force: true }));
 process.env.OPSCAT_SECRET = 'e2e-contract-secret';
-process.env.PORT = '3163';
-process.env.OPSCAT_BASE_URL = 'http://127.0.0.1:3163';
+process.env.PORT = '3167';
+process.env.OPSCAT_BASE_URL = 'http://127.0.0.1:3167';
 process.env.OPSCAT_EDITION = 'cloud';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 
-require('./src/index.js'); // boots the app on :3163 and registers every route
+require('./src/index.js'); // boots the app on :3167 and registers every route
 
 const q = require('./src/db/shim');
 const { now, DEFAULT_ORG_ID } = require('./src/util');
 const { registeredRoutes } = require('./src/lib/route-schema');
 
-const BASE = 'http://127.0.0.1:3163';
+const BASE = 'http://127.0.0.1:3167';
 
 async function waitForServer() {
   for (let i = 0; i < 50; i++) {
@@ -313,12 +313,25 @@ async function main() {
   await sweep(sess, 'populated');
 
   // ── 5. the deletes, last ──────────────────────────────────────────────────
+  //
+  // A FRESH session first, and the reason is structural rather than cosmetic:
+  // the sweep above walks EVERY registered GET, twice (empty and populated), so
+  // its cost grows with each route converted to schema-first. The per-session
+  // API limiter is 300 a minute with a burst of 60, and the whole file runs in
+  // under two seconds — so the bucket is spent by the time these deletes run,
+  // and they answered 429. That failure is indistinguishable from a broken
+  // route, and it arrives for whoever converts the NEXT three endpoints rather
+  // than for whoever wrote the sweep. The limiter keys on the session id, so
+  // signing in again is the honest fix; turning the limiter down would test a
+  // configuration nobody runs.
+  const delSess = await login();
+  chk('a second session signs in for the deletes', !!delSess.cookie);
   chk('DELETE /api/rules/:id answers its schema',
-    (await call(sess, 'DELETE', `/api/rules/${rule.j.id}`)).status === 200);
+    (await call(delSess, 'DELETE', `/api/rules/${rule.j.id}`)).status === 200);
   chk('DELETE /api/maintenance/:id answers its schema',
-    (await call(sess, 'DELETE', `/api/maintenance/${win.j.id}`)).status === 200);
+    (await call(delSess, 'DELETE', `/api/maintenance/${win.j.id}`)).status === 200);
   chk('DELETE /api/heartbeats/:id answers its schema',
-    (await call(sess, 'DELETE', `/api/heartbeats/${hb.j.id}`)).status === 200);
+    (await call(delSess, 'DELETE', `/api/heartbeats/${hb.j.id}`)).status === 200);
 
   // ── 6. the document describes exactly what is registered ──────────────────
   const doc = await (await fetch(`${BASE}/openapi.json`)).json();

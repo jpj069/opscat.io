@@ -197,6 +197,108 @@ AI features call the org's LLM through `server/src/llm.js` (OpenAI-compatible
 chat completions): org override (Settings → AI & Voice) → platform default (super-admin
 console) → off. Keys are AES-256-GCM-encrypted at rest and never returned by any API.
 
+## The organisation avatar (`lib/org-avatar.js`)
+
+An organisation had a NAME and nothing else, so every surface that wanted to show one
+drew its own placeholder: the workspace switcher had a fixed indigo gradient square —
+the same one for every org, so it identified nothing — and the alert mail grew a blue
+square. Both were decoration pretending to be identity.
+
+**The default is not stored.** Initials over a colour derived from the org id. Nothing
+is written, so the default cannot be missing, cannot need a migration for the orgs that
+already exist, and cannot drift between surfaces: the app, the platform console and the
+mail all derive it from the same two functions. An org that uploads an image gets a row
+in `org_assets`; deleting the row restores the default exactly, which is why the button
+says *Remove* and the field then shows initials rather than nothing.
+
+- **The colour comes from the org ID, not the name.** An org that renames itself keeps
+  the colour its people recognise in a switcher, and two orgs called "Acme" in the
+  platform console do not collide. Six colours, and no red — red is the critical
+  severity everywhere else, so a red org would read as an org that is on fire.
+- **The initials rule is NOT the user avatar's.** `initials()` in `web/src/format.ts`
+  takes the first letter of each word, which is right for a person (nobody writes "Kl"
+  for Klaus) and wrong for an org, because most org names are one word: "OpsCat" would
+  render as a single letter in a badge, which reads as an unfinished component. A
+  multi-word name takes one letter from each of the first two; a single-word name takes
+  its first two.
+- **The display name is resolved in one place.** The product has two org names —
+  `organizations.name` (the row, what the switcher shows) and `org_settings.org_name`
+  (what Settings › General edits) — and nothing writes one through to the other. That
+  inconsistency is older than this file. What `displayName()` prevents is the avatar
+  growing a third symptom of it: one org initialised as AI in the mail and AC in the
+  switcher, on one screen.
+- **Storage is `org_assets`, deliberately not `status_assets`.** That table hangs off a
+  status PAGE and wears that page's brand; a customer may run several pages with
+  different logos and none of them is the organisation. The sniffing, the 512 KB cap and
+  the base64 ceiling ARE shared (`lib/status-branding.js`) — a second copy is how "an
+  SVG is refused" comes to be true of one upload route and not the other.
+- **Serving is unauthenticated**, at `/org-avatar/:orgId`. A browser fetching an image
+  inside the app has a session; the address is the org's uuid, which is unguessable, and
+  what it discloses is a logo the org chose to put on its own surfaces. It answers 404
+  for an org with no upload rather than redirecting to a generated image — rendering the
+  initials into a PNG here would be a second implementation of the thing that must not
+  drift. The `?v=<updated_at>` is load-bearing: the path is stable per org, so without it
+  a replaced logo keeps showing the old one out of every cache.
+- **Identity is free**, on every plan, for the same reason a status page's logo is.
+
+**Where it appears, and the one place it deliberately does not.** The workspace switcher
+(trigger and list), Settings › General, and the platform console's organisation table all
+render the uploaded image when there is one. The **alert mail renders the initials, always**
+— see `lib/alert-mail.js` `avatarCell`. The obvious design (an `<img>` over the coloured
+cell, initials as its `alt`, so a blocked image degrades to the default) was written,
+rendered and rejected: a blocked request AND a 404 each produce a broken-image glyph with
+the alt text spilling out of the 28px box, in Chrome and as a red cross in Outlook, and no
+styling of `alt` suppresses either. The alternative that never breaks — the logo as a
+`background-image` with the initials as text inside the cell — fails the other way, because
+when the image loads the initials sit on top of it and no mail client can be told to hide
+them conditionally. So the mail takes the half that cannot break, which is also the half
+that matches the rest of that layout: nothing remote, nothing that renders empty for a
+first reader.
+
+## The alert e-mail (`lib/alert-mail.js`)
+
+One builder for both e-mail call sites in `engine/alerts.js` — the rule dispatch and
+`sendVia('email')`, which the on-call chain delivers through. They used to hold two
+byte-identical copies of an `<h2>` plus a `<pre>` containing the plaintext every other
+channel receives, twenty lines apart in the same file: an escaping fix, a deep link or a
+header was something you could get right in one and miss in the other.
+
+`build()` returns `{ subject, html, text, headers }` — the whole message, so a caller
+cannot render the body one way and the plaintext another. Two content modes: a caller
+with structure passes `facts` (label/value rows); one that only ever had a message
+passes `bodyText` and gets the same shell around it, rather than fact rows invented for
+a shape it did not supply.
+
+The layout is "Severity Rail": a 4px rail in the event's severity colour, a chip
+repeating it in words (`HIGH 62`), the event name as the heading, the description, a
+fact table, one or two deep-link buttons, and a footer naming the rule that fired.
+
+What each part exists for:
+
+| | |
+|---|---|
+| Rail + chip | severity before reading. The chip is words, so colour is never the only carrier, and it is sized to be read before the headline under it |
+| No brand mark | there is no org avatar in this product — a logo belongs to a STATUS PAGE (`status_page_assets`), not to an org — so a square beside the org name would be decoration pretending to be identity. The header aligns by `valign` on its cells, never by a `vertical-align` nudge |
+| `First seen` / `Last seen` | `first_seen` was in the row and in no mail; with "Hits: 10" and no time, "ten seconds or ten hours" had no answer. `Last seen` renders only when it differs — on the first hit both instants are the same and a repeated row reads as a fault |
+| Buttons | `?case=` / `?event=`, the overlay parameters the app already reads. The link used to be `/app/monitor` — the list, never the record |
+| Footer | with twenty rules, "make this stop" needs a name |
+| `text` part | no `text/plain` alternative scores as bulk with most filters, and it is the only thing a terminal client or a watch renders |
+| Headers | `Auto-Submitted` keeps an out-of-office reply off a pager; `X-OpsCat-Severity`/`-Rule`/`-Case` are filterable without parsing the subject; `References` threads ten mails about one case |
+
+**The subject is deliberately unchanged** from before the layout. It is what every mail
+filter and saved search a customer has built points at, and a layout change is no reason
+to break them. `e2e-mail` pins it.
+
+Times render in **UTC and say so**. There is no per-org timezone in this product, so the
+alternative is the server's zone printed without a label, which reads as the reader's own
+and is wrong by an hour twice a year even when they share it.
+
+It is **not** merged with `lib/subscribers.js`'s `brandedMail()`. That one renders in a
+status PAGE's brand and is pinned by `e2e-branding`; this one renders in the severity of
+an event. The shared shell is worth extracting — as its own change, with that harness in
+front of it. The client-compatibility rules both obey (tables, inline styles, stated
+background and foreground, nothing remote) are in CLAUDE.md § Outgoing mail.
+
 ## Synthetics
 
 - `synthetic_locations`: the built-in local probe (this VPS, `NBG`) plus any number of
@@ -355,6 +457,51 @@ a listing raises its own event (`reputation_listed`) rather than
   resolved by a zone that **answered that run**: a zone that refused, timed out or failed
   its canary has told us nothing, and reading its silence as a delisting would erase a
   live finding every time the resolver has a bad day.
+
+## Syslog (`lib/syslog.js`, `collector/`, `routes/syslog.js`)
+
+The one ingest path for devices nobody can install software on. The customer's
+existing relay gains one destination and keeps everything else it had; where
+that destination points depends on whether the relay can speak TLS to the
+internet. If it cannot, a **collector** runs in their network, receives syslog
+over UDP/TCP/TLS and ships here over HTTPS. If it can, it sends straight to the
+**managed gateway** (`syslog.<domain>:6514`) and they install nothing.
+
+Five decisions carry the design, all argued in `docs/SYSLOG.md`:
+
+* **The parser is a library with exactly one copy** (`server/src/lib/syslog.js`).
+  The installer fetches it from the instance and the Dockerfile copies it in at
+  build time, so the parser running inside a customer's network is the file
+  `e2e-syslog.js` pins. A second checked-in copy would drift, and the copy that
+  drifts would be the one nobody can look at.
+* **The collector writes through the pipeline, never into the log store.**
+  `POST /v1/collector/logs` shares `withinIngestPlan` and `pipeline.ingestLogs`
+  with the SDK path, so classification, dedupe, `event_buckets`, the plan
+  allowance and retention have one implementation rather than two.
+* **The credential is an `api_keys` row with a `collector` scope**, not a new
+  kind. `logs.source` already records the key name, so per-site attribution
+  costs nothing; the scope keeps the blast radius to one endpoint, and
+  `plans.js` keeps collector keys out of the API-key budget.
+* **The gateway is the collector, in a second mode** (`OPSCAT_GATEWAY=1`), and
+  it holds no credential of its own. A managed connection is anonymous — a relay
+  opens a socket and starts sending — so the tenant comes out of each message's
+  structured data (`[opscat@<PEN> token="ocl_…"]`, the shape Better Stack, Mezmo
+  and Sumo Logic use) and the gateway forwards each group under the key it
+  arrived with. Consequences: TLS is the only listener it opens (the key is in
+  the message now), a key in its own environment makes it refuse to start, and
+  the enterprise number is matched loosely by name so a future IANA assignment
+  breaks no relay already configured. Server-side there is nothing new at all —
+  same key, same `/v1/collector/*`, same pipeline.
+* **The tunnel removes the credential instead of protecting it.** A third mode
+  (`OPSCAT_TUNNEL=1`) terminates WireGuard, and inside it the inner source
+  address IS the tenant — the kernel will not carry a packet from an address the
+  sending peer's key does not own — so plain UDP/514 becomes attributable and an
+  appliance that cannot hold a credential becomes reachable. Two things follow.
+  The gateway holds no tenant credential: it asserts the source address and the
+  SERVER resolves the tenant (`/v1/tunnel/logs`), so a stolen gateway key does
+  not yield every customer's write key. And it refuses to start bound to
+  `0.0.0.0`, because attribution by source address is sound only for addresses
+  something upstream verified.
 
 ## SNMP
 
@@ -661,6 +808,27 @@ is an asynchronous mutation: rows leave query results promptly and the disk come
 back on the next merge. `clickhouse-schema.sql` also carries a 400-day TTL, above
 the largest plan (365), purely as the backstop for the day the sweep stops
 running.
+
+**The sweep also prunes the PostgreSQL `logs` table, and that is the one place
+the seam reaches into the store it is not serving from.** An instance that
+switches the log store on leaves whatever `logs` already held behind: nothing
+reads those rows again, and — until this — nothing deleted them either, because
+`retention.pruneLogs()` calls `purge` and `purge` answered from ClickHouse. The
+Postgres table was therefore pruned for the last time on the boot before the
+cutover. It is a leak with no symptom: no screen contradicts it, no query is
+slower for it, the disk never comes back (144 MB on our own instance), and the
+rows are a second copy of customer log lines living past their own retention
+window, which is the half that matters more than the megabytes.
+
+So `purge` on the ClickHouse implementation means everything older than the
+cutoff is gone from everywhere this product has ever put it. It lives in
+`db/log-store.js` rather than in `engine/retention.js`, because deciding it from
+the engine would mean the engine knowing there are two stores. **It disables
+itself**: once the Postgres table is empty it stays empty — with ClickHouse
+answering nothing in the product can write to it — so the sweep costs one indexed
+lookup per boot and nothing per pass thereafter. `--drop-source` on
+`scripts/migrate-logs-to-clickhouse.js` is the same job done at once instead of a
+retention window from now.
 
 ### Two things that look like oversights and are not
 

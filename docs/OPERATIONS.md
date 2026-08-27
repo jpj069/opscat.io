@@ -149,10 +149,14 @@ chart** on the Analytics page. Measured on 596,491 lines over 7 days, two cores
 | throughput chart, 7 days | 261 ms | **26 ms** |
 | the same chart at 6 M lines | 2,620 ms | **134 ms** |
 
-**What it costs is memory, stated plainly:** the stack runs at about **720 MB**
-shortly after boot with both databases, against roughly 400 MB with PostgreSQL
-alone. Budget 1 GB once ClickHouse's caches fill. Both databases carry
-`mem_limit: 1g`, so the ceiling is bounded rather than open-ended.
+**What it costs is memory, stated plainly:** the stack settles at about
+**870 MB** with both databases, against roughly 400 MB with PostgreSQL alone —
+measured on our own production host after days of traffic, not seconds after
+boot, because ClickHouse grows into its caches and a fresh-boot figure flatters
+it by 150 MB. The compose file caps PostgreSQL at `mem_limit: 1g` and ClickHouse
+at `1.5g`, so the ceiling is bounded rather than open-ended: budget 2.5 GB for
+the two databases in the worst case, and remember that a host with no swap needs
+those caps to be real.
 
 ### Running without it
 
@@ -198,8 +202,8 @@ one-line error at startup.
 **2. Bring your existing log lines across**, once the stack is up:
 
 ```bash
-docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --dry-run
-docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js
+docker compose exec -T app node server/scripts/migrate-logs-to-clickhouse.js --dry-run
+docker compose exec -T app node server/scripts/migrate-logs-to-clickhouse.js
 ```
 
 Reads switch to ClickHouse the moment the app restarts, so without this your
@@ -211,7 +215,7 @@ deduplicate on, so a second pass would double every line).
 Once the Logs page looks right, reclaim the PostgreSQL space:
 
 ```bash
-docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js --drop-source
+docker compose exec -T app node server/scripts/migrate-logs-to-clickhouse.js --drop-source
 ```
 
 It re-checks, **per organisation**, that ClickHouse holds at least as many lines
@@ -220,6 +224,23 @@ outright if any org comes up short. Per organisation rather than one total,
 because a busy tenant's new lines would otherwise cover for an empty one. That
 guard catches a copy that half-ran or never ran; it cannot prove the rows are
 identical, so look at the Logs page first.
+
+Add `--dry-run` to that same command to run the **whole** verification and print
+the per-organisation table without truncating anything. Do that first: after the
+truncate there is nothing left to compare against.
+
+If your instance has been ingesting into ClickHouse for a while before you get
+here, the PostgreSQL table may no longer be a subset of it — the oldest rows
+aged past their retention window on the ClickHouse side and are genuinely gone.
+Copying is then wrong (it would duplicate everything both stores hold) and the
+shortfall is real. `--accept-loss=<lines>` is for that case: a **ceiling**, not
+a switch, so the script measures the real shortfall and still refuses if it is
+larger than the number you give. What is accepted is printed beside what was
+measured.
+
+You do not have to run any of this to avoid a leak, only to get the space back
+sooner: the retention sweep prunes the orphaned PostgreSQL rows on its own
+schedule as well.
 
 ### Things worth knowing
 

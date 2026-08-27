@@ -2,6 +2,25 @@
   "name": "@opscat/sdk",
   "version": "0.1.0",
   "description": "Dependency-free JavaScript client for the OpsCat ingest API (logs + events).",
+  "keywords": [
+    "opscat",
+    "logging",
+    "observability",
+    "logs",
+    "events",
+    "noc",
+    "sre"
+  ],
+  "homepage": "https://opscat.io",
+  "bugs": {
+    "url": "https://github.com/jpj069/opscat.io/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jpj069/opscat.io.git",
+    "directory": "sdk/js"
+  },
+  "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
@@ -16,19 +35,12 @@
     "index.d.ts",
     "README.md"
   ],
-  "keywords": [
-    "opscat",
-    "logging",
-    "observability",
-    "logs",
-    "events",
-    "noc",
-    "sre"
-  ],
   "engines": {
     "node": ">=18"
   },
   "sideEffects": false,
-  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {}
 }

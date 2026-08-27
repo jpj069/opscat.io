@@ -5,11 +5,17 @@ const express = require('express');
 const q = require('../db/shim');
 const { now, sha256, clampInt, isStr, httpError } = require('../util');
 const sec = require('../security');
+const { resolveUserAgent } = require('../lib/useragent');
+const { getOrgSetting } = require('../db');
 const pipeline = require('../engine/pipeline');
 const synthEngine = require('../engine/synthetics');
 const plans = require('../plans');
 const { createRouteRegistrar, ApiProblem } = require('../lib/route-schema');
 const S = require('../schemas/ingest');
+const SY = require('../schemas/syslog');
+const crypto = require('crypto');
+const config = require('../config');
+const wg = require('../lib/wireguard');
 
 const router = express.Router();
 
@@ -55,6 +61,188 @@ route({
   // through the registrar's escape hatch untouched.
   if (!(await withinIngestPlan(req.orgId, res))) return undefined;
   return pipeline.ingestLogs(entries, req.apiKey.name, req.orgId);
+});
+
+/* ---- the syslog collector ------------------------------------------------
+ *
+ * Two routes, and both exist rather than reusing `/v1/ingest/logs` for one
+ * reason: SCOPE. A collector key lives in an env file on a machine inside a
+ * customer's network, and `ingest` would also let it post events and webhooks.
+ * `collector` lets it do exactly one thing.
+ *
+ * Everything else is deliberately shared — `withinIngestPlan` above and
+ * `pipeline.ingestLogs` below are the same code the SDK path runs, so syslog
+ * lines are classified, deduplicated, folded into `event_buckets` and counted
+ * against the same daily allowance. A second write path would have been a
+ * second set of answers to all four.
+ */
+const qEndpointByKey = q.prepare(`SELECT id, name, device_prefix, enabled
+  FROM syslog_endpoints WHERE api_key_id = ? AND org_id = ?`);
+
+route({
+  method: 'get', path: '/collector/config',
+  summary: 'Configuration for a syslog collector',
+  description: 'Polled by the collector at boot and periodically, so a device prefix or a '
+    + 'disabled endpoint takes effect without anyone editing a file on the customer\'s host.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('collector')],
+  responses: { 200: SY.CollectorConfig, 404: S.ErrorResponse },
+}, async ({ req }) => {
+  const e = await qEndpointByKey.get(req.apiKey.id, req.orgId);
+  if (!e) throw new ApiProblem(404, 'this key belongs to no endpoint');
+  return {
+    endpointId: Number(e.id),
+    name: e.name,
+    devicePrefix: e.device_prefix || null,
+    enabled: !!e.enabled,
+    batchMax: 500,      // the cap /v1/ingest/logs enforces; told rather than guessed
+    flushMs: 2000,
+  };
+});
+
+route({
+  method: 'post', path: '/collector/logs',
+  summary: 'Ingest syslog lines from a collector',
+  description: 'Same body and the same 500-line cap as /v1/ingest/logs, authenticated with '
+    + 'a collector key. Lines from a disabled endpoint are refused, not silently dropped.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [sec.requireApiKey('collector')],
+  body: S.IngestLogsBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse, 403: S.ErrorResponse,
+    404: S.ErrorResponse, 413: S.ErrorResponse, 429: S.ErrorResponse },
+}, async ({ body, req, res }) => {
+  const entries = Array.isArray(body) ? body : body.logs;
+  if (entries.length === 0) return { accepted: 0, events: 0 };
+  if (entries.length > 500) throw new ApiProblem(413, 'max 500 log entries per batch');
+  const e = await qEndpointByKey.get(req.apiKey.id, req.orgId);
+  if (!e) throw new ApiProblem(404, 'this key belongs to no endpoint');
+  /* Parenthesised, and the endpoint is re-read on every batch rather than
+   * trusted from the key: `enabled` is the switch an operator flips to silence
+   * a site that has gone mad, and a cached answer would keep ingesting for as
+   * long as the cache lived. */
+  if (!e.enabled) throw new ApiProblem(403, 'this endpoint is disabled');
+  if (!(await withinIngestPlan(req.orgId, res))) return undefined;
+  return pipeline.ingestLogs(entries, req.apiKey.name, req.orgId);
+});
+
+/* ---- the syslog tunnel ----------------------------------------------------
+ *
+ * Stage 3. Inside a WireGuard tunnel there is no credential in the message at
+ * all: the kernel refuses to carry a packet whose source is not in the sending
+ * peer's AllowedIPs, so the inner address IS the tenant, and an appliance that
+ * can only speak plain UDP/514 becomes attributable. That is the whole feature.
+ *
+ * ── What the gateway is allowed to know, and why it is this little ──────────
+ *
+ * Something has to terminate the tunnel, and whatever does is trusted — that is
+ * inherent, not a weakness of this design. The question worth answering is how
+ * much a stolen gateway credential is worth, and the answer was chosen rather
+ * than inherited.
+ *
+ * The obvious shape is to hand the gateway a map of inner address → the
+ * endpoint's COLLECTOR KEY, and let it ship through `/v1/collector/logs` like
+ * everything else. That would mean one credential whose theft yields every
+ * tenant's write key, in plaintext, reusable from anywhere, for as long as
+ * nobody rotates them all.
+ *
+ * So instead the gateway asserts the source address and the SERVER resolves the
+ * tenant. `/v1/tunnel/peers` hands out public keys and addresses — nothing
+ * secret — and `/v1/tunnel/logs` takes `{sourceIp, logs}`. A stolen gateway key
+ * can still write into any tenant, which is unavoidable, but only through this
+ * endpoint, only while it is valid, and only in a way that is attributable to
+ * the gateway rather than indistinguishable from the customer's own relay.
+ *
+ * ── The key is infrastructure configuration, not a tenant credential ────────
+ *
+ * `OPSCAT_TUNNEL_GATEWAY_KEY`, shared by compose with the gateway container the
+ * same way `CLICKHOUSE_PASSWORD` is. Unset means the whole path does not exist:
+ * an instance with no tunnel gateway must not answer here at all, rather than
+ * answer 401 and advertise that it would.
+ */
+const tunnelPeers = q.prepare(
+  `SELECT id, tunnel_ip, peer_pubkey FROM syslog_endpoints
+   WHERE mode = 'tunnel' AND tunnel_ip IS NOT NULL AND peer_pubkey IS NOT NULL
+   ORDER BY tunnel_ip`);
+const tunnelByIp = q.prepare(
+  `SELECT id, org_id, name, device_prefix, enabled FROM syslog_endpoints
+   WHERE tunnel_ip = ? AND mode = 'tunnel'`);
+
+/**
+ * Timing-safe, and length-safe before that: `timingSafeEqual` THROWS on a
+ * length mismatch, so comparing a supplied string of the wrong size would turn
+ * an authentication failure into a 500 — and a 500 is a perfectly good oracle
+ * for "your guess was the wrong length".
+ */
+function tunnelAuthed(req) {
+  const want = config.tunnelGatewayKey;
+  if (!want) return false;
+  const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const a = Buffer.from(got);
+  const b = Buffer.from(want);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requireTunnelGateway(req, res, next) {
+  // 404, not 403: an instance that runs no tunnel gateway should look like one
+  // that has never heard of the feature.
+  if (!config.tunnelGatewayKey) return httpError(res, 404, 'not found');
+  if (!tunnelAuthed(req)) return httpError(res, 401, 'unauthorized');
+  return next();
+}
+
+route({
+  method: 'get', path: '/tunnel/peers',
+  summary: 'The WireGuard peers the tunnel gateway should configure',
+  description: 'Public keys and inner addresses only — there is nothing secret in this '
+    + 'response. Polled by the gateway, which reconciles its interface against it.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [requireTunnelGateway],
+  responses: { 200: SY.TunnelPeers, 401: S.ErrorResponse, 404: S.ErrorResponse },
+}, async () => ({
+  net: config.tunnelNet,
+  peers: (await tunnelPeers.all()).map((p) => ({
+    endpointId: Number(p.id), ip: p.tunnel_ip, publicKey: p.peer_pubkey,
+  })),
+}));
+
+route({
+  method: 'post', path: '/tunnel/logs',
+  summary: 'Ingest syslog lines that arrived through the tunnel',
+  description: 'The gateway asserts the inner source address; the tenant is resolved here. '
+    + 'Same 500-line cap, same pipeline and the same daily allowance as every other path.',
+  tags: ['Ingest'], auth: 'apiKey',
+  middleware: [requireTunnelGateway],
+  body: SY.TunnelLogsBody,
+  responses: { 200: S.IngestResult, 400: S.ErrorResponse, 401: S.ErrorResponse,
+    403: S.ErrorResponse, 404: S.ErrorResponse, 413: S.ErrorResponse, 429: S.ErrorResponse },
+}, async ({ body, res }) => {
+  const entries = Array.isArray(body.logs) ? body.logs : [];
+  if (entries.length === 0) return { accepted: 0, events: 0 };
+  if (entries.length > 500) throw new ApiProblem(413, 'max 500 log entries per batch');
+  /* The address is checked against the POOL before it is looked up. A lookup
+   * alone would be safe — an address outside the pool simply matches no row —
+   * but this refusal says something different and worth saying: a packet from
+   * outside the inner network did not come through the tunnel, so either the
+   * gateway is bound to the wrong interface or something is forging. Neither is
+   * a "no such endpoint". */
+  if (!wg.inPool(config.tunnelNet, body.sourceIp)) {
+    throw new ApiProblem(400, 'sourceIp is not inside the tunnel network');
+  }
+  const e = await tunnelByIp.get(body.sourceIp);
+  if (!e) throw new ApiProblem(404, 'no endpoint holds that inner address');
+  // Re-read every batch, never cached: `enabled` is what an operator flips to
+  // silence a site, and it has to take effect on the next batch.
+  if (!e.enabled) throw new ApiProblem(403, 'this endpoint is disabled');
+  if (!(await withinIngestPlan(e.org_id, res))) return undefined;
+  /* The device prefix is applied HERE rather than at the gateway, unlike every
+   * other syslog path — because the gateway does not know which endpoint a
+   * packet belongs to, and telling it would mean shipping it the very mapping
+   * this design keeps server-side. */
+  const pfx = e.device_prefix || '';
+  const logs = pfx
+    ? entries.map((x) => Object.assign({}, x, { device: pfx + String(x.device || 'unknown') }))
+    : entries;
+  return pipeline.ingestLogs(logs, e.name, e.org_id);
 });
 
 // ---- direct event ingest ----
@@ -282,12 +470,29 @@ route({
   return { ok: true, intervalS: 60, latestVersion: bundledAgentVersion, updateAvailable };
 });
 
-// Self-update download: the agent fetches this when its heartbeat says
-// updateAvailable, atomically replaces its own script and lets systemd restart it.
-router.get('/agents/update', requireAgentToken, (req, res) => {
+/* Self-update download: the agent fetches this when its heartbeat says
+ * updateAvailable, atomically replaces its own script and lets systemd restart it.
+ *
+ * Registered rather than raw, and it took a `contentType` on the spec to do it:
+ * the generator hard-coded `application/json`, so declaring this route would
+ * have put a lie in the spec — which is worse than being absent from it. The
+ * handler answers through `res` and returns undefined, i.e. the registrar's
+ * documented escape hatch; what registration buys is that the route is IN
+ * `/openapi.json` and the ratchet in `check-api-schema.js` counts it. */
+route({
+  method: 'get', path: '/agents/update',
+  summary: 'Download the agent script this build bundles',
+  description: 'The host agent fetches this when its heartbeat answers updateAvailable, replaces its own '
+    + 'file atomically and exits for systemd to restart it.',
+  tags: ['Agents'], auth: 'agentToken',
+  middleware: [requireAgentToken],
+  contentType: 'application/javascript',
+  responses: { 200: S.AgentScript, 404: S.ErrorResponse },
+}, ({ res }) => {
   if (!bundledAgent) return httpError(res, 404, 'no bundled agent in this build');
   res.setHeader('X-Agent-Version', bundledAgentVersion || '');
   res.type('application/javascript').send(bundledAgent);
+  return undefined;
 });
 
 // Container snapshot from the host agent (docker ps + stats). Raises a
@@ -463,9 +668,31 @@ route({
   tags: ['Probes'], auth: 'probeKey',
   middleware: [requireProbeKey],
   responses: { 200: S.SyntheticChecksResult },
-}, async ({ req }) => {
+}, async ({ req, res }) => {
   const loc = req.probeLocation;
-  await q.prepare('UPDATE synthetic_locations SET last_seen_at = ? WHERE id = ?').run(now(), loc.id);
+  /* The work-list pull is the ONLY thing a probe-only sensor calls on a
+   * schedule, so it is where the version conversation has to happen. A sensor
+   * carries a probe key and no agent token, so it never reaches
+   * `/v1/agents/heartbeat` — which is why `sensor_nodes.agent_version` was read
+   * in four places and written in none, and why every managed node showed a
+   * dash for its version forever.
+   *
+   * Both directions ride on HEADERS rather than the body: the response is a bare
+   * JSON array that older agents parse with `Array.isArray(...) ? … : []`, so
+   * wrapping it in an object would silently stop every deployed sensor.
+   */
+  const reported = String(req.headers['x-opscat-agent-version'] || '').slice(0, 50);
+  if (reported && loc.node_id && /^[0-9a-zA-Z.\-+]+$/.test(reported)) {
+    await q.prepare('UPDATE sensor_nodes SET agent_version = ? WHERE id = ?').run(reported, loc.node_id);
+  }
+  if (bundledAgentVersion) res.setHeader('X-OpsCat-Agent-Latest', bundledAgentVersion);
+  // The source address is recorded here rather than at provisioning time
+  // because it is the only place that knows the truth for EVERY kind of probe:
+  // a self-hosted agent has no cloud API to ask, and an auto-provisioned node's
+  // public IP is ephemeral and can change under it. It is what the UI shows
+  // when someone has to allow-list the monitor at a firewall.
+  await q.prepare('UPDATE synthetic_locations SET last_seen_at = ?, last_ip = ? WHERE id = ?')
+    .run(now(), sec.clientIp(req).slice(0, 45) || null, loc.id);
   if (loc.node_id) {
     const r = await q.prepare("UPDATE sensor_nodes SET status = 'online' WHERE id = ? AND status = 'provisioning'")
       .run(loc.node_id);
@@ -514,8 +741,32 @@ route({
     // a Promise, a Promise is truthy, and every check of every booking org would
     // be handed to this probe.
     .filter((c) => !restricted.has(c.id) || assigned.has(c.id))
+    // The UA is RESOLVED here rather than sent as three fields: the sensor has no
+    // access to org settings, and a probe deciding its own identity is how the
+    // two paths drift into sending different headers for the same check.
     .map((c) => ({ id: c.id, type: c.type, target: c.target,
-      intervalS: c.interval_s, timeoutMs: c.timeout_ms })));
+      intervalS: c.interval_s, timeoutMs: c.timeout_ms,
+      userAgent: resolveUserAgent(c.user_agent, getOrgSetting(c.org_id, 'synthetic_user_agent', '')) })));
+});
+
+/* The same bundled script `/v1/agents/update` serves, for callers that have a
+ * probe key instead of an agent token. Two routes rather than one relaxed guard:
+ * the credentials authorise different things, and a probe key must never become
+ * a way to reach the host-agent surface. */
+route({
+  method: 'get', path: '/synthetics/agent',
+  summary: 'Download the agent script, for a caller holding a probe key',
+  description: 'Same file as /v1/agents/update. A sensor has no agent token, so without this route a '
+    + 'probe-only node kept whatever cloud-init installed on the day it booted.',
+  tags: ['Probes'], auth: 'probeKey',
+  middleware: [requireProbeKey],
+  contentType: 'application/javascript',
+  responses: { 200: S.AgentScript, 404: S.ErrorResponse },
+}, ({ res }) => {
+  if (!bundledAgent) return httpError(res, 404, 'no bundled agent in this build');
+  res.setHeader('X-Agent-Version', bundledAgentVersion || '');
+  res.type('application/javascript').send(bundledAgent);
+  return undefined;
 });
 
 // …and reports results (only for checks this location is allowed to serve —

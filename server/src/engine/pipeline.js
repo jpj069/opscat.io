@@ -239,8 +239,21 @@ async function ingestLogs(entries, source, orgId = DEFAULT_ORG_ID) {
       meta: e.meta ? JSON.stringify(e.meta).slice(0, 2000) : null });
     bytes += Buffer.byteLength(line);
     const cls = classify(line, sev, orgId);
-    // `matched` lets Scout mine only lines no classifier knows
-    emittedLogs.push({ orgId, ts, device, line, sev, matched: !!cls });
+    /* `matched` lets Scout mine only lines no classifier knows — and the syslog
+     * FLOOR is not a classifier knowing anything.
+     *
+     * `classify` returns a match for any line whose syslog severity is warning
+     * or worse, so that a critical line becomes an event even when no rule names
+     * it. That is right for the event path and was silently wrong here: it is a
+     * generated name (`syslog_sev4`) with a null pattern, saying only how loud
+     * the sender thought it was. Treating it as "known" made Scout blind to
+     * warnings and errors off network gear — which is precisely the population
+     * Scout exists to find rules for. A customer's whole syslog feed produced
+     * no suggestions at all above severity 5, and nothing said so.
+     *
+     * Measured on the collector harness: a line nothing could possibly classify
+     * still produced zero templates, because it carried `sev: 4`. */
+    emittedLogs.push({ orgId, ts, device, line, sev, matched: !!cls && cls.source !== 'syslog' });
     if (!cls) continue;
     const ip = e.meta && typeof e.meta.ip === 'string' ? e.meta.ip.slice(0, 45) : null;
     matches.push({

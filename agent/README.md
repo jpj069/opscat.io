@@ -26,7 +26,7 @@ curl -fsSL https://opscat.io/agent/install.sh | sudo \
 ```
 
 (Register the agent first under Settings → Agents & SNMP — or in onboarding — to get
-the `oca_…` token; add `OPSCAT_PROBE_KEY=ocp_…` and `--probe` to also run
+the `oca_…` token; add `OPSCAT_PROBE_KEY=ocs_…` and `--probe` to also run
 synthetic probes from this host.)
 
 From a checkout of this directory the same works offline:
@@ -34,7 +34,7 @@ From a checkout of this directory the same works offline:
 ```sh
 sudo OPSCAT_URL=https://opscat.io \
      OPSCAT_AGENT_TOKEN=oca_xxxxxxxx \
-     OPSCAT_PROBE_KEY=ocp_xxxxxxxx \
+     OPSCAT_PROBE_KEY=ocs_xxxxxxxx \
      OPSCAT_AGENT_FLAGS="--logs --probe" \
      sh install.sh
 ```

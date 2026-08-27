@@ -8,6 +8,7 @@ import { SEV, relTime } from '../format';
 import { Card, Button, Modal, StatusPill, Field, TableScroll, TableSkeleton, PageHeader, Tabs, Input, COL} from '../ui';
 import {
   AppWindowIcon,
+  ArrowUpRightIcon,
   HeartPulseIcon,
   NetworkIcon,
   PlusIcon,
@@ -22,7 +23,11 @@ import type { AssetRow } from '../types';
 // Name | Type | Detail | Status | Last seen | delete. Detail holds the hostname,
 // URL or target, so it is the one that gets the slack — Name and Detail were both
 // `1fr` before, which split it evenly between a short name and a long address.
-const COLS = [COL.text, COL.label, COL.textWide, COL.status, COL.age, COL.tiny].join(' ');
+// Type holds a StatusPill, so it takes COL.status — whose own note reads "one
+// StatusPill or SevBadge". It was COL.label (minmax(90px, 0.6fr)), i.e. the track
+// for short *text*, and at 390px it resolved to 54px: enough for "check", not for
+// "log source". Status is the one carrying free text here, so the two swap.
+const COLS = [COL.text, COL.status, COL.textWide, COL.label, COL.age, COL.tiny].join(' ');
 
 const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   agent: { label: 'agent', color: '#38b6ff' },
@@ -30,7 +35,8 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
   check: { label: 'check', color: '#bc8cff' },
   heartbeat: { label: 'heartbeat', color: '#f0883e' },
   container: { label: 'container', color: '#58a6ff' },
-  source: { label: 'source', color: '#3fb950' },
+  'log-source': { label: 'log source', color: '#3fb950' },
+  syslog: { label: 'syslog', color: '#2ea043' },
   vendor: { label: 'vendor', color: '#d29922' },
   reputation: { label: 'reputation', color: '#f85149' },
 };
@@ -39,14 +45,59 @@ const KIND_UI: Record<AssetRow['kind'], { label: string; color: string }> = {
 // was missing from the old filter row while its rows were in the table — the one
 // asset kind nobody could narrow to.
 const ASSET_TABS = ['all', 'agent', 'container', 'snmp', 'check', 'heartbeat',
-  'vendor', 'reputation', 'source'] as const;
+  'vendor', 'reputation', 'syslog', 'log-source'] as const;
 type AssetTab = typeof ASSET_TABS[number];
+
+/**
+ * Where an asset actually LIVES — the page that owns it, and the overlay parameter
+ * that opens its detail there.
+ *
+ * Assets is a directory, not a store: every row is a projection of a record that
+ * belongs to another page, which already has a flyout for it. So a click does not
+ * open a second, thinner panel here — it navigates to the owning page with the
+ * overlay parameter set, and the real flyout opens exactly as if the reader had
+ * arrived on that page and clicked the row themselves. One detail view per record,
+ * and it stays the one its own page maintains.
+ *
+ * `null` where nothing owns the row yet: a container has no id of its own (it is a
+ * name under an agent), a `source` is an inferred log device rather than a record,
+ * and a heartbeat is configured here. Those rows are deliberately NOT clickable —
+ * a row that looks interactive and does nothing is worse than one that does not.
+ */
+function assetTarget(r: AssetRow): { nav: string; search: string; label: string } | null {
+  if (r.id == null) {
+    // A log source has no record, but it does have a name the log view filters by —
+    // which is the closest thing to "show me this asset" that exists for it.
+    if (r.kind === 'log-source') {
+      return { nav: 'logs', search: `?q=${encodeURIComponent(r.name)}`, label: 'Open in Logs' };
+    }
+    return null;
+  }
+  switch (r.kind) {
+    case 'check': return { nav: 'synthetics', search: `?check=${r.id}`, label: 'Open in Synthetics' };
+    case 'vendor': return { nav: 'vendors', search: `?vendor=${r.id}`, label: 'Open in Vendors' };
+    case 'reputation': return { nav: 'reputation', search: `?asset=${r.id}`, label: 'Open in Reputation' };
+    /* A syslog endpoint is a real record with a real flyout, so this opens THAT
+     * one — the tab segment names the tab, the query parameter names the row,
+     * and the reader lands exactly where they would have by clicking it in
+     * Settings themselves. */
+    case 'syslog': return { nav: 'settings/collectors', search: `?endpoint=${r.id}`, label: 'Open in Settings' };
+    // Agents and SNMP targets are configured in Settings and have no flyout of their
+    // own yet, so this lands on the tab that lists them rather than on the record.
+    case 'agent':
+    case 'snmp': return { nav: 'settings/collectors', search: '', label: 'Open in Settings' };
+    default: return null;
+  }
+}
 
 function statusColor(s: string): string {
   if (s === 'online' || s === 'ok' || s === 'active' || s === 'running') return SEV.green;
   // `unknown` = a reputation run that could not complete. Amber, not red: there
   // is no evidence against the asset, only missing evidence.
   if (s === 'pending' || s === 'late' || s === 'restarting' || s === 'paused' || s === 'unknown') return '#e3b341';
+  // `waiting` = configured and nothing has arrived yet. Grey rather than green:
+  // an endpoint nobody ever connected is the commonest support case in syslog,
+  // and colouring it like a working one is how it stays unnoticed.
   if (s === 'disabled' || s === 'waiting' || s === 'created') return 'var(--text3)';
   if (s === 'listed') return SEV.high;
   return SEV.critical; // offline / failing / missing / exited / unreachable / error text
@@ -109,8 +160,14 @@ export default function Assets() {
         ) : shown.length === 0 ? (
           <div className="text-text3 text-sm" style={{ padding: 32, textAlign: 'center'}}>
             nothing monitored yet — hit “+ Add” to bring in your first server, device, app or check</div>
-        ) : shown.map((r, i) => (
-          <div key={`${r.kind}-${r.id ?? r.name}-${i}`} className="tbl-row">
+        ) : shown.map((r, i) => {
+          const target = assetTarget(r);
+          const go = target ? () => app.setNav(target.nav, target.search) : undefined;
+          return (
+          <div key={`${r.kind}-${r.id ?? r.name}-${i}`} className="tbl-row"
+            style={go ? { cursor: 'pointer' } : undefined}
+            title={target ? target.label : undefined}
+            onClick={go}>
             <span className="mono text-base font-semibold text-text0" style={{
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
             <StatusPill text={KIND_UI[r.kind].label} color={KIND_UI[r.kind].color} />
@@ -120,14 +177,22 @@ export default function Assets() {
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.status}>{r.status}</span>
             <span className="mono text-xs text-text3">
               {r.lastSeen ? relTime(r.lastSeen) : 'never'}</span>
-            <span>
+            <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}
+              onClick={(e) => e.stopPropagation()}>
               {canEdit && r.kind === 'heartbeat' && (
                 <button title="Delete heartbeat" style={{ color: SEV.critical, display: 'inline-flex' }}
                   onClick={() => removeHeartbeat(r)}><XIcon size={15} /></button>
               )}
+              {target && (
+                <button title={target.label} onClick={go} aria-label={target.label}
+                  className="text-text3" style={{ display: 'inline-flex' }}>
+                  <ArrowUpRightIcon size={14} />
+                </button>
+              )}
             </span>
           </div>
-        ))}
+          );
+        })}
         </TableScroll>
       </Card>
 

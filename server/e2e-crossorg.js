@@ -301,6 +301,96 @@ async function main() {
   const ownSwitch = await switchTo(driftedSess, ACME);
   chk('…while switching into an org you ARE in still works', ownSwitch.status === 200, `got ${ownSwitch.status}`);
 
+  /* ── impersonation: the banner and the way back ────────────────────────────
+   *
+   * `POST /api/superadmin/orgs/:id/impersonate` mints a session for the org's
+   * owner and OVERWRITES the operator's cookie. Before migration 033 nothing
+   * recorded who had been driving, which cost two things: there was no way back,
+   * and — the worse half — no way for the app to say you were impersonating at
+   * all. Every action after that point audits under the customer's name, so
+   * "who deleted that check" answered with the wrong person.
+   *
+   * The three checks that matter here are about ABSENCE and about REFUSAL,
+   * because the happy path is the easy part:
+   *   • an ordinary session must carry NO impersonation marker, or the banner
+   *     appears for everyone and stops meaning anything;
+   *   • the return must REFUSE once the operator is no longer a super-admin —
+   *     whoever holds this cookie already has the customer's org, and returning
+   *     hands them the platform, so a revoked operator may not walk back in
+   *     through a session they opened last week;
+   *   • the impersonated session must be GONE afterwards, not merely swapped in
+   *     the browser — a second cookie still acting as the customer is exactly
+   *     what this must not leave behind.
+   */
+  const meOf = async (sess) => (await get(sess, '/api/auth/me', null)).body;
+  const post = async (sess, p) => {
+    const r = await fetch(BASE + p, {
+      method: 'POST',
+      headers: { cookie: sess.cookie, 'content-type': 'application/json', 'x-opscat-csrf': sess.csrf },
+      body: '{}',
+    });
+    return { status: r.status, body: await r.json().catch(() => null),
+      cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
+  };
+
+  // Globex has no members of its own in this harness — impersonation targets the
+  // org's OWNER, so it needs one.
+  await mkUser('globex-owner@e2e.test', GLOBEX);
+
+  chk('an ordinary session reports no impersonation at all',
+    (await meOf(tenant)).impersonating === undefined);
+  chk('…and so does a platform operator acting normally',
+    (await meOf(op)).impersonating === undefined);
+
+  const imp = await post(op, `/api/superadmin/orgs/${GLOBEX}/impersonate`);
+  chk('a super-admin can impersonate an org', imp.status === 200, `got ${imp.status}`);
+  const impSess = { cookie: imp.cookie, csrf: imp.body && imp.body.csrf };
+  const impMe = await meOf(impSess);
+  /* `!!impMe.impersonating &&` on every line below is not defensive noise: without
+   * it, the mutation that stops recording the operator kills the RUN with a
+   * TypeError instead of failing the checks it is about, and a harness that dies
+   * reports nothing at all. Same shape as e2e-sensors' `!!tokLine &&`. */
+  const impState = impMe && impMe.impersonating;
+  chk('the impersonated session SAYS it is impersonating', !!impState);
+  chk('…and names the org it is in', !!impState && impState.org === 'Globex', JSON.stringify(impState));
+  chk('…and offers the way back', !!impState && impState.canReturn === true);
+  chk('…while the session really is the customer, not the operator',
+    !!impMe && impMe.user.email !== 'op@e2e.test');
+  chk('the operator is recorded on the session ROW, which is the only place it can be',
+    !!(await q.prepare('SELECT impersonator_user_id i FROM sessions WHERE id = ?')
+      .get(sidOf(impSess))).i);
+  chk('entering is audited into the CUSTOMER\'s trail',
+    (await rowCountAtLeast(GLOBEX, 1, 'superadmin_impersonate')) >= 1);
+
+  // A session that is not impersonating cannot use the door.
+  chk('a normal session cannot "return to platform" — there is nowhere to return to',
+    (await post(tenant, '/api/auth/stop-impersonating')).status === 400);
+
+  /* Revoke the operator's super-admin WHILE the impersonated session is live.
+   * This is the escalation the feature has to refuse: the cookie already grants
+   * the customer's org, and returning would grant every org. */
+  await q.prepare('UPDATE users SET is_super_admin = 0 WHERE email = ?').run('op@e2e.test');
+  const shut = await post(impSess, '/api/auth/stop-impersonating');
+  chk('a revoked operator may NOT walk back in through a session they opened', shut.status === 403,
+    `got ${shut.status}`);
+  chk('…and the impersonated session still works — refusing the return must not strand it',
+    (await meOf(impSess)) !== null);
+  const shutMe = await meOf(impSess);
+  chk('…and the banner now says the way back is shut',
+    !!(shutMe && shutMe.impersonating) && shutMe.impersonating.canReturn === false);
+
+  await q.prepare('UPDATE users SET is_super_admin = 1 WHERE email = ?').run('op@e2e.test');
+  const back = await post(impSess, '/api/auth/stop-impersonating');
+  chk('with the operator still a super-admin, the return succeeds', back.status === 200, `got ${back.status}`);
+  const opAgain = { cookie: back.cookie, csrf: back.body && back.body.csrf };
+  const opMe = await meOf(opAgain);
+  chk('…and the new session is the OPERATOR again', !!opMe && opMe.user.email === 'op@e2e.test');
+  chk('…carrying no impersonation marker of its own', !!opMe && opMe.impersonating === undefined);
+  chk('the impersonated session is DESTROYED, not just swapped in the browser',
+    !(await q.prepare('SELECT 1 x FROM sessions WHERE id = ?').get(sidOf(impSess))));
+  chk('leaving is audited into the customer\'s trail too',
+    (await rowCountAtLeast(GLOBEX, 1, 'superadmin_impersonate_end')) >= 1);
+
   report();
 }
 

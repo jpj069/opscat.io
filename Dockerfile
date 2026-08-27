@@ -24,6 +24,11 @@ RUN apk add --no-cache iputils traceroute wget
 WORKDIR /app
 COPY server/ ./server/
 COPY agent/ ./agent/
+# Syslog collector files, served at /collector so a customer can install the
+# collector with one command (routes are in server/src/index.js). Same reason
+# agent/ is here — and the same failure if it is missing: the UI hands out an
+# install command that 404s, with nothing in any log to say why.
+COPY collector/ ./collector/
 COPY --from=serverdeps /build/server/node_modules ./server/node_modules
 COPY --from=webbuild /build/web/dist ./server/public
 

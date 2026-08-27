@@ -165,8 +165,15 @@ const SyntheticReportResult = z.object({
   accepted: z.number().int().describe('Results recorded; unknown or not-allowed checks are silently skipped.'),
 });
 
+/* The bundled `opscat-agent.js` itself, served as JavaScript rather than JSON —
+ * see `contentType` on the two routes that use it. The schema is a string
+ * because that is what the body is; the point of declaring it at all is that
+ * the route appears in the spec instead of being an undocumented hole. */
+const AgentScript = z.string()
+  .describe('The agent script this build bundles. `X-Agent-Version` carries its version.');
+
 module.exports = {
-  ErrorResponse, LogEntry, IngestLogsBody, IngestResult,
+  ErrorResponse, LogEntry, IngestLogsBody, IngestResult, AgentScript,
   IngestEventBody, IngestWebhookBody, OkResponse,
   OtlpLogsBody, OtlpTracesBody, OtlpTracesResult, OtlpMetricsResult, SentryBody,
   AgentHeartbeatBody, AgentHeartbeatResult, AgentContainersBody, AgentContainersResult,

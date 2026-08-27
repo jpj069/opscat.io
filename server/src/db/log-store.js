@@ -80,7 +80,26 @@ const pgCountSinceOrg = q.prepare('SELECT COUNT(*) c FROM logs WHERE ts >= ? AND
 const pgCountSinceAll = q.prepare('SELECT COUNT(*) c FROM logs WHERE ts >= ?');
 const pgCountForOrg = q.prepare('SELECT COUNT(*) c FROM logs WHERE org_id = ?');
 const pgCountByOrg = q.prepare('SELECT org_id, COUNT(*) c FROM logs GROUP BY org_id');
-const pgLastSeen = q.prepare('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = ? GROUP BY device');
+/* `source` is the NAME of the credential the newest line for that device came
+ * in on — the syslog endpoint, the SDK key, whatever wrote it. It answers the
+ * NOC's first question about a device nobody recognises ("which site is that
+ * behind?"), and Assets had nowhere to get it from.
+ *
+ * Postgres has no `argMax`, so the newest source is taken with an ordered
+ * aggregate rather than a correlated subquery: one pass over the same grouping
+ * instead of one lookup per device. ClickHouse's half is literally `argMax`. */
+const pgLastSeen = q.prepare(`SELECT device, MAX(ts) AS ls,
+    (array_agg(source ORDER BY ts DESC))[1] AS source
+  FROM logs WHERE org_id = ? GROUP BY device`);
+/* Lines per day for ONE source. The whole point of recording the key name on
+ * every line was that "which site is sending too much" should be answerable
+ * without a new column anywhere; until this existed it was answerable only in
+ * principle. Same integer day arithmetic as `dailyBuckets` — see the note
+ * there; a date function would render in the server's timezone and the two
+ * stores would disagree about where a day starts. */
+const pgDailyBySource = q.prepare(`SELECT ${utcDaySql('ts')} bucket, COUNT(*) c
+  FROM logs WHERE org_id = ? AND source = ? AND ts >= ?
+  GROUP BY bucket ORDER BY bucket`);
 const pgDailyBuckets = q.prepare(`SELECT ${utcDaySql('ts')} bucket,
     SUM(CASE WHEN sev <= 2 THEN 1 ELSE 0 END) c,
     SUM(CASE WHEN sev = 3 THEN 1 ELSE 0 END) h,
@@ -88,6 +107,11 @@ const pgDailyBuckets = q.prepare(`SELECT ${utcDaySql('ts')} bucket,
     SUM(CASE WHEN sev >= 5 THEN 1 ELSE 0 END) l
   FROM logs WHERE ts >= ? AND org_id = ? GROUP BY bucket ORDER BY bucket`);
 const pgPurge = q.prepare('DELETE FROM logs WHERE org_id = ? AND ts < ?');
+/* Only ever used to ask whether the PostgreSQL table still holds anything at
+ * all — see `purgePgLeftovers` below. `LIMIT 1` and not `COUNT(*)`: the answer
+ * is a boolean and a count over a 400k-row table to produce one is the kind of
+ * thing that gets noticed once a year and never fixed. */
+const pgAnyLog = q.prepare('SELECT 1 x FROM logs LIMIT 1');
 
 /* Batched for the same reason it always was: an agent posts up to 500 lines and
  * awaited singly that is 500 round trips. 100 rows x 7 columns = 700 bound
@@ -144,8 +168,57 @@ const pgStore = {
   },
   async lastSeenByDevice({ orgId }) { return pgLastSeen.all(orgId); },
   async dailyBuckets({ orgId, since }) { return pgDailyBuckets.all(since, orgId); },
+  async dailyBySource({ orgId, source, since }) { return pgDailyBySource.all(orgId, source, since); },
   async purge({ orgId, before }) { await pgPurge.run(orgId, before); },
 };
+
+/* ------------------------------------------------- the rows Postgres kept */
+
+/**
+ * THE ORPHANED POSTGRES ROWS, AND WHY THE CLICKHOUSE PURGE SWEEPS THEM TOO.
+ *
+ * An instance that switches its log store on leaves behind whatever `logs`
+ * already held in PostgreSQL. Nothing READS those rows again — every read goes
+ * through this module and this module is answering from ClickHouse — and until
+ * this function existed, nothing DELETED them either: `engine/retention.js`
+ * calls `purge`, `purge` went to ClickHouse, and the Postgres table was pruned
+ * for the last time on the boot before the cutover.
+ *
+ * That is a leak with no symptom. No screen contradicts it, no query is slower
+ * for it, and the disk it holds is never returned — on our own instance it was
+ * 144 MB frozen permanently, and it would be the same on every self-hoster who
+ * follows the upgrade note in docs/OPERATIONS.md. The rows are also a second
+ * copy of customer log lines sitting past their retention window, which is the
+ * half that matters more than the megabytes.
+ *
+ * So `purge` on the ClickHouse implementation means what it says: everything
+ * this org has older than `before` is gone from everywhere this product has
+ * ever put it. The Postgres table is not a second store to this module — it is
+ * the place the lines used to be, and this seam is the one file allowed to know
+ * that.
+ *
+ * IT DISABLES ITSELF, and that is what makes it affordable to leave in
+ * permanently. `pgLeftovers` is a tri-state: `null` = not asked yet, `true` =
+ * there is something there, `false` = the table is empty and, with ClickHouse
+ * active, nothing in the product can put anything back. Once it is false the
+ * sweep costs nothing per org and nothing per pass. A restart re-asks, which is
+ * one indexed lookup per boot.
+ */
+let pgLeftovers = null;
+
+async function purgePgLeftovers(orgId, before) {
+  if (pgLeftovers === false) return;
+  if (pgLeftovers === null) {
+    pgLeftovers = !!(await pgAnyLog.get());
+    if (!pgLeftovers) return;
+  }
+  await pgPurge.run(orgId, before);
+  /* Re-asked rather than inferred from `changes`. The sweep is per org, so the
+   * table becomes empty on whichever pass removes the last org's last row —
+   * which is not the pass that deleted the most rows, and is not knowable from
+   * this org's DELETE alone. */
+  pgLeftovers = !!(await pgAnyLog.get());
+}
 
 /* ---------------------------------------------------------------- ClickHouse */
 
@@ -224,8 +297,18 @@ const chStore = {
   },
 
   async lastSeenByDevice({ orgId }) {
-    return ch.get().query('SELECT device, MAX(ts) AS ls FROM logs WHERE org_id = {org:UUID} GROUP BY device',
+    return ch.get().query(
+      `SELECT device, MAX(ts) AS ls, argMax(source, ts) AS source
+       FROM logs WHERE org_id = {org:UUID} GROUP BY device`,
       { org: orgId }, { numeric: ['ls'] });
+  },
+
+  async dailyBySource({ orgId, source, since }) {
+    return ch.get().query(
+      `SELECT ts - ts % ${DAY_MS} AS bucket, COUNT(*) AS c
+       FROM logs WHERE org_id = {org:UUID} AND source = {src:String} AND ts >= {since:Int64}
+       GROUP BY bucket ORDER BY bucket`,
+      { org: orgId, src: source, since }, { numeric: ['bucket', 'c'] });
   },
 
   async dailyBuckets({ orgId, since }) {
@@ -249,6 +332,11 @@ const chStore = {
      * ever stops running. */
     await ch.get().exec('DELETE FROM logs WHERE org_id = {org:UUID} AND ts < {before:Int64}',
       { org: orgId, before });
+    /* And whatever PostgreSQL still holds from before the cutover — see the
+     * comment on purgePgLeftovers. Deliberately after the ClickHouse delete and
+     * deliberately awaited: a failure here must fail the pass loudly rather
+     * than leave a sweep that reports success while half of it did not run. */
+    await purgePgLeftovers(orgId, before);
   },
 };
 
@@ -266,8 +354,11 @@ function store() {
   return active;
 }
 
-/** Test seam — `e2e-logstore.js` drives both implementations in one process. */
-function _setStoreForTests(s) { active = s; }
+/** Test seam — `e2e-logstore.js` drives both implementations in one process.
+ * Resets the leftovers tri-state as well: a harness that switches stores is
+ * starting a new world, and a `false` cached from the previous one would make
+ * the orphan sweep a no-op that still passes. */
+function _setStoreForTests(s) { active = s; pgLeftovers = null; }
 
 /* EXPLICIT DELEGATION, NOT A PROXY, AND THAT IS THE WHOLE POINT.
  *
@@ -303,8 +394,10 @@ module.exports = {
   countForOrg: (orgId) => store().countForOrg(orgId),
   /** @returns {Promise<Map<string, number>>} org id -> line count */
   countByOrg: () => store().countByOrg(),
-  /** @param {{orgId:string}} a @returns {Promise<{device:string, ls:number}[]>} */
+  /** @param {{orgId:string}} a @returns {Promise<{device:string, ls:number, source:string}[]>} */
   lastSeenByDevice: (a) => store().lastSeenByDevice(a),
+  /** @param {{orgId:string, source:string, since:number}} a */
+  dailyBySource: (a) => store().dailyBySource(a),
   /** @param {{orgId:string, since:number}} a */
   dailyBuckets: (a) => store().dailyBuckets(a),
   /** @param {{orgId:string, before:number}} a */

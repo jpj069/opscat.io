@@ -1,0 +1,32 @@
+[Unit]
+Description=OpsCat Syslog Collector
+Documentation=https://opscat.io/docs/syslog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/opscat-collector.env
+ExecStart=/usr/bin/env node /opt/opscat-collector/opscat-collector.js
+Restart=always
+RestartSec=5
+
+# This process parses unauthenticated bytes from devices nobody audits, so it
+# does not run as root. CAP_NET_BIND_SERVICE is the one privilege it needs —
+# port 514 is below 1024 — and AmbientCapabilities is what grants it to a
+# non-root service. Without this line the unit either fails to bind or has to
+# run as root, and the second option is how a syslog parser becomes a foothold.
+User=opscat-collector
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

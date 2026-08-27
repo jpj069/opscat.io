@@ -42,20 +42,20 @@ const PLANS = {
   free: {
     key: 'free', name: 'Free', priceMonthly: 0, priceYearly: 0,
     limits: { users: 3, retentionDays: 7, checks: 3, managedLocations: 5, minIntervalS: 60, snmpTargets: 2,
-      agents: 2, apiKeys: 2, ingestLinesPerDay: 50000, statusSubscribers: 50 },
+      agents: 2, apiKeys: 2, syslogEndpoints: 1, ingestLinesPerDay: 50000, statusSubscribers: 50 },
     features: ['email_alerts', 'multi_org'],
   },
   pro: {
     key: 'pro', name: 'Pro', priceMonthly: 29, priceYearly: 290,
     limits: { users: 10, retentionDays: 30, checks: 25, managedLocations: 10, minIntervalS: 30, snmpTargets: 20,
-      agents: 25, apiKeys: 10, ingestLinesPerDay: 1000000, statusSubscribers: 500 },
+      agents: 25, apiKeys: 10, syslogEndpoints: 3, ingestLinesPerDay: 1000000, statusSubscribers: 500 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'multi_org', 'status_domain', 'sms', 'voice'],
   },
   business: {
     key: 'business', name: 'Business', priceMonthly: 99, priceYearly: 990,
     limits: { users: 30, retentionDays: 90, checks: 100, managedLocations: 25, minIntervalS: 15, snmpTargets: -1,
-      agents: -1, apiKeys: 50, ingestLinesPerDay: 10000000, statusSubscribers: 5000 },
+      agents: -1, apiKeys: 50, syslogEndpoints: 10, ingestLinesPerDay: 10000000, statusSubscribers: 5000 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'otlp',
       'sentry', 'priority_support', 'sensor_autoprovision', 'bridge', 'multi_org',
       'status_domain', 'status_whitelabel', 'status_css', 'sms', 'voice'],
@@ -63,7 +63,7 @@ const PLANS = {
   enterprise: {
     key: 'enterprise', name: 'Enterprise', priceMonthly: null, priceYearly: null,
     limits: { users: -1, retentionDays: 365, checks: -1, managedLocations: -1, minIntervalS: 15, snmpTargets: -1,
-      agents: -1, apiKeys: -1, ingestLinesPerDay: -1, statusSubscribers: -1 },
+      agents: -1, apiKeys: -1, syslogEndpoints: -1, ingestLinesPerDay: -1, statusSubscribers: -1 },
     features: ['email_alerts', 'teams_alerts', 'webhook_alerts', 'google_sso', 'saml_sso',
       'scim', 'otlp', 'sentry', 'priority_support', 'sensor_autoprovision', 'premium_locations', 'sla',
       'bridge', 'multi_org', 'status_domain', 'status_whitelabel', 'status_css', 'status_pages_multi',
@@ -98,7 +98,16 @@ const USAGE = {
   managedLocations: { orgs: 1, sql: '(SELECT COUNT(*) FROM org_location_access WHERE org_id = ?)' },
   snmpTargets: { orgs: 1, sql: '(SELECT COUNT(*) FROM snmp_targets WHERE org_id = ?)' },
   agents: { orgs: 1, sql: '(SELECT COUNT(*) FROM agents WHERE org_id = ?)' },
-  apiKeys: { orgs: 1, sql: '(SELECT COUNT(*) FROM api_keys WHERE org_id = ? AND active = 1)' },
+  // A collector key is an api_keys row (scope `collector`), but it must NOT eat
+  // the API-key allowance: a Pro org with eight sites would have two keys left
+  // for everything else. So the two budgets are disjoint, and each counts only
+  // its own kind.
+  apiKeys: {
+    orgs: 1,
+    sql: `(SELECT COUNT(*) FROM api_keys
+      WHERE org_id = ? AND active = 1 AND scopes NOT LIKE '%collector%')`,
+  },
+  syslogEndpoints: { orgs: 1, sql: '(SELECT COUNT(*) FROM syslog_endpoints WHERE org_id = ?)' },
   // Only CONFIRMED subscribers count. A pending double-opt-in may never be
   // completed, and letting unconfirmed rows consume the allowance would let a
   // stranger exhaust someone else's quota by typing addresses into the form.

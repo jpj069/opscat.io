@@ -1,0 +1,63 @@
+# @opscat/sdk → npm. This workflow lives in the PUBLIC repository, and that is
+# the entire point of the file.
+#
+# npm provenance signs an attestation saying "these bytes were built by this
+# workflow, in this repository", and it refuses to generate one unless the
+# `repository` field in package.json matches — case-sensitively — the repository
+# the workflow is running in. sdk/js/package.json points at jpj069/opscat.io
+# because that is where a customer can actually read the source. Publishing from
+# the internal repo would therefore fail at the publish step; and "fix" it by
+# renaming the field and the attestation links every reader to a 404, which is
+# worse than having none.
+#
+# The collector image stays in the internal repo: GHCR has no such rule, and the
+# image is built from server/src/lib/syslog.js, which the community sync carries
+# but the Dockerfile beside it does not.
+#
+# ── GENERATED FILE — do not edit it here ────────────────────────────────────
+# scripts/publish-community.sh copies this in from the internal repo, and every
+# sync replaces the whole tree. An edit made in this repository survives exactly
+# until the next publish. Change scripts/publish/release-sdk.workflow.yml there.
+#
+#   scripts/publish-community.sh --tag v0.1.0
+#
+name: Release SDK
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write            # npm provenance
+
+jobs:
+  sdk:
+    name: "@opscat/sdk → npm"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      # The version in package.json is the truth; the tag must agree with it, or
+      # a release publishes something other than what it claims. npm would accept
+      # the mismatch silently and the tag would then point at the wrong bytes
+      # forever, because a published version is immutable.
+      - name: The tag and package.json agree
+        working-directory: sdk/js
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          test "$PKG" = "$TAG" || { echo "::error::package.json is $PKG but the tag is $TAG"; exit 1; }
+      # `--access public` is not optional for a SCOPED package: without it npm
+      # tries to publish @opscat/sdk privately, which needs a paid plan and fails
+      # with an error that does not mention the flag. publishConfig in
+      # package.json says the same thing; both, because either alone has been
+      # forgotten before.
+      - name: Publish
+        working-directory: sdk/js
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

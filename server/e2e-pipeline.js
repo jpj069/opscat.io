@@ -563,15 +563,28 @@ async function main() {
     .get(org3);
   chk('…the org did get its own local probe location, so the guard is what stopped it '
     + '(not a missing location)', !!localLoc3, 'no local location for the probe org');
+  /* Being CALLED and having WRITTEN are two different instants, and only the
+   * first one is what `ranLocally` records. The runner's result row is written
+   * after it returns, on a promise nobody here holds — so reading the table
+   * straight after the wait above asks a question the scheduler has not
+   * finished answering. It passed on every machine anyone ran it on and failed
+   * on a loaded CI runner, which is the whole signature of this mistake.
+   *
+   * So the row is waited for, and the ABSENCE below is asserted afterwards:
+   * once the unassigned check's result has landed, the pinned one has had at
+   * least as long to write a wrong one, which is a stronger claim than reading
+   * both at an arbitrary moment. */
+  const countAt = async (id, locId) => (await q.prepare(
+    'SELECT COUNT(*) c FROM synthetic_results WHERE check_id = ? AND location_id = ?')
+    .get(id, locId)).c;
+  await untilAsync(async () => (await countAt(anywhereChk, localLoc3 ? localLoc3.id : -1)) >= 1, 15000);
+  const anywhereResults = await countAt(anywhereChk, localLoc3 ? localLoc3.id : -1);
+  chk('…while the unassigned check recorded its result AT the local location',
+    anywhereResults >= 1, `${anywhereResults} results`);
   const pinnedResults = (await q.prepare('SELECT COUNT(*) c FROM synthetic_results WHERE check_id = ?')
     .get(pinnedChk)).c;
   chk('…so the pinned check has no result rows at all',
     pinnedResults === 0, `${pinnedResults} results written`);
-  const anywhereResults = (await q.prepare(
-    'SELECT COUNT(*) c FROM synthetic_results WHERE check_id = ? AND location_id = ?')
-    .get(anywhereChk, localLoc3 ? localLoc3.id : -1)).c;
-  chk('…while the unassigned check recorded its result AT the local location',
-    anywhereResults >= 1, `${anywhereResults} results`);
 
   // The same guard sits in runAllNow(), which "check now" in the UI calls — a
   // separate line that a mutation of tick() alone leaves untouched, and vice

@@ -603,6 +603,129 @@ async function main() {
   chk('the grid JSON renders too', (await raw('/api/public/vendor-grid')).status === 200);
   await setSetting('vendor_grid_published', '0');
 
+  // ── the ORGANISATION's avatar ─────────────────────────────────────────────
+  //
+  // Same storage shape as the assets above, a different owner, and it is here
+  // rather than in a harness of its own because it shares the sniffing, the
+  // size cap and the failure modes — an SVG refused for one and accepted for
+  // the other is exactly the drift a shared implementation exists to stop.
+  //
+  // What is genuinely different is the DEFAULT. A status page with no logo has
+  // no logo; an org with no upload has initials over a colour, which is not a
+  // missing value, and the checks below say so in both directions.
+  const orgAvatar = require('./src/lib/org-avatar');
+
+  // A FRESH session, and not for tidiness: the per-session API limiter is 300
+  // a minute with a burst of 60, and by this point in the file `admin` has
+  // spent its bucket on ~170 calls in two seconds. Reusing it made half this
+  // section fail with "rate limit exceeded" — a harness failure that looks
+  // exactly like a broken route. The limiter keys on the session id, so
+  // signing in again is the honest fix; turning the limiter down would be
+  // testing a configuration nobody runs.
+  const av = await login('seed-admin@e2e.test', 'seed-admin-password-1');
+  chk('a second admin session signs in for the avatar checks', av.status === 200, String(av.status));
+
+  // -- the default, which is not stored and therefore cannot be missing
+  const av0 = await call(av, 'GET', '/api/admin/org/avatar');
+  chk('an org with no upload still has an avatar', av0.status === 200 && !!av0.j.initials, JSON.stringify(av0.j));
+  chk('…and it says plainly that there is no image', av0.j.url === null, String(av0.j.url));
+  chk('…with a colour from the product palette',
+    orgAvatar.PALETTE.includes(av0.j.color), av0.j.color);
+  chk('the colour is derived from the org, not random — twice gives the same answer',
+    (await call(av, 'GET', '/api/admin/org/avatar')).j.color === av0.j.color);
+
+  // A single-word org name must not render as ONE letter in a round badge:
+  // that is the common case ("OpsCat", "webundco") and it reads as an
+  // unfinished component rather than as identity.
+  chk('a single-word name gives two letters', orgAvatar.initials('OpsCat') === 'OP', orgAvatar.initials('OpsCat'));
+  chk('a multi-word name gives one from each', orgAvatar.initials('Acme Inc.') === 'AI', orgAvatar.initials('Acme Inc.'));
+  chk('a separator counts as a word break', orgAvatar.initials('link11-gmbh') === 'LG', orgAvatar.initials('link11-gmbh'));
+  chk('punctuation inside a word is dropped, so staging is still distinguishable',
+    orgAvatar.initials('ACME (staging)') === 'AS', orgAvatar.initials('ACME (staging)'));
+  chk('a name with no letters falls back rather than rendering an empty badge',
+    orgAvatar.initials('...') === '?' && orgAvatar.initials('') === '?');
+
+  // -- the upload, with the same guards the status assets have
+  chk('an SVG is refused as an org avatar too',
+    (await call(av, 'PUT', '/api/admin/org/avatar',
+      { data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"></svg>').toString('base64') }
+    )).status === 400);
+  chk('…and so is a lie about the content type',
+    (await call(av, 'PUT', '/api/admin/org/avatar',
+      { data: `data:image/png;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString('base64')}` }
+    )).status === 400);
+  chk('an oversized image is refused',
+    (await call(av, 'PUT', '/api/admin/org/avatar',
+      { data: Buffer.alloc(600 * 1024, 1).toString('base64') })).status === 400);
+  // The bound the route checks BEFORE decoding has to be derived from the byte
+  // limit. Defaulted (isStr's 500 characters) it refuses every real logo — the
+  // defect the status-page route shipped with, re-planted here on purpose.
+  const upPut = await call(av, 'PUT', '/api/admin/org/avatar', { data: BIG_PNG.toString('base64') });
+  chk('a real 160x160 PNG is accepted', upPut.status === 200, JSON.stringify(upPut.j));
+  chk('…and the answer carries the URL the app renders', !!upPut.j.url, String(upPut.j && upPut.j.url));
+  chk('…which is cache-busted, or a replaced logo never reaches a reader',
+    /[?&]v=\d+/.test(upPut.j.url || ''), upPut.j.url);
+  chk('…and the initials survive the upload, because a blocked image falls back to them',
+    !!upPut.j.initials, JSON.stringify(upPut.j));
+
+  // The platform console lists up to 200 orgs and reads the whole column in ONE
+  // statement rather than per row. Nothing else here can see that map, and an
+  // empty one is invisible: every org would silently fall back to initials in
+  // the console while the upload plainly worked everywhere else.
+  const batched = await orgAvatar.metaByOrg();
+  chk('the batched lookup finds the org that has an upload',
+    batched.has(String(DEFAULT_ORG_ID)), `${batched.size} entries`);
+  chk('…and reports the same instant the URL is versioned with',
+    upPut.j.url.includes(`v=${batched.get(String(DEFAULT_ORG_ID))}`), upPut.j.url);
+
+  // -- serving: UNAUTHENTICATED on purpose (a mail client has no session)
+  const served = await raw(upPut.j.url);
+  chk('the avatar is served without a session', served.status === 200, `HTTP ${served.status}`);
+  chk('…as the sniffed type, not the declared one', served.headers.get('content-type') === 'image/png',
+    String(served.headers.get('content-type')));
+  // The header comes from the global `securityHeaders` middleware, not from the
+  // route — which is the reason to assert it on the SERVED response: this
+  // endpoint is openable directly, so "is it nosniff by the time it reaches a
+  // browser" is the question, and mounting it outside that middleware is the
+  // way it would stop being true.
+  chk('…with nosniff by the time it reaches a browser, so a direct hit cannot execute',
+    served.headers.get('x-content-type-options') === 'nosniff',
+    String(served.headers.get('x-content-type-options')));
+  chk('…and an ETag', !!served.headers.get('etag'));
+  const avEtag = served.headers.get('etag');
+  chk('a revalidation answers 304',
+    (await raw(upPut.j.url, { headers: { 'if-none-match': avEtag } })).status === 304);
+  chk('a versioned URL may be cached hard',
+    /max-age=86400/.test(String(served.headers.get('cache-control'))), String(served.headers.get('cache-control')));
+  chk('…but a bare one may not — it is a URL somebody typed, not one we minted',
+    /max-age=300/.test(String((await raw(`/org-avatar/${DEFAULT_ORG_ID}`)).headers.get('cache-control'))));
+  chk('an org with no upload answers 404 rather than a generated image',
+    (await raw(`/org-avatar/${newId()}`)).status === 404);
+  chk('a garbage org id answers 404, not a 500',
+    (await raw('/org-avatar/not-a-uuid')).status === 404);
+
+  // -- role gating. The `lead` session created for the page checks above is
+  // reused deliberately: inventing a second user here is how a harness ends up
+  // with a login that silently fails and three checks that skip themselves.
+  chk('a lead may read the avatar', (await call(leadSess, 'GET', '/api/admin/org/avatar')).status === 200);
+  chk('…but may not replace it',
+    (await call(leadSess, 'PUT', '/api/admin/org/avatar', { data: BIG_PNG.toString('base64') })).status === 403);
+  chk('…nor remove it', (await call(leadSess, 'DELETE', '/api/admin/org/avatar')).status === 403);
+  chk('…and the refusal changed nothing', (await call(av, 'GET', '/api/admin/org/avatar')).j.url !== null);
+
+  // -- removing REVERTS to the default; it does not clear the avatar
+  const del = await call(av, 'DELETE', '/api/admin/org/avatar');
+  chk('removing the upload answers with the avatar that is left',
+    del.status === 200 && del.j.url === null && !!del.j.initials, JSON.stringify(del.j));
+  chk('…and the bytes are really gone', (await raw(`/org-avatar/${DEFAULT_ORG_ID}`)).status === 404);
+
+  // -- identity is free: the same rule that keeps a status page's logo free
+  await setPlan('free');
+  chk('an org on the free plan may still have an avatar',
+    (await call(av, 'PUT', '/api/admin/org/avatar', { data: BIG_PNG.toString('base64') })).status === 200);
+  await call(av, 'DELETE', '/api/admin/org/avatar');
+  await setPlan('enterprise');
+
   // ── wrap up ───────────────────────────────────────────────────────────────
   report();
 }

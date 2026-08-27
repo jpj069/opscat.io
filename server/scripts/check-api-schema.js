@@ -15,6 +15,9 @@
 
 const fs = require('fs');
 const path = require('path');
+// One stripper, shared with check-cloud-policy.js — the reasoning that shaped
+// it (line comments before block comments, `https://` left intact) lives there.
+const { stripComments } = require('./lib/strip-comments');
 
 const ROUTES_DIR = path.join(__dirname, '..', 'src', 'routes');
 const BASELINE = path.join(__dirname, '..', '.api-schema-baseline.json');
@@ -22,34 +25,6 @@ const BASELINE = path.join(__dirname, '..', '.api-schema-baseline.json');
 const RAW_RE = /\b\w*[Rr]outer\.(get|post|put|patch|delete)\s*\(/g;
 const SCHEMA_RE = /\bmethod:\s*['"](get|post|put|patch|delete)['"]/g;
 
-/* Comments mention route calls — docs, examples, this very rule — and counting
- * them seeds a baseline that is wrong on day one, so the first person to fix a
- * comment "adds" a raw route.
- *
- * Line by line, and LINE comments before BLOCK comments, because a line comment
- * may itself contain "/*". A naive block-comment regex reading such a "/*" as
- * an opener swallows everything to the next close — measured elsewhere: 12 KB
- * of real code and eleven real routes. A too-low baseline is silently
- * permissive, which is worse than no check at all. */
-function stripComments(src) {
-  const out = [];
-  let inBlock = false;
-  for (let line of src.split('\n')) {
-    if (inBlock) {
-      const end = line.indexOf('*/');
-      if (end === -1) { out.push(''); continue; }
-      line = line.slice(end + 2);
-      inBlock = false;
-    }
-    const lineComment = line.match(/(^|[^:])\/\//);   // [^:] keeps "https://…" intact
-    if (lineComment) line = line.slice(0, lineComment.index + (lineComment[1] ? 1 : 0));
-    line = line.replace(/\/\*.*?\*\//g, '');
-    const open = line.indexOf('/*');
-    if (open !== -1) { line = line.slice(0, open); inBlock = true; }
-    out.push(line);
-  }
-  return out.join('\n');
-}
 
 let files;
 try {

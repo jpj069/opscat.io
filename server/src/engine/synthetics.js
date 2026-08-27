@@ -11,12 +11,21 @@ const config = require('../config');
 const { now, DEFAULT_ORG_ID } = require('../util');
 const pipeline = require('./pipeline');
 const { assertPublicHost } = require('../lib/ssrf');
+const { resolveUserAgent } = require('../lib/useragent');
+const { getOrgSetting } = require('../db');
 
 const insResult = q.prepare(`INSERT INTO synthetic_results
   (check_id, location_id, ts, ok, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?)`);
 const getChecks = q.prepare('SELECT * FROM synthetic_checks WHERE enabled = 1');
 // check→location assignment: no rows = run everywhere (incl. this local probe)
 const assignedLocs = q.prepare('SELECT location_id FROM check_locations WHERE check_id = ?');
+// The empty set is a FALLBACK, not the way "all agents" is expressed. Since
+// migration 034 every check carries explicit rows and routes/synthetics.js
+// writes them on create and on update, so an empty set means something went
+// wrong — a location deleted out from under the last assignment, a row written
+// by hand. Running everywhere is the right answer to that: a check that runs
+// NOWHERE reports nothing, alerts on nothing and looks exactly like a healthy
+// one, which is the worse of the two failures by a distance.
 async function runsOnLocation(checkId, locationId) {
   const rows = await assignedLocs.all(checkId);
   return rows.length === 0 || rows.some((r) => r.location_id === locationId);
@@ -146,7 +155,10 @@ async function checkHttp(check) {
     // still counts as reachable (status < 400) which is the right health signal.
     const resp = await fetch(url, {
       signal: ctrl.signal, redirect: 'manual',
-      headers: { 'User-Agent': 'OpsCat-Synthetics/1.0' },
+      // check → org → ours (lib/useragent.js). getOrgSetting is SYNCHRONOUS and
+      // answers from the boot cache; it must stay that way.
+      headers: { 'User-Agent': resolveUserAgent(check.user_agent,
+        getOrgSetting(check.org_id, 'synthetic_user_agent', '')) },
     });
     // body only needed when assertions inspect it; otherwise just drain
     const body = assertions && (assertions.keyword || assertions.jsonPath)

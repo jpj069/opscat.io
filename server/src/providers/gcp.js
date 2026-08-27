@@ -58,6 +58,9 @@ async function accessToken(cred) {
   return data.access_token;
 }
 
+const SSH_TAG = 'opscat-sensor';
+const SSH_RULE = 'opscat-sensor-ssh';
+
 const zoneOf = (region) => `${region}-b`;
 const compute = (project) => `https://compute.googleapis.com/compute/v1/projects/${project}`;
 
@@ -78,6 +81,10 @@ async function createInstance(cred, { region, instanceType, userData, locationId
         accessConfigs: [{ type: 'ONE_TO_ONE_NAT', name: 'External NAT' }] }],
       metadata: { items: [{ key: 'user-data', value: userData }] },
       labels: { 'opscat-sensor': '1', 'opscat-location': String(locationId) },
+      // The tag is what the break-glass firewall rule targets. It is set
+      // unconditionally: a rule that exists but matches nothing is the failure
+      // mode where SSH "is configured" and the box is still unreachable.
+      tags: { items: [SSH_TAG] },
     }),
   }, cred);
   return { providerInstanceId: `${zone}/${name}`, ip: null };
@@ -90,6 +97,34 @@ async function destroyInstance(cred, { providerInstanceId }) {
     method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
   }, cred);
   return { ok: true };
+}
+
+// Idempotent: one project-wide `opscat-sensor-ssh` rule on the default network,
+// scoped to the sensor tag and to the configured ranges. GCP firewall rules are
+// global, so unlike AWS's per-region groups this runs once per project — and it
+// PATCHes an existing rule, so narrowing the list in OpsCat closes the door
+// rather than leaving yesterday's range open.
+async function ensureSshAccess(cred, { cidrs }) {
+  if (!Array.isArray(cidrs) || !cidrs.length) throw new Error('gcp: ensureSshAccess needs at least one CIDR');
+  const token = await accessToken(cred);
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const url = `${compute(cred.project_id)}/global/firewalls/${SSH_RULE}`;
+  const rule = {
+    name: SSH_RULE, network: 'global/networks/default', direction: 'INGRESS', priority: 1000,
+    description: 'OpsCat sensor break-glass SSH', targetTags: [SSH_TAG], sourceRanges: cidrs,
+    allowed: [{ IPProtocol: 'tcp', ports: ['22'] }],
+  };
+  let current = null;
+  try { current = await httpJson(url, { headers }, cred); }
+  catch (e) { if (!/HTTP 404/.test(e.message)) throw e; }
+  if (!current) {
+    await httpJson(`${compute(cred.project_id)}/global/firewalls`,
+      { method: 'POST', headers, body: JSON.stringify(rule) }, cred);
+    return SSH_RULE;
+  }
+  const same = JSON.stringify([...(current.sourceRanges || [])].sort()) === JSON.stringify([...cidrs].sort());
+  if (!same) await httpJson(url, { method: 'PATCH', headers, body: JSON.stringify(rule) }, cred);
+  return SSH_RULE;
 }
 
 // All opscat-sensor instances across zones: [{ providerInstanceId, locationId, state }]
@@ -112,4 +147,4 @@ async function listInstances(cred) {
   return out;
 }
 
-module.exports = { key: 'gcp', createInstance, destroyInstance, listInstances };
+module.exports = { key: 'gcp', createInstance, destroyInstance, listInstances, ensureSshAccess };

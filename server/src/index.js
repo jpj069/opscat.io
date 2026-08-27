@@ -113,6 +113,17 @@ app.get('/api/plans', (req, res) => res.json({
     // dialog says "send an invitation" instead of promising one it cannot send.
     mail: require('./mailer').mailConfigured(),
   },
+  /* Whether this instance HAS a managed syslog gateway. Without one the mode
+   * cannot be offered — the endpoint route refuses to store it — so the UI has
+   * to know before it draws the choice rather than after the 400. Same shape
+   * and same reason as `auth.mail` above: an instance fact the screen needs to
+   * avoid promising something the server will not do. */
+  syslog: {
+    managed: !!config.syslogHost,
+    // All three or none — the endpoint route refuses the mode otherwise, so the
+    // screen must know before it draws the choice rather than after the 400.
+    tunnel: !!(config.tunnelNet && config.tunnelEndpoint && config.tunnelPubkey),
+  },
 }));
 
 // Enterprise-edition routes (billing / super-admin / self-service orgs). Self-guard by edition + role.
@@ -128,6 +139,7 @@ app.use('/api', require('./routes/bridge'));
 // /api/* routes, so it MUST be mounted last.
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/synthetics', require('./routes/synthetics'));
+app.use('/api/syslog', require('./routes/syslog'));
 app.use('/api/reputation', require('./routes/reputation'));
 app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api/oncall', require('./routes/oncall'));
@@ -142,6 +154,23 @@ const wwwDir = config.wwwDir;          // marketing static, served at /
 const agentDir = path.join(__dirname, '..', '..', 'agent');
 if (fs.existsSync(agentDir)) {
   app.use('/agent', express.static(agentDir, { maxAge: '5m', index: false }));
+}
+/* Syslog collector files, same idea as the agent above:
+ *   curl -fsSL https://<host>/collector/install.sh | sudo OPSCAT_URL=… OPSCAT_COLLECTOR_KEY=… sh
+ *
+ * `syslog.js` is served from src/lib rather than kept as a copy under
+ * collector/. The installer fetches it into the install directory, so the
+ * parser the customer runs is byte-for-byte the one this server's harness
+ * pins — there is no second file in the repository that could drift from it.
+ * Explicit route rather than a second static mount: exactly one file out of
+ * src/lib is public, and a mount would eventually expose the next one. */
+const collectorDir = path.join(__dirname, '..', '..', 'collector');
+if (fs.existsSync(collectorDir)) {
+  app.use('/collector', express.static(collectorDir, { maxAge: '5m', index: false }));
+  app.get('/collector/syslog.js', (req, res) => {
+    res.type('application/javascript');
+    res.sendFile(path.join(__dirname, 'lib', 'syslog.js'));
+  });
 }
 const appIndex = path.join(pub, 'index.html');
 if (fs.existsSync(pub)) {

@@ -44,7 +44,7 @@ const { spawn } = require('child_process');
  * thenable instead, which is the only outcome that cannot be mistaken for a
  * pass.
  */
-const { chk, report, die } = require('./e2e-lib').harness();
+const { chk, untilAsync, report, die } = require('./e2e-lib').harness();
 
 // Environment BEFORE any src/ require — db.js and config.js are singletons.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'opscat-alerts-'));
@@ -144,7 +144,14 @@ async function waitForServer() {
   }
   return false;
 }
+/* A fixed sleep is a bet on the runner, and this file lost it three times in CI
+ * — three different checks, each in a job where everything ran slower (the SQL
+ * recorder wraps every statement; a second service container shares the box).
+ * `tick()` stays as the "give the dispatcher a moment" nudge, but no assertion
+ * may depend on it alone: `settle(pred)` waits for the effect the check is
+ * about, which is the only thing that is actually being claimed. */
 const tick = () => new Promise((res) => setTimeout(res, 60));   // let a fire-and-forget send land
+const settle = (pred) => untilAsync(async () => pred());
 
 const alertRow = (id) => q.prepare('SELECT * FROM alerts WHERE id = ?').get(id);
 const attemptsOf = (id) => q.prepare('SELECT * FROM alert_attempts WHERE alert_id = ? ORDER BY id').all(id);
@@ -155,25 +162,22 @@ const notifsFor = (id) => q.prepare('SELECT * FROM notifications WHERE alert_id 
 /* `tick()` above is a fixed 60ms sleep: it HOPES a fire-and-forget send has
  * landed. That hope is the runner's to grant. Under the `pgsweep` job, which
  * preloads `scripts/sql-record.js` and so wraps every statement the process
- * issues, 60ms was not enough — the e-mail-fallback assertion below read an
- * empty list on a box where nothing was actually wrong, while the identical
- * suite passed in `server e2e`. (Line ~514 already carries a doubled `tick()`,
- * so this had been walked into once before and papered over.)
+ * issues, 60ms was not enough — and it was not one assertion: this harness went
+ * red on `main` three times with a DIFFERENT check each time, because every
+ * `tick()` in the file was the same bet at a different odds.
  *
- * Waiting for the ROW instead of for the clock is deterministic on a fast box
+ * `settle()` (defined beside `tick()` above) is the fix, and it is one
+ * mechanism rather than two: it waits for the FACT the next line asserts on,
+ * whatever that fact is — a row, a status, a channel, a delivery on the stub.
+ * A `waitForNotifs(id, n)` helper briefly stood here as well; it waited for a
+ * COUNT, which is the wrong condition when an alert can produce more than one
+ * notification, and a second waiter is how the wrong one gets picked. Its one
+ * call site now settles on the channel it is about.
+ *
+ * Waiting for the fact instead of for the clock is deterministic on a fast box
  * and a slow one alike. It is not tolerance: a fallback that genuinely never
  * fires still spends the whole budget and still fails, and the failure still
  * prints the rows it did see. */
-const waitForNotifs = async (id, min, budgetMs = 5000) => {
-  const deadline = Date.now() + budgetMs;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const rows = await notifsFor(id);
-    if (rows.length >= min || Date.now() >= deadline) return rows;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 25));
-  }
-};
 
 /* Schema questions asked of whichever engine is underneath — see the same pair
  * in e2e-oncall.js. `PRAGMA` and `sqlite_master` are SQLite's; the portable form
@@ -317,9 +321,11 @@ async function main() {
   chk('a step timer is armed', (await timersOf(A.id)).some((t) => t.kind === 'step'));
 
   await tick();
+  await settle(() => delivered.some((d) => d.url === '/anna'));
   chk('the message actually went out on her contact method', delivered.some((d) => d.url === '/anna'),
     JSON.stringify(delivered));
   const msg = delivered.find((d) => d.url === '/anna');
+  await settle(async () => (await notifsFor(A.id)).some((n) => n.ok === 1 && n.channel === 'ntfy'));
   chk('the delivery is recorded in the ONE notification log',
     (await notifsFor(A.id)).some((n) => n.ok === 1 && n.channel === 'ntfy'));
   chk('the message carries the case label', msg && msg.title.includes(`C-${1000 + caseA}`), msg && msg.title);
@@ -365,6 +371,7 @@ async function main() {
   const B = (await call(lead, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseB, policyId: pol.id })).j;
   await tick();
+  await settle(async () => (await attemptsOf(B.id)).length === 1);
   chk('step 0 rings the on-call person', (await attemptsOf(B.id)).length === 1);
 
   await chain.sweep(now() + 4 * MIN);
@@ -372,9 +379,12 @@ async function main() {
 
   await chain.sweep(now() + 6 * MIN);
   await tick();
+  await settle(async () => (await alertRow(B.id)).step_position === 1);
   const b1 = await alertRow(B.id);
   chk('the step timeout escalates to rung two', b1.step_position === 1 && b1.round === 0,
     `step ${b1.step_position} round ${b1.round}`);
+  await settle(async () => (await attemptsOf(B.id)).length === 2);
+  await settle(() => delivered.some((d) => d.url === '/ben'));
   const bAttempts = await attemptsOf(B.id);
   chk('rung two reaches the NEXT target, exactly once',
     bAttempts.length === 2 && bAttempts[1].user_id === ben.id);
@@ -382,6 +392,7 @@ async function main() {
 
   await chain.sweep(now() + 12 * MIN);
   await tick();
+  await settle(async () => (await alertRow(B.id)).round === 1);
   const b2 = await alertRow(B.id);
   chk('the last rung of pass one starts pass TWO at rung one',
     b2.step_position === 0 && b2.round === 1, `step ${b2.step_position} round ${b2.round}`);
@@ -389,6 +400,7 @@ async function main() {
   await chain.sweep(now() + 18 * MIN);
   await chain.sweep(now() + 24 * MIN);
   await tick();
+  await settle(async () => (await alertRow(B.id)).status === 'exhausted');
   const b3 = await alertRow(B.id);
   chk('with repeat_n spent, the policy is exhausted', b3.status === 'exhausted', b3.status);
   chk('exhausted is stamped with a reason', !!b3.ended_at && !!b3.end_reason);
@@ -534,10 +546,19 @@ async function main() {
   const caseM = await mkCase(90);
   const M = (await call(lead, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseM, policyId: deadPol.id })).j;
-  await tick(); await tick();
+  /* CONDITION-WAITED, not slept on. `tick()` is a fixed 60 ms, and this delivery
+   * goes out to the stub over HTTP and only raises `alert_undeliverable` once it
+   * has come back refused — so the wait has to be on the effect, not on a
+   * duration somebody measured on their own machine. It went red exactly once,
+   * in CI, in the sweep job's copy of the suite (the SQL recorder wraps every
+   * statement and everything runs slower there) while the same commit's plain
+   * `npm test` was green: 120 ms was enough on one runner and not on the other.
+   * That is the definition of a test that reports the load, not the product. */
+  await untilAsync(async () => (await notifsFor(M.id)).some((n) => n.ok === 0));
   const mNotifs = await notifsFor(M.id);
   chk('a channel that refuses is recorded as a FAILED delivery',
     mNotifs.some((n) => n.ok === 0 && /500/.test(n.error || '')), JSON.stringify(mNotifs));
+  await untilAsync(async () => (await eventsNamed('alert_undeliverable')).length === 1);
   chk('a system that cannot reach anybody raises alert_undeliverable — it must not look like a quiet night',
     (await eventsNamed('alert_undeliverable')).length === 1,
     `${(await eventsNamed('alert_undeliverable')).length}`);
@@ -553,7 +574,11 @@ async function main() {
   // No mail transport in the harness, so the send FAILS — but it must have been
   // attempted on the account address. A person with no configured method who is
   // simply skipped is the silent hole this fallback exists to close.
-  const nNotifs = await waitForNotifs(N.id, 1);
+  // The condition is the CHANNEL, not "a row arrived": this alert can produce
+  // more than one notification, so waiting for a count can return early with
+  // the wrong one and assert against it.
+  await settle(async () => (await notifsFor(N.id)).some((n) => n.channel === 'email'));
+  const nNotifs = await notifsFor(N.id);
   chk('a person with no contact method is still tried, on their account e-mail',
     nNotifs.some((n) => n.channel === 'email'), JSON.stringify(nNotifs));
 
@@ -577,6 +602,7 @@ async function main() {
   const O = (await call(lead, 'POST', '/api/oncall/alerts',
     { subjectKind: 'case', subjectId: caseO, policyId: pol.id })).j;
   await tick();
+  await settle(() => delivered.filter((d) => d.url === '/anna').length === 1);
   chk('the zero-delay rule fires at once', delivered.filter((d) => d.url === '/anna').length === 1);
   const oNotifs = await notifsFor(O.id);
   chk('a rule that could not fire inside the step is SKIPPED and says so',
@@ -586,6 +612,7 @@ async function main() {
     (await timersOf(O.id)).some((t) => t.kind === 'notify'));
   await chain.sweep(now() + 3 * MIN);
   await tick();
+  await settle(() => delivered.filter((d) => d.url === '/anna').length === 2);
   chk('...and it fires when it comes due', delivered.filter((d) => d.url === '/anna').length === 2,
     `${delivered.filter((d) => d.url === '/anna').length} deliveries`);
   await call(annaSess, 'PUT', '/api/oncall/me/rules', { rules: [] });
@@ -604,7 +631,8 @@ async function main() {
   delivered.length = 0;
   await pipeline.ingestEvent({ name: 'db_down', device: 'db-01', target: null, severity: 95,
     description: 'primary database unreachable' }, 'e2e', false, DEFAULT_ORG_ID);
-  await tick(); await tick();
+  await tick();
+  await settle(async () => !!(await q.prepare("SELECT 1 x FROM alerts WHERE source LIKE 'rule:%'").get()));
   const fromRule = await q.prepare("SELECT * FROM alerts WHERE source LIKE 'rule:%' ORDER BY id DESC LIMIT 1").get();
   chk('an event matching that rule raises an alert with NO flow involved', !!fromRule,
     'no alert was raised');
@@ -620,6 +648,8 @@ async function main() {
   await pipeline.ingestEvent({ name: 'alert_exhausted', device: 'C-1', target: null, severity: 85,
     description: 'x' }, 'e2e', false, DEFAULT_ORG_ID);
   await tick();
+  await settle(async () =>
+    !!(await q.prepare("SELECT 1 x FROM notifications WHERE error LIKE '%raised BY the alert chain%'").get()));
   chk('a policy rule on the chain\'s OWN signal is refused — no perpetual motion',
     (await q.prepare('SELECT COUNT(*) c FROM alerts').get()).c === alertsBefore);
   chk('...and the refusal is recorded, not silent',

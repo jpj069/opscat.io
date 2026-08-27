@@ -328,6 +328,12 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   padding: 6px 12px; border-radius: 5px; font-size: var(--t-base); font-weight: 600;
   border: 1px solid var(--border); background: var(--bg3); color: var(--text1);
   display: inline-flex; align-items: center; gap: 6px;
+  /* A label is not prose. Without this, a two-word button in a fixed table track
+     ("tear down" in COL.actions) wraps to two lines and grows the row — which is
+     how the fleet table's last column ended up taller than every other row. If a
+     label does not fit, the track is too narrow or the label is too long; both
+     are decisions, and neither should be made by the browser mid-render. */
+  white-space: nowrap;
 }
 .btn:hover { color: var(--text0); border-color: var(--text3); }
 /* A spent action has to LOOK spent. `disabled` alone changed nothing visually — the
@@ -362,6 +368,20 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   border-radius: 50%; flex-shrink: 0; overflow: hidden; user-select: none;
 }
 .avatar > svg { width: 100%; height: 100%; display: block; }
+/* An organisation is a rounded square, a person is a circle. Both appear in the
+   same screens, and shape is what separates them before either is read. */
+.avatar-sq { border-radius: 6px; }
+/* The uploaded image sits ON TOP of the initials, which stay the background.
+   A src that is loading, 404s, or was deleted between render and fetch then
+   degrades to the default avatar rather than to a broken-image glyph — the
+   same property the alert mail's header cell has, where the image can be
+   blocked outright. `object-fit: cover` because a logo is any aspect ratio and
+   a squashed one reads as a rendering fault. */
+.avatar > img {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  object-fit: cover; border-radius: inherit;
+}
+.avatar { position: relative; }
 /* font-size is in USER UNITS against the 100-wide viewBox, so it is a ratio: the
    same 0.38 of the disc at 16px and at 28px, with no clamp to break it.
    The baseline is placed by hand rather than with `dominant-baseline: central`,
@@ -377,16 +397,34 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 }
 
 /* pills + badges */
+/* nowrap on both: a pill is ONE token. Without it a two-word label ("log source")
+   breaks inside the lozenge, which doubles the row height and reads as damage
+   rather than as a value — and it only shows up on a phone, where the type scale
+   is a step larger and the tracks are at their floor. Overflowing is the better
+   failure here: the table scrolls sideways by design, a row silently growing
+   does not. */
 .pill {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 10px;
   font-size: var(--t-xs); font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
+  white-space: nowrap;
 }
 .sev-badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 3px;
   font-size: var(--t-xs); font-weight: 600; font-family: 'JetBrains Mono', monospace; width: fit-content;
   white-space: nowrap;
+  white-space: nowrap;
 }
 .sev-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+/* Label/value list (DetailList / DetailRow in ui.tsx). The ROWS are
+   `display: contents`, so every label resolves against this one grid instead of
+   each row inventing its own column width. The separator sits on the cells
+   rather than the row for the same reason — there is no row box. */
+.detail-list { display: grid; grid-template-columns: var(--kv-label, 110px) minmax(0, 1fr);
+  column-gap: 8px; }
+.detail-row { display: contents; }
+.detail-row > * { padding: 4px 0; border-bottom: 1px solid var(--bg3); align-self: start;
+  min-width: 0; overflow-wrap: anywhere; }
 
 /* tables */
 .tbl { width: 100%; }
@@ -457,6 +495,20 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
 /* overlays */
 .overlay-dim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: var(--z-dim); }
 
+/* Flyout (ui.tsx) — the right-side detail panel's own chrome. It lives here rather
+   than in five inline style objects, which is where it lived before: the sticky
+   header, the ellipsised title and the body padding were re-typed per page and had
+   already drifted apart by a few pixels. */
+.fly-head {
+  padding: 16px 20px; border-bottom: 1px solid var(--bg3);
+  position: sticky; top: 0; background: var(--bg1); z-index: var(--z-sticky);
+}
+/* min-width: 0 on the flex parent AND overflow here — a flex item's default
+   min-width is auto, so without the pair a long FQDN pushes the close button off
+   the panel instead of ellipsising. */
+.fly-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fly-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
 /* Modal (ui.tsx) — a real <dialog> in the TOP LAYER. The element itself is the full
    viewport and doubles as the click-to-dismiss surface; .modal-panel is the card.
    No transform anywhere on the way down: a transformed ancestor would become the
@@ -495,6 +547,27 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; z-index: var(--z-panel);
   box-shadow: 0 16px 48px rgba(0,0,0,0.45); overflow: hidden;
 }
+/* The palette's search field. This lived in an inline style on the <Input>, which
+   broke two rules at once and neither is visible on a desktop:
+
+     * `fontSize: var(--t-md)` is 15px on a phone, and an inline style beats the
+       unlayered `.ctl { font-size: 16px }` floor below — so iOS Safari zoomed the
+       page on focus and never zoomed back. Exactly the failure that rule exists
+       for, written by the one mechanism that can defeat it.
+     * `width: 100%` beats the phone rule's
+       `width: calc(var(--ctl-w) / var(--ctl-s))`, so the optical-scale
+       compensation was computed against the wrong box.
+
+   Only the cosmetics belong here; the size is `.ctl`'s business. The font-size
+   is scoped to `min-width: 721px` rather than overridden back at 720px, so on a
+   phone this rule simply does not exist and the floor applies unopposed —
+   cheaper than a specificity fight with an unlayered rule, and impossible to
+   get wrong later. */
+.palette .ctl {
+  border: none; border-bottom: 1px solid var(--bg3); border-radius: 0;
+  background: transparent; padding: 12px 16px;
+}
+@media (min-width: 721px) { .palette .ctl { font-size: var(--t-md); } }
 
 /* Select / MultiSelect (Select.tsx) — THE dropdown. Trigger is dense like every
    other control; the panel is comfortable, because a 32px row is not a tap target.
@@ -721,6 +794,17 @@ body[data-theme="light"] .brand-dark { display: inline-block; }
   border-color: var(--low); box-shadow: 0 0 0 1px color-mix(in srgb, var(--low) 35%, transparent);
 }
 
+/* A table cell that is a link — a schedule name that opens its rotation, a device
+   that narrows the log view. It was used in three places and DEFINED IN NONE, so
+   those cells were bare <button>s: inheriting the row's colour, no hover, and no
+   sign at all that they did anything. `button` resets are global here, so the class
+   has to say everything itself. */
+.link-cell {
+  color: inherit; text-align: left; cursor: pointer; min-width: 0;
+  border-bottom: 1px solid transparent;
+}
+.link-cell:hover { color: var(--low); border-bottom-color: color-mix(in srgb, var(--low) 45%, transparent); }
+
 /* filter chips */
 .chip {
   padding: 3px 10px; border-radius: 12px; font-size: var(--t-xs); font-weight: 600;
@@ -914,4 +998,16 @@ textarea.rca { background: var(--bg3); min-height: 54px; resize: vertical; width
   .br-stage { overflow-y: visible; }
   .br-rail, .br-rail.closed { width: auto; border-left: none; border-top: 1px solid var(--bg3); }
   .br-rail .br-feed { max-height: 320px; }
+}
+
+/* AddTile — the empty state of a card grid that is also its action. Dashed so
+   it reads as a slot rather than a record, and it borrows the tile geometry of
+   the real cards beside it rather than inventing its own. */
+@layer components {
+  .add-tile {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 12px; border-radius: 8px; cursor: pointer;
+    background: transparent; border: 1px dashed var(--bg3); color: var(--text3);
+  }
+  .add-tile:hover { border-color: var(--text3); color: var(--text1); background: var(--bg2); }
 }

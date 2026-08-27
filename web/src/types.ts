@@ -8,9 +8,18 @@ export interface User {
   // offers to set a password instead of asking for the current one.
   hasPassword?: boolean;
 }
+// What an organisation looks like. `url` is null when the org has uploaded
+// nothing, which is not a missing value — initials on `color` ARE the default,
+// and they are derived server-side (server/src/lib/org-avatar.js) so the app,
+// the platform console and the alert mail cannot render one org three ways.
+export interface OrgAvatar {
+  name: string; initials: string; color: string;
+  url: string | null; mime: string | null; bytes: number | null;
+}
 // one organization the signed-in user belongs to (multi-org switcher)
 export interface OrgMembership {
   orgId: string; name: string; slug: string; plan: string; role: Role; onboardingDone: boolean;
+  avatar?: OrgAvatar;
 }
 export interface OrgsResponse { activeOrgId: string; orgs: OrgMembership[]; }
 export interface AssignedRef { id: string; n: string; i: string; c: string; }
@@ -70,7 +79,11 @@ export interface Rule {
 export interface NotificationRow { ts: number; rule: string; event: string; channel: string; ok: boolean; error?: string; }
 
 export interface AssetRow {
-  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'source' | 'vendor' | 'reputation';
+  // 'log-source' is kebab because this value is BOTH an API enum and a URL path
+  // segment (/app/assets/log-source) — tabFromPath only matches [a-z0-9-]+, so an
+  // underscore would silently fall back to the first tab.
+  kind: 'agent' | 'snmp' | 'check' | 'heartbeat' | 'container' | 'log-source' | 'vendor'
+    | 'reputation' | 'syslog';
   id: number | null; name: string; detail: string; status: string; lastSeen: number | null;
 }
 
@@ -165,6 +178,8 @@ export interface SynthLocation {
   region: string | null; isPremium: boolean; booked: boolean;
   provider: string | null; nodeStatus: 'provisioning' | 'online' | 'draining' | 'dead' | null;
   online: boolean;
+  /** Source address of the probe's last work-list pull — null until it checks in. */
+  lastIp: string | null;
 }
 export interface CloudCredential {
   id: number; provider: 'aws' | 'gcp'; label: string; hint: string | null;
@@ -178,6 +193,10 @@ export interface SynthCheck {
   intervalS: number; timeoutMs: number; enabled: boolean; passing: boolean; locations: number;
   locationIds: number[]; // empty = all agents incl. future
   assertions: CheckAssertions | null;
+  /** http only. null = inherit the org default, then OpsCat's own. */
+  userAgent: string | null;
+  /** What the check actually sends, after both fallbacks. null for non-http. */
+  effectiveUserAgent: string | null;
 }
 export interface SynthResult {
   checkId: number; locationId: number; ts: number; ok: boolean; latencyMs: number | null;
@@ -396,6 +415,7 @@ export interface SuperAdminOrg {
   subscriptionStatus: string | null; currentPeriodEnd: number | string | null;
   trialEndsAt: number | string | null; stripeCustomerId: string | null;
   userCount: number; checkCount: number; logCount: number; createdAt: number;
+  avatar?: Pick<OrgAvatar, 'name' | 'initials' | 'color' | 'url'>;
 }
 export interface AuditRow {
   ts: number; org_id: string; action: string; detail: string;
@@ -555,4 +575,49 @@ export interface OnCallAnalytics {
   cost: { micros: number; messages: number };
   /** true = the per-person fold is a sample, not a total */
   truncated: boolean;
+}
+
+/** A syslog collector endpoint (Settings › Collectors). One per relay/site. */
+export type SyslogMode = 'collector' | 'managed' | 'tunnel';
+export interface SyslogEndpoint {
+  id: number;
+  name: string;
+  /** `collector` — one runs in the customer's network. `managed` — their relay
+   *  sends TLS straight to our gateway and the key rides in each message.
+   *  `tunnel` — WireGuard, where the inner source address is the tenant and no
+   *  credential travels in the message at all, which is what makes UDP usable. */
+  mode: SyslogMode;
+  /** Tunnel mode: the relay's WireGuard PUBLIC key. Not a secret. */
+  peerPublicKey: string | null;
+  /** Tunnel mode: the inner address allocated to this endpoint. */
+  tunnelIp: string | null;
+  devicePrefix: string | null;
+  enabled: boolean;
+  /** First 12 characters of the collector key; null once it has been revoked. */
+  keyPrefix: string | null;
+  /** From the key's last_used_at — the endpoint keeps no column of its own. */
+  lastSeenAt: number | null;
+  createdAt: number;
+}
+export interface SyslogThroughput {
+  days: number;
+  source: string;
+  /** Only days that HAVE lines — a gap is a day with none. */
+  buckets: { day: number; lines: number }[];
+}
+export interface SyslogSnippet { label: string; text: string; lang: string; }
+export type SyslogSnippets = Record<string, SyslogSnippet[]>;
+/** Creation and rotation only: `key` is never retrievable afterwards. */
+export interface SyslogEndpointWithConfig extends SyslogEndpoint {
+  key: string | null;
+  snippets: SyslogSnippets;
+}
+
+/** Present on /api/auth/me only while the session is a superadmin impersonation. */
+export interface Impersonating {
+  /** null when the operator's account has been deleted since — say so, do not guess. */
+  operator: { name: string; email: string } | null;
+  /** false when the operator is gone or is no longer a super-admin: the way back is shut. */
+  canReturn: boolean;
+  org: string | null;
 }

@@ -6,10 +6,16 @@ const { getSetting, getOrgSetting, listMemberships, getMembership } = require('.
 const config = require('../config');
 const { now, sha256, verifyPassword, hashPassword, isEmail, isStr, httpError, isOrgId } = require('../util');
 const sec = require('../security');
+const orgAvatar = require('../lib/org-avatar');
 const edition = require('../edition');
 const mailer = require('../mailer');
 
+const { createRouteRegistrar } = require('../lib/route-schema');
+const { z } = require('zod');
+const S = require('../schemas/ops');
+
 const router = express.Router();
+const route = createRouteRegistrar(router, '/api/auth');
 
 // The user object the browser gets, in one place — it is returned from three
 // routes (password login, magic-link login, /me) and they must not drift.
@@ -122,8 +128,69 @@ router.post('/logout', sec.requireSession, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', sec.requireSession, (req, res) => {
-  res.json({ user: publicUser(req.user), csrf: req.session.csrf });
+/* `impersonating` is what the banner is drawn from, and it is derived from the
+ * SESSION ROW rather than from anything the client holds — a client that could
+ * assert it could also hide it, and hiding it is the failure mode that matters.
+ * Absent for every ordinary session, so the banner cannot appear by accident. */
+/* One predicate, two readers. `/me` draws the banner from it and
+ * `stop-impersonating` enforces it, and they MUST agree: a banner that offers a
+ * button the endpoint then refuses is worse than no button. Caught by the
+ * harness — the first version checked only that the operator row existed. */
+const canReturnTo = (op) => !!op && !!op.active && !!op.is_super_admin;
+
+router.get('/me', sec.requireSession, async (req, res) => {
+  const body = { user: publicUser(req.user), csrf: req.session.csrf };
+  if (req.session.impersonator_user_id) {
+    const op = await q.prepare('SELECT id, name, email, active, is_super_admin FROM users WHERE id = ?')
+      .get(req.session.impersonator_user_id);
+    body.impersonating = {
+      // The operator may have been deleted since; say so rather than render
+      // "acting as undefined". `canReturn` is what the button reads.
+      operator: op ? { name: op.name, email: op.email } : null,
+      canReturn: canReturnTo(op),
+      org: req.org ? req.org.name : null,
+    };
+  }
+  res.json(body);
+});
+
+/* The way back. Mints a FRESH session for the operator rather than reviving the
+ * one that was replaced — there is nothing to revive, and re-issuing is the
+ * only shape that can re-check the conditions.
+ *
+ * Those checks are the point: whoever holds this cookie already has the
+ * customer's org, and returning hands them the platform. So the operator must
+ * still EXIST, still be active, and still be a super-admin at the moment of
+ * return — a revoked operator does not get their powers back through a session
+ * they opened last week. Both directions audit, and the return audits into the
+ * customer's org too, because that is the trail an operator's own org cannot
+ * see (same reasoning as the cross-org read record in security.js). */
+route({
+  method: 'post', path: '/stop-impersonating',
+  summary: 'Leave an impersonated session and return to the platform account',
+  description: 'Destroys the impersonated session and mints a fresh one for the operator recorded on it. '
+    + 'Refuses unless that operator still exists, is active, and is still a platform super-admin.',
+  tags: ['Auth'], auth: 'session',
+  middleware: [sec.requireSession],
+  responses: {
+    200: z.object({ ok: z.literal(true), csrf: z.string() }),
+    400: S.ErrorResponse, 403: S.ErrorResponse,
+  },
+}, async ({ req, res }) => {
+  const opId = req.session.impersonator_user_id;
+  if (!opId) return httpError(res, 400, 'this session is not impersonating');
+  const op = await q.prepare('SELECT * FROM users WHERE id = ?').get(opId);
+  if (!canReturnTo(op)) {
+    return httpError(res, 403, 'the operator account is no longer a platform administrator');
+  }
+  sec.audit(op.id, 'superadmin_impersonate_end', `left org ${req.orgId} as ${req.user.email}`, req.orgId);
+  // The impersonated session is destroyed, not left behind: a second cookie
+  // that still acts as the customer is exactly what this feature must not leave
+  // lying around.
+  await q.prepare('DELETE FROM sessions WHERE id = ?').run(req.session.id);
+  const { sid, csrf } = await sec.createSession(op.id, req);
+  sec.setSessionCookie(res, sid);
+  return { ok: true, csrf };
 });
 
 router.post('/change-password', sec.requireSession, async (req, res) => {
@@ -152,15 +219,19 @@ router.post('/change-password', sec.requireSession, async (req, res) => {
 
 // --- multi-org: the caller's organizations + switching the active one ---
 router.get('/orgs', sec.requireSession, async (req, res) => {
-  res.json({
-    activeOrgId: req.orgId,
-    // getOrgSetting stays synchronous (the boot-loaded cache) — only the
-    // membership read is awaited.
-    orgs: (await listMemberships(req.user.id)).map((m) => ({
-      orgId: m.org_id, name: m.name, slug: m.slug, plan: m.plan, role: m.role,
-      onboardingDone: getOrgSetting(m.org_id, 'onboarding_done', '1') === '1',
-    })),
-  });
+  // getOrgSetting stays synchronous (the boot-loaded cache); the membership
+  // read and the per-org avatar lookup are the awaited parts. Promise.all
+  // rather than a bare `.map(async …)`: a list of pending promises is truthy
+  // and every consumer of it would render nothing while reporting success —
+  // the one hole the type gate cannot see.
+  const orgs = await Promise.all((await listMemberships(req.user.id)).map(async (m) => ({
+    orgId: m.org_id, name: m.name, slug: m.slug, plan: m.plan, role: m.role,
+    onboardingDone: getOrgSetting(m.org_id, 'onboarding_done', '1') === '1',
+    // The switcher drew a fixed indigo gradient square for every org, so it
+    // identified nothing. This is what an org actually looks like.
+    avatar: await orgAvatar.dtoFor(m.org_id, m.name),
+  })));
+  res.json({ activeOrgId: req.orgId, orgs });
 });
 
 router.post('/switch-org', sec.requireSession, async (req, res) => {

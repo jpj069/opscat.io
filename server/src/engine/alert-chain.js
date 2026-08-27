@@ -141,9 +141,31 @@ function messageFor(alert, subject, step, token) {
   if (alert.message) lines.push('', alert.message);
   // The acknowledgement round-trip needs no app: a link is the lowest common
   // denominator every channel carries.
-  if (token) lines.push('', `Acknowledge: ${config.baseUrl}/a/${token}`);
+  const ackUrl = token ? `${config.baseUrl}/a/${token}` : null;
+  if (ackUrl) lines.push('', `Acknowledge: ${ackUrl}`);
   lines.push('', subject.url);
-  return { title, text: lines.join('\n') };
+  // `mail` is the same content, named — the e-mail channel renders it as the
+  // Severity Rail layout (lib/alert-mail.js) rather than as the plaintext in a
+  // box, and the acknowledgement becomes a button instead of a URL a reader
+  // has to find inside a paragraph. Every other channel keeps `text`
+  // unchanged, which is the point of handing over both.
+  const mail = {
+    headline: subject.title,
+    facts: [
+      { label: subject.kind === 'case' ? 'Case' : 'Incident', value: subject.label },
+      { label: 'Urgency', value: alert.urgency },
+      { label: 'Escalation', value: `step ${step.position + 1}${alert.round ? `, pass ${alert.round + 1}` : ''}` },
+      { label: 'Note', value: alert.message || '' },
+    ],
+    primary: ackUrl ? { label: 'Acknowledge this alert', url: ackUrl }
+      : { label: `Open ${subject.label}`, url: subject.url },
+    secondary: ackUrl ? { label: `Open ${subject.label}`, url: subject.url } : null,
+    footer: ackUrl
+      ? 'Acknowledging stops the escalation. Opening the link asks you to confirm — '
+        + 'a scanner that fetches it does not acknowledge on your behalf.'
+      : 'You are on the escalation path for this alert.',
+  };
+  return { title, text: lines.join('\n'), mail };
 }
 
 // ---- target expansion (§5) -------------------------------------------------
@@ -232,12 +254,12 @@ async function resolveEntry(entry, orgId) {
 async function sendOne(alert, subject, user, entry, token) {
   const resolved = await resolveEntry(entry, alert.org_id);
   if (!resolved.ok) throw new Error(resolved.reason);
-  const { title, text } = messageFor(alert, subject, entry.step, token);
+  const { title, text, mail } = messageFor(alert, subject, entry.step, token);
   // The token goes with it: a voice call is handed the token rather than a
   // message, because the provider fetches a call flow that speaks AND listens.
   return alerts.sendVia(entry.kind, resolved.address, {
     title, text, severity: subject.severity, orgId: alert.org_id,
-    token, methodId: entry.id ?? null,
+    token, methodId: entry.id ?? null, mail,
   });
 }
 

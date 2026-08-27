@@ -26,8 +26,8 @@ const getKeyByHash = q.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND ac
 const touchKey = q.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
 const setSessionOrg = q.prepare('UPDATE sessions SET active_org_id = ? WHERE id = ?');
 const getUserHomeOrg = q.prepare('SELECT org_id FROM users WHERE id = ?');
-const insSession = q.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+const insSession = q.prepare(`INSERT INTO sessions (id, user_id, active_org_id, csrf, created_at, last_used_at, ip, user_agent, impersonator_user_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const insAudit = q.prepare('INSERT INTO audit_log (org_id, ts, user_id, action, detail) VALUES (?, ?, ?, ?, ?)');
 
 function parseCookies(req) {
@@ -53,7 +53,11 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
 
-async function createSession(userId, req, activeOrgId = null) {
+/* `impersonatorUserId` is the operator a superadmin-impersonation session is
+ * really being driven by. It is the ONLY way the app can tell afterwards, and
+ * everything downstream — the banner, the way back — reads it from the row
+ * rather than from anything the client sends. */
+async function createSession(userId, req, activeOrgId = null, impersonatorUserId = null) {
   const sid = randHex(32);
   const csrf = randHex(16);
   if (!activeOrgId) {
@@ -61,7 +65,7 @@ async function createSession(userId, req, activeOrgId = null) {
     activeOrgId = u ? u.org_id : null;
   }
   await insSession.run(sid, userId, activeOrgId, csrf, now(), now(), clientIp(req),
-    String(req.headers['user-agent'] || '').slice(0, 300));
+    String(req.headers['user-agent'] || '').slice(0, 300), impersonatorUserId);
   return { sid, csrf };
 }
 

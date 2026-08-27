@@ -24,8 +24,8 @@
 # discovered on the production host mid-deploy.
 #
 # Everything the two Dockerfiles actually consume: web/ (whole tree, built in
-# stage 1), server/ (minus the harnesses), marketing/ (cloud only), agent/, and
-# both package-lock.json files for `npm ci`.
+# stage 1), server/ (minus the harnesses), marketing/ (cloud only), agent/,
+# collector/, and both package-lock.json files for `npm ci`.
 #
 # Note `unbound` builds from its own context (`build: ./unbound`), so none of
 # this applies to it.

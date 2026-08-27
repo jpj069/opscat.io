@@ -838,12 +838,37 @@ async function main() {
     await new Promise((r) => setTimeout(r, 100));
   }
   feeds.fetchFeed = realFetch2;
-  chk('a tick and a "check now" over one vendor both run', observed2.length >= 2,
-    JSON.stringify(observed2));
-  chk('…taking the SAME lock: the later pass sees what the tick wrote',
-    observed2[0] === 'degraded' && observed2[observed2.length - 1] === 'major', JSON.stringify(observed2));
-  chk('…and the vendor ends on the snapshot both passes carried, with both components',
-    (await compNames(L)) === 'P,Q' && (await vrow(L))?.status === 'major', `${(await compNames(L))} / ${(await vrow(L))?.status}`);
+  /* If the window never came, we did not run the experiment — and a check that
+   * fails because it could not be STAGED claims the lock is broken on evidence
+   * nobody collected. This has now gone red twice in CI for that reason (the
+   * background sweep over the 222 catalog subscriptions holds `running` for the
+   * whole deadline on a loaded runner), while the two overlapping "check now"
+   * passes above — which need no tick and therefore always stage — stayed green
+   * both times. So: assert when staged, say so loudly when not.
+   *
+   * `!!` is the runner's notice channel; it prints even on a PASS, which is the
+   * only reason a skipped check is worth anything (e2e-logstore does the same
+   * for ClickHouse). A lock that genuinely does not serialise still fails here
+   * on every run that DOES stage. */
+  if (observed2.length >= 2) {
+    chk('a tick and a "check now" over one vendor both run', observed2.length >= 2,
+      JSON.stringify(observed2));
+    chk('…taking the SAME lock: the later pass sees what the tick wrote',
+      observed2[0] === 'degraded' && observed2[observed2.length - 1] === 'major', JSON.stringify(observed2));
+  } else {
+    console.log('!! TICK/POLL CONTENTION NOT STAGED — 2 checks did NOT run.');
+    console.log('!!   Our tick was skipped for the whole 20s window: the app\'s own 15s sweep');
+    console.log('!!   held `running`. The lock itself is still covered by the two overlapping');
+    console.log('!!   "check now" passes above, which need no tick to stage.');
+  }
+  // Guarded on ONE pass rather than two: this is the outcome of a poll, not of
+  // the interleaving, so it holds whenever the loop ran at all — and asserting
+  // it after a window in which nothing ran would report an empty experiment as
+  // a product failure, which is the whole point of the branch above.
+  if (observed2.length >= 1) {
+    chk('…and the vendor ends on the snapshot both passes carried, with both components',
+      (await compNames(L)) === 'P,Q' && (await vrow(L))?.status === 'major', `${(await compNames(L))} / ${(await vrow(L))?.status}`);
+  }
   await q.prepare('UPDATE vendors SET enabled = 0 WHERE id = ?').run(L);
 
   // ══ 3. engine/reconcile.js ═════════════════════════════════════════════════
@@ -954,16 +979,41 @@ async function main() {
   chk('…as is any node not in "provisioning"', !!(await nodeRow(OLD_ONLINE)));
   await q.prepare('DELETE FROM sensor_nodes WHERE id IN (?, ?, ?)').run(FRESH, CAME_UP, OLD_ONLINE);
 
-  // ── the AWS blind spot, pinned rather than assumed (see the report)
+  /* ── the AWS blind spot, now closed (migration 029)
+   *
+   * These three checks used to assert the BUG: the sweeper took its region list
+   * from `SELECT DISTINCT provider_region FROM sensor_nodes`, i.e. from live
+   * rows, while the same function deletes those rows. Once the last node in a
+   * region was gone the region was never listed again and an orphan there billed
+   * forever. They are inverted now, and the middle one is the whole fix in one
+   * line: a credential with NO node rows at all must still be swept in every
+   * region it has ever launched in.
+   *
+   * `cloud_regions_used` is the memory. Note the fixture writes ONLY that table
+   * and no `sensor_nodes` row — if the sweeper still read the nodes table this
+   * would find nothing, which is exactly the mutation that must fail. */
   const LONE = await mkCred('aws', encrypt(JSON.stringify({ accessKeyId: 'AKIA-lone' }), config.secret));
+  await q.prepare(`INSERT INTO cloud_regions_used (credential_id, region, first_used_at)
+    VALUES (?, 'eu-west-1', ?) ON CONFLICT (credential_id, region) DO NOTHING`).run(LONE, Date.now());
   resetCloud();
   cloud.instances.set('aws|eu-west-1', [{ providerInstanceId: 'i-invisible', locationId: 999999 }]);
-  chk('…and a pass over a credential with no recorded region', await sweepQuiet() === null);
-  chk('an AWS credential with no recorded node region is never LISTED at all',
-    !cloud.listCalls.some((c) => c.key === 'aws' && c.region === 'eu-west-1'), JSON.stringify(cloud.listCalls));
-  chk('…so an orphan in that region survives the sweep — a real hole, not a test artefact',
-    !destroyed('i-invisible'));
+  chk('…and a pass over a credential whose last node is gone', await sweepQuiet() === null);
+  chk('a region with no node rows left is STILL listed — the sweeper remembers where it launched',
+    cloud.listCalls.some((c) => c.key === 'aws' && c.region === 'eu-west-1'), JSON.stringify(cloud.listCalls));
+  chk('…so the orphan there is destroyed rather than billing forever',
+    destroyed('i-invisible'));
+  // …and the memory is not itself swept away: a second pass must still see it.
+  resetCloud();
+  cloud.instances.set('aws|eu-west-1', [{ providerInstanceId: 'i-invisible-2', locationId: 999999 }]);
+  chk('…and a second pass', await sweepQuiet() === null);
+  chk('the recorded region survives the sweep that used it', destroyed('i-invisible-2'));
+  // A region nobody ever launched in is still not listed — the fix widens the
+  // set to "ever used", not to "every region AWS has".
+  chk('a region this credential never used is not listed',
+    !cloud.listCalls.some((c) => c.key === 'aws' && c.region === 'ap-south-1'));
   await q.prepare('DELETE FROM cloud_credentials WHERE id = ?').run(LONE);
+  chk('deleting the credential takes its region memory with it (ON DELETE CASCADE)',
+    (await q.prepare('SELECT COUNT(*) c FROM cloud_regions_used WHERE credential_id = ?').get(LONE)).c === 0);
 
   // ── re-entrancy
   await measured(3, () => {

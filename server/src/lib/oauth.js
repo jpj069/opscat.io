@@ -15,6 +15,7 @@
 const crypto = require('crypto');
 const q = require('../db/shim');
 const { now, sha256, randHex } = require('../util');
+const tokens = require('./tokens');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -68,7 +69,7 @@ async function registerClient({ name, redirectUris, scopes }) {
   for (const u of uris) if (!validRedirectUri(u)) throw new Error(`invalid redirect_uri: ${u}`);
   const granted = (Array.isArray(scopes) ? scopes : String(scopes || '').split(/\s+/))
     .filter((s) => AVAILABLE_SCOPES.includes(s));
-  const clientId = `ocm_${randHex(16)}`;
+  const clientId = tokens.mint('mcpClient', 16);
   await insClient.run(clientId, String(name || 'MCP client').slice(0, 120), JSON.stringify(uris),
     (granted.length ? granted : AVAILABLE_SCOPES).join(','), now());
   return getClient(clientId);
@@ -125,8 +126,8 @@ async function consumeCode(code, { clientId, redirectUri, codeVerifier }) {
 // ── tokens ─────────────────────────────────────────────────────────────────
 
 async function issueTokens({ clientId, userId, orgId, scopes, resource }) {
-  const access = `ocm_at_${randHex(32)}`;
-  const refresh = `ocm_rt_${randHex(32)}`;
+  const access = tokens.mint('mcpAccess', 32);
+  const refresh = tokens.mint('mcpRefresh', 32);
   const t = now();
   const s = Array.isArray(scopes) ? scopes.join(',') : String(scopes);
   await insToken.run(sha256(access), 'access', clientId, userId, orgId, s, resource || null, t + ACCESS_TTL_MS, t);

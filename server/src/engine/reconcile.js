@@ -16,10 +16,27 @@ const SWEEP_MS = 60 * 60 * 1000;
 async function sweepCredential(cred) {
   const secret = JSON.parse(decrypt(cred.key_enc, config.secret));
   const p = providers.provider(cred.provider);
-  // regions we ever provisioned with this credential (AWS lists per region)
+  /* Regions we EVER provisioned with this credential (AWS lists per region).
+   *
+   * This used to be `SELECT DISTINCT provider_region FROM sensor_nodes` — live
+   * rows — and the comment above it already said "ever", which is the bug in one
+   * line. This same function DELETEs node rows (the dead-node retry below, and
+   * the stuck-provisioning sweep in sweep()), so the moment the last node in a
+   * region went away the region stopped being listed, and an orphan there was
+   * never destroyed. A leaked instance bills the customer forever, and the sweep
+   * that exists to catch it had quietly stopped looking.
+   *
+   * `cloud_regions_used` is written on a successful launch and never deleted
+   * here. The union with the live rows is not belt-and-braces for its own sake:
+   * a node created by an older build, or by a path that forgets to record, still
+   * gets swept — the set can only be too big, never too small, and too big costs
+   * one extra DescribeInstances. */
   const regions = cred.provider === 'aws'
-    ? (await q.prepare(`SELECT DISTINCT provider_region r FROM sensor_nodes
-        WHERE cloud_credential_id = ? AND provider_region IS NOT NULL`).all(cred.id)).map((x) => x.r)
+    ? (await q.prepare(`SELECT region r FROM cloud_regions_used WHERE credential_id = ?
+        UNION
+        SELECT provider_region r FROM sensor_nodes
+        WHERE cloud_credential_id = ? AND provider_region IS NOT NULL`)
+      .all(cred.id, cred.id)).map((x) => x.r)
     : [null];
   for (const region of regions) {
     const instances = await p.listInstances(secret, { region });
@@ -46,6 +63,8 @@ async function sweepCredential(cred) {
       await p.destroyInstance(secret, { region: node.provider_region, providerInstanceId: node.provider_instance_id });
       // eslint-disable-next-line no-await-in-loop
       await q.prepare('DELETE FROM sensor_nodes WHERE id = ?').run(node.id);
+      // eslint-disable-next-line no-await-in-loop
+      if (node.agent_id) await q.prepare('DELETE FROM agents WHERE id = ?').run(node.agent_id);
       console.log(`[reconcile] retried teardown of dead node ${node.id} ok`);
     } catch { /* keep for next sweep */ }
   }
@@ -61,9 +80,22 @@ async function sweep() {
       try { await sweepCredential(cred); }
       catch (e) { console.error(`[reconcile] credential ${cred.id} (${cred.provider}): ${e.message}`); }
     }
-    // nodes without any instance id and older than an hour never came up — drop them
-    await q.prepare(`DELETE FROM sensor_nodes WHERE provider_instance_id IS NULL
-      AND status = 'provisioning' AND created_at < ?`).run(Date.now() - SWEEP_MS);
+    /* Nodes without any instance id and older than an hour never came up — drop
+     * them, AND the host-agent registration that was minted with them. A
+     * stranded `agents` row is not cosmetic: it is a live agent token for a box
+     * that does not exist, sitting in Assets › Agents as a machine that has
+     * never checked in. The provision handler cleans both up on a failed
+     * createInstance; this is the path for a process that died between the two
+     * writes. */
+    const stuck = await q.prepare(`SELECT id, agent_id FROM sensor_nodes
+      WHERE provider_instance_id IS NULL AND status = 'provisioning' AND created_at < ?`)
+      .all(Date.now() - SWEEP_MS);
+    for (const node of stuck) {
+      // eslint-disable-next-line no-await-in-loop
+      await q.prepare('DELETE FROM sensor_nodes WHERE id = ?').run(node.id);
+      // eslint-disable-next-line no-await-in-loop
+      if (node.agent_id) await q.prepare('DELETE FROM agents WHERE id = ?').run(node.agent_id);
+    }
   } finally { running = false; }
 }
 

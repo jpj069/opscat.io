@@ -10,7 +10,7 @@ import {
   alertStatusLabel, alertStatusColor,
 } from '../format';
 import {
-  Card, Button, PageHeader, Tabs, Modal, Field, Input, HostInput, TableScroll, TableSkeleton,
+  Card, Button, PageHeader, Tabs, Modal, Flyout, Field, Input, HostInput, TableScroll, TableSkeleton,
   StatusPill, Avatar, COL, DateTime, ListSkeleton,
 } from '../ui';
 import { Select, MultiSelect } from '../Select';
@@ -434,7 +434,7 @@ function RotationEditor({ scheduleId, canEdit, onClose, onSaved }:
     setLayers((ls) => (ls ? ls.map((l, j) => (j === i ? { ...l, ...p } : l)) : ls));
 
   return (
-    <Modal title={sched ? `${sched.name} — rotation` : 'Rotation'} onClose={onClose} width={620}>
+    <Flyout title={sched ? `${sched.name} — rotation` : 'Rotation'} onClose={onClose} width={620}>
       {!sched || !layers ? <ListSkeleton rows={4} /> : (
         <>
           <div className="text-sm text-text2" style={{ marginBottom: 12 }}>
@@ -529,7 +529,7 @@ function RotationEditor({ scheduleId, canEdit, onClose, onSaved }:
           </div>
         </>
       )}
-    </Modal>
+    </Flyout>
   );
 }
 
@@ -586,15 +586,15 @@ function AlertDetail({ alertId, onClose, onChanged }:
   useEffect(() => { load(); }, [load]);
 
   return (
-    <Modal title={a ? `${a.subjectLabel ?? `Alert ${a.id}`} — alert` : 'Alert'} onClose={onClose} width={560}>
+    <Flyout title={a?.subjectLabel ?? (a ? `Alert ${a.id}` : 'Alert')} onClose={onClose}
+      badges={a ? (<>
+        <StatusPill text={alertStatusLabel(a.status)} color={alertStatusColor(a.status)} />
+        <StatusPill text={a.urgency === 'high' ? 'High urgency' : 'Low urgency'}
+          color={a.urgency === 'high' ? SEV.critical : SEV.info} />
+      </>) : undefined}
+      sub={a?.policyName ? `via ${a.policyName}` : undefined}>
       {!a ? <ListSkeleton rows={5} /> : (
         <>
-          <div className="row row-wrap" style={{ gap: 8, marginBottom: 10 }}>
-            <StatusPill text={alertStatusLabel(a.status)} color={alertStatusColor(a.status)} />
-            <StatusPill text={a.urgency === 'high' ? 'High urgency' : 'Low urgency'}
-              color={a.urgency === 'high' ? SEV.critical : SEV.info} />
-            {a.policyName && <span className="text-sm text-text2">via {a.policyName}</span>}
-          </div>
           {a.subjectTitle && <div className="text-base text-text1" style={{ marginBottom: 6 }}>{a.subjectTitle}</div>}
           {a.message && <div className="text-sm text-text2" style={{ marginBottom: 10 }}>{a.message}</div>}
           <div className="text-sm text-text3" style={{ marginBottom: 14 }}>
@@ -629,7 +629,7 @@ function AlertDetail({ alertId, onClose, onChanged }:
           </div>
         </>
       )}
-    </Modal>
+    </Flyout>
   );
 }
 

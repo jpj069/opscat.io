@@ -1,9 +1,9 @@
 // Rules — alert routing rules + recent notification log. Editing requires lead+.
 import React, { useEffect, useMemo, useState } from 'react';
-import { useApp } from '../state';
+import { useApp, useOverlayParam } from '../state';
 import { api, ApiError } from '../api';
 import { SEV, fmtTime, CHANNEL_META, channelLabel, channelColor } from '../format';
-import { Card, Button, StatusPill, Toggle, Modal, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea, COL} from '../ui';
+import { Card, Button, StatusPill, Toggle, Flyout, Field, TableScroll, TableSkeleton, PageHeader, Input, Textarea, COL} from '../ui';
 import { Select } from '../Select';
 import type { Rule, NotificationRow, EscalationPolicy } from '../types';
 import { PlusIcon } from 'lucide-react';
@@ -27,7 +27,12 @@ export default function Rules() {
   const canEdit = app.user ? app.user.role !== 'analyst' : false;
   const [rules, setRules] = useState<Rule[] | null>(null);
   const [notifs, setNotifs] = useState<NotificationRow[] | null>(null);
-  const [editing, setEditing] = useState<Rule | 'new' | null>(null);
+  // 'new' has no id, so it stays local; an EXISTING rule is a record you look at
+  // next to the list, and that is an address.
+  const [creating, setCreating] = useState(false);
+  const [editId, setEditId] = useOverlayParam('rule');
+  // Derived from the loaded list: a deep link arrives with an id and no row yet.
+  const editing = rules?.find((r) => r.id === editId) ?? null;
 
   const loadRules = () => api.get<Rule[]>('/api/rules').then(setRules).catch(() => {});
   const loadNotifs = () => api.get<NotificationRow[]>('/api/notifications').then(setNotifs).catch(() => {});
@@ -65,7 +70,7 @@ export default function Rules() {
     <div className="page">
       <PageHeader title="Alert Rules">
         {canEdit && (
-          <Button variant="primary" onClick={() => setEditing('new')}><PlusIcon size={13} /> New Rule</Button>
+          <Button variant="primary" onClick={() => setCreating(true)}><PlusIcon size={13} /> New Rule</Button>
         )}
       </PageHeader>
 
@@ -98,7 +103,7 @@ export default function Rules() {
                   title="Send a clearly-marked test alert through this channel now">
                   {testing === r.id ? 'Sending…' : 'Test'}
                 </Button>
-                <Button size="sm" onClick={() => setEditing(r)}>Edit</Button>
+                <Button size="sm" onClick={() => setEditId(r.id)}>Edit</Button>
                 <Button size="sm" variant="danger" onClick={() => remove(r)}>Del</Button>
               </span>
             ) : <span />}
@@ -139,9 +144,10 @@ export default function Rules() {
         </TableScroll>
       </Card>
 
-      {editing && (
-        <RuleEditor rule={editing === 'new' ? null : editing} eventNames={eventNames}
-          onClose={() => setEditing(null)} onSaved={() => { setEditing(null); loadRules(); }} />
+      {(creating || editing) && (
+        <RuleEditor rule={editing} eventNames={eventNames}
+          onClose={() => { setCreating(false); setEditId(null); }}
+          onSaved={() => { setCreating(false); setEditId(null); loadRules(); }} />
       )}
     </div>
   );
@@ -195,7 +201,7 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
   };
 
   return (
-    <Modal title={rule ? `Edit ${rule.name}` : 'New Rule'} onClose={onClose} width={460}>
+    <Flyout title={rule ? rule.name : 'New Rule'} onClose={onClose}>
       <Field label="Name">
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical → on-call" />
       </Field>
@@ -262,6 +268,6 @@ function RuleEditor({ rule, eventNames, onClose, onSaved }:
           disabled={saving || !name.trim() || (targetType === 'policy' && !policyId)} onClick={save}>
           {saving ? 'Saving…' : 'Save'}</Button>
       </div>
-    </Modal>
+    </Flyout>
   );
 }

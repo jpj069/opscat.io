@@ -61,9 +61,10 @@ Nothing is joined across the two.
 
 No search cluster, no message broker, no JVM, no queue. The whole stack — API,
 engines, both databases, Caddy, DNS resolver — runs on a **2-vCPU / 4 GB VM** at
-about **720 MB** shortly after boot, budget 1 GB once ClickHouse's caches fill.
-Each database is capped at 1 GB by the compose file, so the ceiling is a number
-you can plan against rather than a surprise.
+about **870 MB** settled, measured on our own production host after days of real
+traffic rather than seconds after boot. The compose file caps PostgreSQL at 1 GB
+and ClickHouse at 1.5 GB, so the ceiling is a number you can plan against rather
+than a surprise.
 
 <sub>Constrained box? `docker-compose.postgres-logs.yml` keeps log lines in
 PostgreSQL and drops the stack to ~400 MB. Supported and tested on every pull
@@ -75,7 +76,7 @@ Measured figures, each with the conditions that make it true, are in
 
 > **Upgrading an existing install?** Set `CLICKHOUSE_PASSWORD` in `.env` (it
 > refuses to start without one), then bring your log history across —
-> `docker compose exec -T app node scripts/migrate-logs-to-clickhouse.js`.
+> `docker compose exec -T app node server/scripts/migrate-logs-to-clickhouse.js`.
 > Reads switch over as soon as the app restarts, so without that step your older
 > lines stay in PostgreSQL and stop being displayed.
 

@@ -357,8 +357,15 @@ const StatusReportsResponse = z.object({
 });
 
 const AssetSchema = z.object({
-  kind: z.string().describe('agent | snmp | check | reputation | heartbeat | container | vendor | source'),
-  id: z.number().int().nullable().describe('Null for implicit assets (containers, log sources).'),
+  // An ENUM rather than a free string: the set is closed, the UI switches on it,
+  // and the spec is the place a consumer learns what may arrive. `log-source` is
+  // kebab because the value is also a URL path segment in the app.
+  kind: z.enum(['agent', 'snmp', 'check', 'reputation', 'heartbeat', 'container',
+    'vendor', 'log-source', 'syslog'])
+    .describe('What the row is. `log-source` is derived, not configured: a device name '
+      + 'seen in log lines or events that no agent covers.'),
+  id: z.number().int().nullable().describe('Null for derived assets — a container has no '
+    + 'id of its own and a log source IS its name.'),
   name: z.string(),
   detail: z.string(),
   status: z.string(),

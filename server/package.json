@@ -9,7 +9,8 @@
     "seed": "node src/engine/seed.js",
     "test": "node run-e2e.js",
     "check:server": "node scripts/check-types.js",
-    "check:api": "node scripts/check-api-schema.js"
+    "check:api": "node scripts/check-api-schema.js",
+    "check:cloud": "node scripts/check-cloud-policy.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

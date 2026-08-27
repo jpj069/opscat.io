@@ -1,14 +1,20 @@
 // Global app state: auth, theme/density, live events + logs via SSE.
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, openStream, setCsrf } from './api';
-import type { EventRow, LogRow, OrgMembership, OrgsResponse, User, UserRow } from './types';
+import type { EventRow, LogRow, OrgMembership, OrgsResponse, User, UserRow, Impersonating } from './types';
 
 function lsGet(k: string, d: string): string { try { return localStorage.getItem(k) || d; } catch { return d; } }
 function lsSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* sandboxed */ } }
 
 export interface AppState {
   user: User | null;
-  setUser: (u: User | null, csrf?: string) => void;
+  /* Set only while this session is a superadmin impersonation. Derived from the
+   * SESSION ROW server-side, never asserted by the client — a client that could
+   * assert it could also suppress it, and suppressing it is the failure that
+   * matters: an operator who does not know they are acting as someone else. */
+  impersonating: Impersonating | null;
+  stopImpersonating: () => Promise<void>;
+  setUser: (u: User | null, csrf?: string, imp?: Impersonating | null) => void;
   orgs: OrgMembership[];
   activeOrgId: string | null;
   switchOrg: (orgId: string) => Promise<void>;
@@ -17,6 +23,11 @@ export interface AppState {
   edition: string | null;
   // this instance can send mail — invitations go out as a link, not a password
   mailConfigured: boolean;
+  // this instance runs a managed syslog gateway — without one the mode is not
+  // offered, because the server refuses to store an endpoint it cannot render
+  syslogManaged: boolean;
+  // …and the same for the WireGuard tunnel
+  syslogTunnel: boolean;
   theme: string; setTheme: (t: string) => void;
   density: string; setDensity: (d: string) => void;
   nav: string; setNav: (n: string, search?: string) => void;
@@ -200,24 +211,34 @@ export function useTab<T extends string>(ids: readonly T[], fallback?: T): [T, (
   // while the URL still says nothing.
   useEffect(() => {
     if (!tabFromPath()) {
-      history.replaceState(null, '', `/app/${navFromPath()}/${tab}`);
+      // `location.search` is KEPT. Without it this line silently ate every query
+      // parameter a cross-page jump carried in: setNav('synthetics', '?check=42')
+      // lands on /app/synthetics?check=42, and the normalisation rewrote that to
+      // /app/synthetics/checks — dropping the id before the overlay could read it.
+      // The failure looked like "the flyout does not open", nowhere near this line.
+      history.replaceState(history.state, '', `/app/${navFromPath()}/${tab}${location.search}`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setTab = React.useCallback((t: T) => {
     setTabState(t);
-    history.pushState(null, '', `/app/${navFromPath()}/${t}`);
+    // Same reason as the normalisation above: switching tabs must not throw away a
+    // filter or an open overlay that lives in the query string.
+    history.pushState(null, '', `/app/${navFromPath()}/${t}${location.search}`);
   }, []);
   return [tab, setTab];
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
+  const [impersonating, setImpersonating] = useState<Impersonating | null>(null);
   const [orgs, setOrgs] = useState<OrgMembership[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
   const [edition, setEdition] = useState<string | null>(null);
   const [mailConfigured, setMailConfigured] = useState(false);
+  const [syslogManaged, setSyslogManaged] = useState(false);
+  const [syslogTunnel, setSyslogTunnel] = useState(false);
   const [theme, setThemeState] = useState(lsGet('opscat-theme', 'dark'));
   const [density, setDensityState] = useState(lsGet('opscat-density', 'comfortable'));
   const [nav, setNavState] = useState(navFromPath());
@@ -235,16 +256,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { document.body.dataset.theme = theme; lsSet('opscat-theme', theme); }, [theme]);
   useEffect(() => { document.body.dataset.density = density; lsSet('opscat-density', density); }, [density]);
   useEffect(() => {
-    api.get<{ edition: string; auth?: { mail?: boolean } }>('/api/plans')
-      .then((r) => { setEdition(r.edition); setMailConfigured(!!r.auth?.mail); }).catch(() => {});
+    api.get<{ edition: string; auth?: { mail?: boolean };
+      syslog?: { managed?: boolean; tunnel?: boolean } }>('/api/plans')
+      .then((r) => {
+        setEdition(r.edition);
+        setMailConfigured(!!r.auth?.mail);
+        setSyslogManaged(!!r.syslog?.managed);
+        setSyslogTunnel(!!r.syslog?.tunnel);
+      }).catch(() => {});
   }, []);
 
   // `search` carries a filter to the page being opened ('?q=…&from=…'): Scout links
   // to the lines behind a template, the throughput chart to the lines under a
   // dragged-over spike. It goes through THIS function rather than an <a href>, so
   // the jump stays a SPA navigation and keeps the session's state.
+  /**
+   * `n` may name a tab — `setNav('settings/collectors')`. The page id is the part
+   * before the slash; the rest is the tab segment useTab reads on the other side.
+   * Without it a cross-page jump can only land on a page's FIRST tab, which for
+   * "show me this SNMP target" is the wrong one and leaves the reader hunting.
+   */
   const setNav = (n: string, search = '') => {
-    setNavState(n);
+    setNavState(n.split('/')[0]);
     // the new URL carries no ?event, so the slide-over cannot stay open over the
     // page it was not opened from — the URL is the truth, both ways
     setSelectedEventState(null);
@@ -274,9 +307,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setEventsLoading(false));
   };
 
-  const setUser = (u: User | null, csrf?: string) => {
+  const setUser = (u: User | null, csrf?: string, imp?: Impersonating | null) => {
     if (csrf) setCsrf(csrf);
     setUserState(u);
+    // `undefined` = the caller did not look; `null` = it looked and there is
+    // none. Only the second clears the banner, so a partial refresh cannot make
+    // an impersonation silently invisible.
+    if (imp !== undefined) setImpersonating(imp);
+  };
+
+  /* Back to the platform account. The server destroys the impersonated session
+   * and mints a fresh one for the operator, so the whole client state is stale
+   * afterwards — a full reload is the honest way to pick up the new identity
+   * rather than patching a dozen pieces of state and hoping none was missed. */
+  const stopImpersonating = async () => {
+    await api.post('/api/auth/stop-impersonating', {});
+    window.location.href = '/app';
   };
 
   const reloadOrgs = () => api.get<OrgsResponse>('/api/auth/orgs')
@@ -342,11 +388,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const value = useMemo<AppState>(() => ({
-    user, setUser, orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition, mailConfigured,
+    user, setUser, impersonating, stopImpersonating,
+    orgs, activeOrgId, switchOrg, createOrg, reloadOrgs, edition, mailConfigured,
+    syslogManaged, syslogTunnel,
     theme, setTheme: setThemeState, density, setDensity: setDensityState,
     nav, setNav, events, logs, eventsLoading, logsLoading, refreshEvents, connected,
     selectedEvent, setSelectedEvent, bridgeIncident, setBridgeIncident, users, settings, logout,
-  }), [user, orgs, activeOrgId, edition, mailConfigured, theme, density, nav, events, logs, eventsLoading,
+  }), [user, impersonating, orgs, activeOrgId, edition, mailConfigured, syslogManaged, syslogTunnel, theme, density, nav, events, logs, eventsLoading,
     logsLoading, connected, selectedEvent, bridgeIncident, users, settings]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

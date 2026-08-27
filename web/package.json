@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "check:ui": "node scripts/check-loading-states.mjs && node scripts/check-table-grids.mjs && node scripts/check-charts.mjs",
+    "check:ui": "node scripts/check-loading-states.mjs && node scripts/check-table-grids.mjs && node scripts/check-charts.mjs && node scripts/check-inline-grids.mjs",
     "build": "npm run check:ui && tsc -b && vite build",
     "preview": "vite preview"
   },

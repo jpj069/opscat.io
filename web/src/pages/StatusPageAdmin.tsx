@@ -8,7 +8,7 @@ import { api, ApiError } from '../api';
 import { alpha, relTime, SEV, STATUS_META } from '../format';
 import { Card, Button, Toggle, GlowDot, Modal, Field, TableScroll, TableSkeleton, ListSkeleton, PageHeader,
   Input, Textarea, HostInput, ColorPicker, Tabs, Busy, Skeleton, COL,
-  FormRow, CardNote, SwitchRow, CopyField, ErrorNote, StatusPill } from '../ui';
+  FormRow, CardNote, SwitchRow, CopyField, ErrorNote, StatusPill, ImageUpload } from '../ui';
 import { Select } from '../Select';
 import type { Component, CompStatus, StatusPage, StatusPagesResponse, StatusReportsResponse } from '../types';
 import {
@@ -282,7 +282,6 @@ function Components() {
 const THEME_OPTIONS = [{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }];
 // Raster only — the server refuses SVG (a script-bearing document served from
 // the status page's own origin), so the picker must not offer it either.
-const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/x-icon';
 
 /**
  * Branding & pages — a LIST of the org's status pages, and one page's settings
@@ -933,13 +932,10 @@ function NewPageModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   );
 }
 
-// One uploaded image: preview, replace, remove. The file never touches a
-// multipart parser — it is read to a data URI in the browser and PUT as JSON,
-// which is why the server strips the `data:...;base64,` prefix.
-//
-// It is a FIELD, not a row: the label and hint come from the <FormRow> around it,
-// so it lines up with the text fields above and below instead of carrying its own
-// 120px label column (which wrapped the hint into three lines).
+// The status page's logo/favicon, on the shared ImageUpload (ui.tsx). This
+// used to be a local `AssetField` holding its own FileReader, busy state and
+// same-file-twice reset; the org avatar needed the identical interaction, so
+// the mechanics moved into ui.tsx and this is the preview plus the two calls.
 function AssetField({ pageId, kind, asset, url, disabled, onChanged, onError }: {
   pageId: number;
   kind: 'logo' | 'favicon';
@@ -947,51 +943,29 @@ function AssetField({ pageId, kind, asset, url, disabled, onChanged, onError }: 
   url: string; disabled: boolean;
   onChanged: () => void; onError: (m: string) => void;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-
-  const pick = (f: File | undefined) => {
-    if (!f) return;
-    setBusy(true); onError('');
-    const rd = new FileReader();
-    rd.onerror = () => { setBusy(false); onError('could not read that file'); };
-    rd.onload = async () => {
-      try {
-        await api.put(`/api/admin/status-pages/${pageId}/asset/${kind}`, { data: String(rd.result) });
-        onChanged();
-      } catch (e) {
-        onError(e instanceof ApiError ? e.message : 'upload failed');
-      } finally {
-        setBusy(false);
-        if (fileRef.current) fileRef.current.value = ''; // same file twice must re-fire
-      }
-    };
-    rd.readAsDataURL(f);
-  };
-
-  const remove = async () => {
-    setBusy(true); onError('');
-    try { await api.del(`/api/admin/status-pages/${pageId}/asset/${kind}`); onChanged(); }
-    catch (e) { onError(e instanceof ApiError ? e.message : 'could not remove'); }
-    finally { setBusy(false); }
-  };
-
   return (
-    <div className="row row-wrap" style={{ gap: 8, alignItems: 'center' }}>
-      <div className="row" style={{ width: 96, height: 40, flexShrink: 0, justifyContent: 'center',
-        alignItems: 'center', border: '1px solid var(--bg3)', borderRadius: 6, overflow: 'hidden' }}>
-        {asset && url ? <img src={url} alt="" style={{ maxHeight: 32, maxWidth: 88, objectFit: 'contain' }} />
-          : <span className="text-xs text-text3">none</span>}
-      </div>
-      <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} hidden
-        onChange={(e) => pick(e.target.files?.[0])} />
-      <Button size="sm" type="button" disabled={disabled || busy}
-        onClick={() => fileRef.current?.click()}>{asset ? 'Replace' : 'Upload'}</Button>
-      {asset && (
-        <Button size="sm" type="button" variant="danger" disabled={disabled || busy}
-          onClick={remove}>Remove</Button>
+    <ImageUpload
+      label={kind}
+      hasAsset={!!asset}
+      disabled={disabled}
+      preview={(
+        <div className="row" style={{ width: 96, height: 40, flexShrink: 0, justifyContent: 'center',
+          alignItems: 'center', border: '1px solid var(--bg3)', borderRadius: 6, overflow: 'hidden' }}>
+          {asset && url ? <img src={url} alt="" style={{ maxHeight: 32, maxWidth: 88, objectFit: 'contain' }} />
+            : <span className="text-xs text-text3">none</span>}
+        </div>
       )}
-    </div>
+      onUpload={async (data) => {
+        onError('');
+        try { await api.put(`/api/admin/status-pages/${pageId}/asset/${kind}`, { data }); onChanged(); }
+        catch (e) { throw new Error(e instanceof ApiError ? e.message : 'upload failed'); }
+      }}
+      onRemove={async () => {
+        onError('');
+        try { await api.del(`/api/admin/status-pages/${pageId}/asset/${kind}`); onChanged(); }
+        catch (e) { throw new Error(e instanceof ApiError ? e.message : 'could not remove'); }
+      }}
+    />
   );
 }
 

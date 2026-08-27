@@ -18,7 +18,8 @@ Two surfaces:
   need header `X-OpsCat-CSRF` with the token from login). Roles: `admin > cto > lead > analyst`.
 - **`/v1/*`** — open machine surface, authenticated per request with API keys
   (`Authorization: Bearer ock_…`, also accepted: `X-Api-Key` header or `?key=` query),
-  agent tokens (`oca_…`) or probe keys (`ocp_…`). Keys are created in the UI (Settings)
+  agent tokens (`oca_…`) or sensor keys (`ocs_…`; keys issued before 2026-08 begin
+  `ocp_` and stay valid — nothing authenticates on the prefix). Keys are created in the UI (Settings)
   and shown exactly once.
 
 Public (no auth): `GET /api/health`, `GET /api/version`, `GET /api/status` (JSON),
@@ -129,6 +130,36 @@ scoring ≥20 aggregate into events (dedupe on name+device+target), ≥60 auto-o
 Custom classifier rules are per-organization (Pipeline page / `/api/admin/pipeline/classifiers`)
 and are evaluated before the built-ins. On the cloud edition, log-line endpoints additionally
 enforce the plan's `ingestLinesPerDay` limit and answer `429` once the day's allowance is spent.
+
+## Syslog collectors (`/v1`, API key scope `collector`)
+
+A collector runs in the customer's network, receives syslog and ships it here.
+Its key is minted by `POST /api/syslog/endpoints` and carries the `collector`
+scope only — it is refused on `/v1/ingest/*`. Full write-up: `docs/SYSLOG.md`.
+
+The **managed** endpoint (`syslog.<domain>:6514`, RFC 5424 over TLS) uses the
+same key on the same two paths: our gateway reads the tenant's key out of each
+message's structured data (`[opscat@<PEN> token="ocl_…"]`) and forwards the
+group under that key, so it holds no credential of its own and adds no API. The
+endpoint's `mode` (`collector` | `managed`) decides only which configuration
+`POST /api/syslog/endpoints` and `.../config` render.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/collector/config` | endpoint name, device prefix, enabled flag, batch cap |
+| POST | `/v1/collector/logs` | `{logs:[{device,line,sev,ts,meta}]}`, max 500 per batch |
+
+Lines run through the same pipeline as `/v1/ingest/logs`: classified,
+deduplicated, counted against the same daily allowance. A disabled endpoint is
+refused with 403 and nothing is written.
+
+Endpoint administration (`/api/syslog/endpoints`, session, lead+) is listed in
+`docs/SYSLOG.md` § API, including `GET .../:id/throughput` — lines per UTC day
+for one endpoint, read from the `logs.source` every line already carries.
+
+Syslog endpoints also appear in `GET /api/assets` as `kind: 'syslog'`, with an
+id, so a row opens the endpoint's own flyout. The derived `log-source` rows
+beside them name the endpoint each device arrived through.
 
 ## Agents (`/v1`, agent token)
 

@@ -28,7 +28,20 @@ Der bisherige Begriffs-Mix ("remote probes" im Produkt, "sensors" in der Ops-Dok
 wird vereinheitlicht: **Sensor Agent** ist der Begriff in UI, API-Doku, Marketing und
 Code-Kommentaren. Ein Sensor Agent ist der `opscat-agent` im `--probe`-Modus, egal wer
 ihn betreibt. Bestehende technische Bezeichner (`synthetic_*`-Tabellen, `--probe`-Flag,
-`ocp_`-Keys) bleiben stabil — nur die sichtbare Sprache ändert sich.
+`OPSCAT_PROBE_KEY`) bleiben stabil — nur die sichtbare Sprache ändert sich.
+
+**Korrektur (2026-08):** Der Key-Prefix stand ursprünglich mit in dieser Liste
+(`ocp_` "bleibt stabil"). Das war der falsche Eimer. Ein Tabellenname ist intern,
+ein Flag ist intern — **ein Credential, das ein Mensch kopiert, ist es nicht**: es
+steht in einer systemd-Env-Datei, in einem Support-Ticket und in der Regel eines
+Secret-Scanners. Neue Keys heißen deshalb **`ocs_`** (Sensor). Bestehende `ocp_`-Keys
+bleiben unbegrenzt gültig, ohne Migration und ohne Dual-Accept-Zweig: authentifiziert
+wird ausschließlich über `sha256(token)`, der Prefix ist ein Etikett auf neu
+erzeugten Secrets. Die ganze Namensraum-Tabelle steht in `server/src/lib/tokens.js`.
+
+`ocsa_` wäre die naheliegende Wahl gewesen und ist genau deshalb keine: `och_` ist
+bereits der Heartbeat-Token, und `ocha_` würde von jeder auf `och_` verankerten
+Regel mitgetroffen. Die Regel lautet `oc` + **ein** Buchstabe + `_`.
 
 ## 2. Produktmodell: drei Betriebsarten, ein Agent
 
@@ -97,7 +110,9 @@ org_location_access (
   PRIMARY KEY (org_id, location_id)
 )
 
--- NEU: welcher Check läuft von welcher Location (heute implizit "überall").
+-- Welcher Check läuft von welcher Location. Die Zuordnung ist EXPLIZIT: ein
+-- leerer Zeilensatz war einmal "überall, auch auf später gebuchten Agents" und
+-- ist seit Migration 034 nur noch ein Notfall-Fallback (siehe unten).
 check_locations (
   check_id, location_id,
   PRIMARY KEY (check_id, location_id)
@@ -110,6 +125,24 @@ synthetic_results (check_id, location_id, ts, ok, latency_ms, meta)
 **Migration:** Bestehende `kind='remote'`-Locations werden `kind='customer'`;
 für jeden bestehenden Check wird `check_locations` mit allen bisher aktiven
 Locations seiner Org befüllt (Verhalten bleibt identisch).
+
+**„Alle Agents" heißt die Fleet von heute, nicht die von morgen.** Der Schalter
+hieß einmal *all agents (incl. future)* und meinte es wörtlich: der Check wurde
+mit *keiner* `check_locations`-Zeile gespeichert, und `runsOnLocation()` liest
+einen leeren Zeilensatz als „überall". Das Ergebnis war, dass das Buchen einer
+Managed Location **jeden bestehenden Check der Org** stillschweigend daran
+hängte — eine Node auf einem anderen Kontinent fängt an zu kosten, und jede
+Uptime- und Latenzreihe der Org bekommt einen zusätzlichen Messpunkt, ohne dass
+jemand etwas angeklickt hat.
+
+`setCheckLocations()` schreibt die Fleet jetzt beim Anlegen aus; Migration 034
+füllt die Bestandschecks mit genau den Locations, auf denen sie in dem Moment
+liefen, sodass sich kein Check verschiebt — er erbt nur die Zukunft nicht mehr.
+
+Der leere Zeilensatz bleibt in `runsOnLocation()` als **Fallback** stehen und
+das ist Absicht: Ein Check, der *nirgends* läuft, meldet nichts, alarmiert nicht
+und sieht dabei exakt aus wie ein gesunder. Von den beiden möglichen Fehlern ist
+das mit Abstand der schlechtere.
 
 **Key-Scoping:** Der Probe Key bleibt an der Location. Für `managed` Locations
 liefert `GET /v1/synthetics/checks` die Checks aller Orgs, die die Location per
@@ -173,6 +206,8 @@ das ist ein anderes Produkt als geografische Nutzerabdeckung.
 - Doku liefert **Minimal-Policies** mit: AWS-IAM nur
   `ec2:RunInstances/TerminateInstances/DescribeInstances` (tag-beschränkt auf
   `opscat-sensor`), GCP Custom Role nur `compute.instances.create/delete/list`.
+  Mit Break-glass-SSH (§11) kommen auf beiden Seiten Firewall-Rechte dazu —
+  siehe die Policy unten und den GCP-Abschnitt daneben.
 - Audit-Log-Eintrag bei jedem Provisioning-/Teardown-Call.
 
 **AWS: Minimal-IAM-Policy (verifiziert gegen `server/src/providers/aws.js`).**
@@ -184,15 +219,14 @@ Ubuntu-24.04-AMI je Region selbst auflöst; `ec2:CreateTags` ist auf
 `ec2:CreateAction = RunInstances` beschränkt, deckt also nur das Taggen beim
 Start ab.
 
+<!-- policy:aws -->
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     { "Sid": "Discover", "Effect": "Allow", "Resource": "*",
       "Action": ["ec2:DescribeImages", "ec2:DescribeInstances",
-                 "ec2:DescribeInstanceStatus", "ec2:DescribeInstanceTypes",
-                 "ec2:DescribeRegions", "ec2:DescribeVpcs",
-                 "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups"] },
+                 "ec2:DescribeVpcs", "ec2:DescribeSecurityGroups"] },
     { "Sid": "LaunchInfrastructure", "Effect": "Allow", "Action": "ec2:RunInstances",
       "Resource": ["arn:aws:ec2:*::image/ami-*", "arn:aws:ec2:*:*:subnet/*",
                    "arn:aws:ec2:*:*:security-group/*",
@@ -206,10 +240,150 @@ Start ab.
       "Condition": { "StringEquals": { "ec2:CreateAction": "RunInstances" } } },
     { "Sid": "TerminateOwnSensorsOnly", "Effect": "Allow",
       "Action": "ec2:TerminateInstances", "Resource": "arn:aws:ec2:*:*:instance/*",
-      "Condition": { "StringEquals": { "aws:ResourceTag/opscat-sensor": "1" } } }
+      "Condition": { "StringEquals": { "aws:ResourceTag/opscat-sensor": "1" } } },
+    { "Sid": "BreakGlassSshGroup", "Effect": "Allow",
+      "Action": ["ec2:CreateSecurityGroup", "ec2:AuthorizeSecurityGroupIngress",
+                 "ec2:RevokeSecurityGroupIngress"],
+      "Resource": ["arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:vpc/*"] }
   ]
 }
 ```
+
+**`BreakGlassSshGroup` wird nur gebraucht, wenn §11 aktiv ist** — ohne
+`sensor_ssh_key`/`sensor_ssh_cidrs` ruft der Adapter `ensureSshAccess()` gar
+nicht auf. Wer kein Break-glass-SSH will, lässt das Statement weg.
+
+**Die neun Actions sind exakt die, die `aws.js` aufruft — das prüft jetzt der
+Build.** `server/scripts/check-cloud-policy.js` (`npm run check:cloud`, in CI)
+liest die `Action:`-Literale aus dem Adapter und diffed sie gegen genau diesen
+JSON-Block; der HTML-Anker `<!-- policy:aws -->` darüber ist, woran das Skript
+ihn findet. Beide Richtungen sind rot: ein Aufruf ohne Grant *und* ein Grant
+ohne Aufruf.
+
+Die zweite Richtung hat gleich vier Zeilen gekostet — `ec2:DescribeRegions`,
+`DescribeSubnets`, `DescribeInstanceTypes` und `DescribeInstanceStatus` standen
+hier und wurden von nichts aufgerufen: der Regions-Katalog ist eine Tabelle in
+`providers/index.js`, keine API-Abfrage. Harmlose Lesezugriffe, aber in einer
+Policy, deren ganzer Verkaufspunkt „minimal" ist, gehören sie nicht. Eine
+bestehende Installation mit der breiteren Fassung läuft unverändert weiter —
+wer aufräumen will, ersetzt das `Discover`-Statement.
+
+`ec2:CreateTags` ist der umgekehrte Fall und steht als begründete Ausnahme in
+`GRANTED_UNUSED` im Skript: es ist kein eigener API-Call, sondern das, was EC2
+für die `TagSpecification` an `RunInstances` prüft — ohne das Recht scheitert
+der *Launch*, nicht das Taggen.
+
+Dieses Statement fehlte, und das ist teuer bezahlt worden: die Policy oben war
+gegen den Adapter *vor* §11 verifiziert, und §11 wurde in einem anderen
+Abschnitt ergänzt, ohne sie anzufassen. In Produktion sah das so aus — die
+Provisionierung schlug erst zu, als die Settings gesetzt waren, mit
+
+```
+aws HTTP 403: … not authorized to perform: ec2:CreateSecurityGroup
+```
+
+und rollte sauber zurück. **Die Lehre ist dieselbe wie bei Migration +
+`schema.sql`: ein Feature und seine Berechtigungen gehören in denselben
+Commit.** Eine Policy, die gegen eine ältere Fassung des Adapters verifiziert
+wurde, ist ab dem nächsten neuen API-Call falsch, und nichts im Build merkt es.
+
+**Es ist bewusst weiter gefasst als der Rest der Policy.** `CreateSecurityGroup`
+lässt sich nicht auf „nur die Gruppe, die wir gleich anlegen" einschränken, weil
+es die Gruppe erst erzeugt, und `Authorize/Revoke` sind hier auf jede
+Security-Group des Accounts erlaubt statt nur auf `opscat-sensor-ssh`. Eng
+ziehen ließe sich das mit `TagSpecification` beim Create plus einer
+`aws:ResourceTag`-Condition auf den beiden Ingress-Calls — das setzt aber
+voraus, dass `ensureSshAccess()` die Gruppe taggt, was es heute nicht tut.
+Solange das offen ist: ein **dedizierter** IAM-User pro Installation, nie ein
+geteilter.
+
+**GCP: die Firewall-Rechte für §11.** Die Custom Role für den Service Account
+braucht neben `compute.instances.create/delete/list` zusätzlich
+`compute.firewalls.get`, `compute.firewalls.create`, `compute.firewalls.update`
+und `compute.networks.updatePolicy` — `ensureSshAccess()` macht ein GET auf
+`/global/firewalls/opscat-sensor-ssh`, ein POST, wenn es die Regel nicht gibt,
+und ein PATCH, wenn die Ranges abweichen. Die Regel adressiert Instanzen über
+das Tag `opscat-sensor`, nicht über IP-Bereiche.
+
+**Verifiziert am 2026-08-27**, und zwar auf die unangenehme Art: die erste echte
+GCP-Provisionierung mit gesetztem `sensor_ssh_key` kam mit
+
+```
+gcp HTTP 403: Required 'compute.firewalls.create' permission for
+'projects/opscat-sensors/global/firewalls/opscat-sensor-ssh'
+```
+
+zurück und rollte sauber zurück. Der Service Account hatte
+**Compute Instance Admin (v1)** — das deckt Instanzen ab, Firewalls nicht.
+
+Die Abhilfe ist eine **Custom Role**, nicht `roles/compute.securityAdmin`: die
+predefined Rolle darf jede Firewall-Regel im Projekt anfassen, dazu SSL-Zertifikate
+und mehr. Angelegt als `projects/<projekt>/roles/opscatSensorFirewall` mit exakt
+den vier Permissions oben und dem Service Account zugewiesen; danach lief dieselbe
+Provisionierung durch (`us-west2`, Node online, SSH als `opscat-admin` erreichbar).
+
+`compute.firewalls.delete` ist **bewusst nicht** enthalten — `ensureSshAccess()`
+löscht keine Regel, es legt an und patcht. Eine Berechtigung, die der Adapter nie
+braucht, gehört nicht in die Rolle.
+
+Als Datei zum Anlegen — `gcloud iam roles create opscatSensorFirewall
+--project=<projekt> --file=rolle.yaml` frisst dieselben Felder als YAML oder
+JSON. Dieser Block ist die maschinenlesbare Fassung, die `check:cloud` gegen
+`gcp.js` prüft:
+
+<!-- policy:gcp -->
+```json
+{
+  "title": "OpsCat Sensor Provisioner",
+  "description": "Provisioniert und entfernt OpsCat Sensor Agents; verwaltet die Break-glass-SSH-Regel.",
+  "stage": "GA",
+  "includedPermissions": [
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.list",
+    "compute.firewalls.get",
+    "compute.firewalls.create",
+    "compute.firewalls.update",
+    "compute.networks.updatePolicy"
+  ]
+}
+```
+
+Die sechs `compute.*`-Permissions leitet der Check aus dem Adapter ab, und zwar
+aus Googles URL-Grammatik (`/projects/<p>/<scope>/<collection>[/<item>]`) plus
+der HTTP-Methode: POST auf eine Collection ist `create`, PATCH auf ein Item ist
+`update`, und so weiter. Ein siebter API-Call bringt seine Permission also von
+selbst mit, statt darauf zu warten, dass sich jemand an diese Datei erinnert.
+
+`compute.networks.updatePolicy` ist die einzige Ausnahme: GCP prüft die am
+*Netzwerk*, nicht an der Firewall-Regel, es gibt also keinen Request, aus dem
+sie abzuleiten wäre. Sie steht mit Begründung in `GRANTED_UNUSED`.
+
+**Was der Check nicht kann**, deutlich gesagt: Er vergleicht den Adapter mit der
+*dokumentierten* Policy, nicht mit der, die im Kundenkonto tatsächlich hängt.
+Wer die Doku ignoriert, bekommt weiter ein 403 — nur eben nicht mehr, weil die
+Doku falsch war. Die Rümpfe von `ensureSshAccess()` selbst sind weiterhin von
+keinem Test abgedeckt (`e2e-sensors` stubbt `providers.provider()`); dafür
+bräuchte es einen Fake der beiden Cloud-APIs auf HTTP-Ebene.
+
+**Der Sweeper merkt sich, wo er gestartet hat.** `engine/reconcile.js` leitete
+seine Regionsliste aus `SELECT DISTINCT provider_region FROM sensor_nodes` ab —
+aus *lebenden* Zeilen, während dieselbe Funktion Zeilen löscht. Sobald die letzte
+Node einer Region weg war, wurde die Region nie wieder gelistet, und eine Waise
+dort lief auf Kosten des Kunden weiter. Der Kommentar über der Query sagte
+bereits „regions we ever provisioned" — genau das tat sie nicht.
+
+`cloud_regions_used` (Migration 029) ist das Gedächtnis: eine Zeile pro
+(Credential, Region) beim **erfolgreichen** Start, vom Sweeper nie gelöscht. Die
+Migration backfillt aus den heute existierenden Nodes — eine Region, deren letzte
+Node schon weg ist, kann sie nicht rekonstruieren, denn diese Historie wurde nie
+aufgeschrieben. Eine vor Migration 029 geleakte Instanz muss also von Hand
+gefunden werden.
+
+Bewusst **nicht** gewählt: einfach alle 33 AWS-Regionen abklappern. Das wären 33
+`DescribeInstances` pro Stunde pro Credential, inklusive Fehlern in nicht
+aktivierten Opt-in-Regionen — teuer und laut für eine Menge, die fast immer aus
+ein bis zwei Regionen besteht.
 
 **Opt-in-Regionen.** Fünf Regionen des AWS-Katalogs (`server/src/providers/index.js`)
 sind in einem frischen AWS-Account deaktiviert und müssen unter *Account → AWS
@@ -374,9 +548,9 @@ Ein Formular, drei Abschnitte — bildet direkt das n:m-Datenmodell ab:
    pro gewähltem Typ entsteht ein `synthetic_checks`-Eintrag.
    Typ-Details (HTTP-Assertions etc.) wie heute nach dem Anlegen.
 3. **Run from these sensor agents** — Multi-Select über die Agents der Org
-   (mit Kind-Badge, Region/City, Live-Latenz) plus Schalter
-   **"all agents (incl. future)"** (= keine expliziten `check_locations`-Zeilen,
-   Checks laufen automatisch auch auf später deployten Agents). Inline-Link
+   (mit Kind-Badge, Region/City, Live-Latenz) plus Schalter **"all agents"**
+   (= die Fleet, die es beim Anlegen gibt, als echte `check_locations`-Zeilen).
+   Inline-Link
    "+ Deploy new sensor agent…" springt in den Agents-Tab. Browser-Checks sind
    nur auf browser-fähigen Agents wählbar; private Targets nur auf self-hosted.
 
@@ -485,3 +659,130 @@ Orphan-Sweeper joined das Provider-Tag `opscat-location:<id>` gegen die DB.
 - Gcore/Fly.io als weitere Adapter (Fly: `CAP_NET_RAW`/ICMP in microVMs prüfen).
 - Kapazitätsbudget-Formel pro Org auf Shared-Nodes (Checks × Frequenz je Location).
 - Agent-Self-Update-Kanal für die Managed-Flotte.
+
+## 11. Break-glass-SSH + Sensor-Adresse
+
+Die vom Wizard provisionierten Nodes waren **prinzipiell** nicht erreichbar:
+`renderCloudInit()` kannte nur URL und Probe-Key, `RunInstances` übergab kein
+`KeyName`, und der einzige angelegte User hat `/usr/sbin/nologin`. Kein Login,
+kein Passwort, keine Shell. Das ist eine gute Voreinstellung — eine Box ohne
+Login kann keinen gestohlenen Key haben — aber sie kostet: eine Node, die sich
+falsch verhält, kann man nur wegwerfen, nicht ansehen, und ein Lasttest, der
+`htop` auf dem Sensor braucht, ist gar nicht möglich.
+
+Der Zugang ist deshalb **opt-in und paarweise**, pro Organisation, als zwei
+Org-Settings:
+
+| Setting | Inhalt |
+|---|---|
+| `sensor_ssh_key` | ein OpenSSH-**Public**-Key, einzeilig |
+| `sensor_ssh_cidrs` | bis zu 8 IPv4-Adressen/CIDRs, `/16` oder enger |
+
+Beide zusammen oder gar nicht: ein Key ohne Quell-Range wäre ein offener
+Port 22, eine Range ohne Key eine Regel, die nichts schützt. `sshAccessFor()`
+(`src/lib/sshaccess.js`) liefert `null`, wenn beides leer ist, und **wirft**,
+wenn nur eine Hälfte gesetzt ist — auch dann, wenn jemand an der Settings-Route
+vorbei direkt in `org_settings` schreibt.
+
+Warum die Validierung so streng ist: der Key landet in **cloud-init**, und das
+ist YAML, das per String-Interpolation gebaut wird. Ein „Public Key" mit einem
+Zeilenumbruch setzt das Dokument fort — `runcmd:` inklusive — auf einer
+Maschine, für die wir anschließend Port 22 öffnen. `validateSshKey()` prüft
+deshalb einzeilig + Format, und `renderCloudInit()` prüft **noch einmal**, weil
+ein zweiter Aufrufer (Skript, künftiger Ops-Pfad) die erste Prüfung sonst
+umgehen könnte.
+
+**Vorher: die Cloud-Berechtigungen.** Break-glass-SSH legt eine Firewall-Regel
+an, und das ist ein Recht, das reines Provisionieren nicht braucht — AWS
+`ec2:CreateSecurityGroup` + `Authorize/RevokeSecurityGroupIngress`, GCP
+`compute.firewalls.get/create/update`. Beide stehen in §4 bei den
+Minimal-Policies. Fehlen sie, schlägt die Provisionierung mit einem 403 fehl
+und rollt zurück — was das gewünschte Verhalten ist, aber die Fehlermeldung
+kommt vom Cloud-Provider und nicht von uns, also hier der Hinweis.
+
+Was beim Provisionieren passiert, in dieser Reihenfolge:
+
+1. `ensureSshAccess()` legt die Inbound-Regel an — AWS: eine Security-Group
+   `opscat-sensor-ssh` pro Region in der Default-VPC; GCP: eine projektweite
+   Firewall-Regel gleichen Namens auf `default`, adressiert über das
+   Instanz-Tag `opscat-sensor`. Beide sind **idempotent und abgleichend**:
+   Ranges, die in OpsCat entfernt wurden, werden entzogen bzw. gepatcht, sonst
+   bliebe die Tür von gestern offen.
+2. `renderCloudInit()` legt den User `opscat-admin` (sudo, key-only) an. Der
+   Agent behält seinen `nologin`-Service-User und seine systemd-Härtung.
+3. `createInstance()` startet die Instanz **in** dieser Group.
+
+Schlägt Schritt 1 fehl, wird die ganze Provisionierung zurückgerollt — eine Box
+mit Key, die niemand erreicht, ist genau der Zustand, den das Feature
+beseitigen soll.
+
+**Beide Provisionierungs-Pfade sind verdrahtet, und der zweite war der
+wichtigere.** `POST /api/synthetics/locations/provision` (BYO-Cloud, liest die
+Settings der handelnden Org) *und* `POST /api/superadmin/managed-locations`
+(die Managed-Flotte, liest die Settings der **Plattform-Org**, weil die Flotte
+uns gehört und nicht einem Tenant). Der Managed-Pfad ist der, den der In-App-
+Wizard fährt, also die Nodes, für die wir im Zweifel geradestehen — und genau
+der ist zuerst ohne SSH ausgeliefert worden.
+
+**Bestehende Nodes bekommen den Key nicht nachträglich.** cloud-init läuft
+einmal; wer eine schon laufende Node öffnen will, provisioniert sie neu (der
+Reconcile-Sweeper räumt die alte ab). Das steht so auch im UI.
+
+### Die Adresse, von der ein Probe kommt
+
+`synthetic_locations.last_ip` (Migration 026) wird bei **jedem** Abholen der
+Arbeitsliste geschrieben (`GET /v1/synthetics/checks`). Das ist der einzige
+Ort, der die Wahrheit für jede Betriebsart kennt: ein Self-hosted-Agent hat
+keine Cloud-API, die man fragen könnte, und die öffentliche IP einer
+auto-provisionierten Node ist ephemer und ändert sich unter ihr. Die Adresse
+steht auf der Agent-Karte in `/app/synthetics` — sie ist die Antwort auf „was
+muss ich in der Firewall freigeben", die vorher nur über die Konsole des
+Cloud-Providers zu bekommen war.
+
+## 12. Host Agent: dieselbe Node, zweite Rolle
+
+`opscat-agent` hat immer zwei Rollen in einer Binary gehabt, und eine
+provisionierte Node hat bisher nur eine davon gefahren:
+
+| Rolle | Credential | Was sie tut | Wo sie auftaucht |
+|---|---|---|---|
+| **Sensor Agent** | Sensor Key (`ocs_…`) | zieht die Check-Liste, führt synthetische Checks aus, meldet Ergebnisse | Synthetics › Sensor Agents |
+| **Host Agent** | Agent Token (`oca_…`) | Heartbeat, CPU/RAM/Disk/Netz, optional Container + Logs | Assets › Agents |
+
+Der Begriff ist bewusst gewählt: „Host Agent" ist das, was die Branche
+`node_exporter`, `telegraf`, `datadog-agent` nennt — ein Prozess, der die
+*Maschine* meldet, auf der er läuft. „Sensor Agent" ist die Rolle, die von
+*außen* misst. Ein Wort für beides gäbe es nicht, weil es zwei Dinge sind.
+
+**Eine Managed Node wird beim Provisionieren als beides registriert.** Der
+Provision-Handler legt neben dem Probe Key ein `agents`-Row in der
+Plattform-Org an (Gruppe `sensors`), speichert davon nur den Hash, und
+cloud-init schreibt beide Credentials in `/etc/opscat-agent.env`. Der Agent
+startet dann mit `--probe` **und** einem Token und fährt beide Rollen in einem
+Prozess — ein Timer für die Checks, einer für die Metriken.
+
+Warum das gebaut wurde: der Fleet-Screen konnte sagen, dass eine Node hinter
+ihrem Soll zurückliegt (`scheduledPerMin` vs. `observedPerMin`), aber nicht
+warum. CPU 96 % heißt „die Box", CPU 11 % heißt „nicht die Box" — und keine der
+beiden Zahlen ist für sich genommen viel wert. Der HOST-AGENT-Block im Flyout
+zeigt beides nebeneinander.
+
+Drei Details, die still danebengehen würden:
+
+- **`agents.name` ist UNIQUE**, und zwei Nodes in einer Stadt ist der
+  Normalfall. Die Node-ID steht deshalb **im** Namen (`Sensor Frankfurt DE
+  (node 42)`) statt bei einer Kollision nachgeschlagen und angehängt zu werden
+  — ein Lookup wäre ein Rennen zwischen zwei Provisionierungen, die ID ist per
+  Konstruktion eindeutig.
+- **Ein zurückgerollter Provision und ein Teardown löschen die Registrierung
+  mit.** Ein übrig gebliebenes `agents`-Row ist kein Schönheitsfehler, sondern
+  ein *gültiges Agent-Token für eine Maschine, die es nicht gibt*. Derselbe
+  Grund gilt für den Reconcile-Sweeper: eine Node, die nie hochkam, nimmt ihre
+  Registrierung mit.
+- **`null` heißt „nicht bekannt", nie `0`.** Eine Node, von der wir noch nie
+  gehört haben, meldet `cpuPct: null` und der Screen zeigt einen Gedankenstrich.
+  „CPU 0 %" wäre eine Aussage über eine gesunde Box, die wir nicht treffen
+  können — dieselbe Regel, auf der `Count` in `ui.tsx` steht.
+
+**Bestehende Nodes bekommen das nicht nachträglich** (cloud-init läuft einmal);
+das Flyout sagt das an der Stelle, an der sonst die Hardware stünde.

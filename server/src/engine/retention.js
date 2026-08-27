@@ -117,6 +117,13 @@ async function markStaleAgents() {
  * a sweep that runs once a day, and the table also carries a 400-day TTL as the
  * backstop for the case this loop stops running at all (src/clickhouse-schema.sql).
  *
+ * On ClickHouse the store ALSO sweeps whatever the PostgreSQL `logs` table still
+ * holds from before the cutover, which is a leak this loop could not see: it
+ * calls `purge`, `purge` answered from ClickHouse, and the orphaned Postgres
+ * rows were pruned for the last time on the boot before the switch. That lives
+ * in the seam rather than here, because deciding it from this file would mean
+ * this file knowing there are two engines — see db/log-store.js.
+ *
  * What did NOT change: per-org retention stays a plan ceiling enforced here, in
  * one place, for both engines. A table-level TTL cannot express "each tenant may
  * shorten but not raise its own", so moving this into the schema was never an

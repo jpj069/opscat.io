@@ -77,6 +77,37 @@ async function inCleanSchema(fn) {
   }
 }
 
+/**
+ * Every `<table>.<column>` that a migration at or above the baseline ADDs.
+ *
+ * Parsed out of the SQL rather than maintained by hand: a list someone has to
+ * remember to extend is a list that stops covering the newest migration, which
+ * is precisely the one that can break boot.
+ *
+ * @returns {[string, string][]}
+ */
+function pendingAddedColumns() {
+  const dir = path.join(__dirname, 'src', 'migrations');
+  /** @type {[string, string][]} */
+  const out = [];
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.sql')).sort()) {
+    const sql = fs.readFileSync(path.join(dir, f), 'utf8')
+      .replace(/--[^\n]*/g, '');                       // comments carry examples
+    // `ALTER TABLE x ADD COLUMN [IF NOT EXISTS] c ...`, including the
+    // comma-separated form, which migration 031 uses.
+    const m = /ALTER\s+TABLE\s+(\w+)([\s\S]*?);/gi;
+    let hit;
+    while ((hit = m.exec(sql)) !== null) {
+      const table = hit[1];
+      const body = hit[2];
+      const cols = /ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi;
+      let c;
+      while ((c = cols.exec(body)) !== null) out.push([table, c[1]]);
+    }
+  }
+  return out;
+}
+
 async function main() {
   // ── 1. the file applies to an empty database, and applies AGAIN ───────────
   const applied = await inCleanSchema(async (c) => {
@@ -106,6 +137,40 @@ async function main() {
       "SELECT tablename FROM pg_tables WHERE schemaname = 'probe'")).rows.length;
     chk('…and the second pass creates nothing new', after === tables.length,
       `${tables.length} -> ${after}`);
+
+    /* ── and it applies to a database that PREDATES the newest migrations ──
+     *
+     * This is the check that was missing on 2026-08-24, and its absence took
+     * production down for 23 minutes.
+     *
+     * `applySchema` runs this file BEFORE the migration runner. On an existing
+     * database every `CREATE TABLE IF NOT EXISTS` is a no-op, so the columns a
+     * pending migration adds are simply not there yet — and a STANDALONE
+     * statement that references one of them (an index, a constraint, a view)
+     * dies with `column "x" does not exist`, before the migration that would
+     * have created it can run. A boot loop on every install that already
+     * existed, from a commit whose fresh-install path is perfect.
+     *
+     * Nothing above can see it: both passes run against a database that
+     * schema.sql itself just created, where CREATE TABLE included the column.
+     * So the old world is SIMULATED — drop exactly what the pending migrations
+     * add, then apply the file again. That is the shape of every existing
+     * install at the moment it boots the new code.
+     */
+    const added = pendingAddedColumns();
+    for (const [table, col] of added) {
+      // eslint-disable-next-line no-await-in-loop
+      await c.query(`ALTER TABLE probe.${table} DROP COLUMN IF EXISTS ${col} CASCADE`);
+    }
+    chk('the pending migrations do add columns, so this check is not vacuous',
+      added.length > 0, `${added.length} column(s) parsed out of src/migrations/`);
+    let oldErr = null;
+    try { await c.query(schemaText); } catch (e) { oldErr = e; }
+    chk('schema.sql applies to a database PREDATING its own migrations',
+      oldErr === null,
+      oldErr ? `${oldErr.message} — a standalone statement in schema.sql depends on a `
+        + 'column only a migration adds; move it into the CREATE TABLE, because this '
+        + 'file runs BEFORE migrations on every existing install' : '');
     return { tables, indexes };
   });
 
@@ -140,14 +205,22 @@ async function main() {
   await q.run('DELETE FROM schema_migrations WHERE version = ?', latest + 5);
 
   // ── 4. the migration loader, driven ──────────────────────────────────────
+  // The throwaway files are numbered ABOVE whatever `src/migrations/` really
+  // holds, and that is not tidiness. This database was stamped at `latest` a few
+  // lines up, so a fixture numbered 026 is "already applied" the moment a real
+  // 026 exists — the loader skips it, `mig_probe` is never created, and the file
+  // fails on the NEXT migration with `relation "mig_probe" does not exist`,
+  // pointing at the loader instead of at the fixture. Measured the first time a
+  // real migration landed after the SQLite ladder retired.
   const write = (name, sql) => fs.writeFileSync(path.join(tmp, name), sql);
   chk('an empty migrations directory leaves the baseline alone',
     dbMod.latestVersion(tmp) === dbMod.BASE_VERSION, String(dbMod.latestVersion(tmp)));
 
-  write('026-probe-one.sql', 'CREATE TABLE IF NOT EXISTS mig_probe (n BIGINT NOT NULL);');
-  write('027-probe-two.sql', 'ALTER TABLE mig_probe ADD COLUMN label TEXT;');
+  const V1 = latest + 1, V2 = latest + 2, V3 = latest + 3;
+  write(`${V1}-probe-one.sql`, 'CREATE TABLE IF NOT EXISTS mig_probe (n BIGINT NOT NULL);');
+  write(`${V2}-probe-two.sql`, 'ALTER TABLE mig_probe ADD COLUMN label TEXT;');
   chk('files are ordered by their number, not by readdir',
-    dbMod.migrationFiles(tmp).map((m) => m.version).join(',') === '26,27',
+    dbMod.migrationFiles(tmp).map((m) => m.version).join(',') === `${V1},${V2}`,
     dbMod.migrationFiles(tmp).map((m) => m.version).join(','));
 
   await dbMod.applySchema({ migrationsDir: tmp });
@@ -157,9 +230,9 @@ async function main() {
     "SELECT 1 AS ok FROM information_schema.columns "
     + "WHERE table_name = 'mig_probe' AND column_name = 'label'")));
   chk('…and the version moves to the last one applied',
-    (await dbMod.schemaVersion()) === 27, String(await dbMod.schemaVersion()));
+    (await dbMod.schemaVersion()) === V2, String(await dbMod.schemaVersion()));
 
-  // Re-running must be a no-op. `027` is an ALTER TABLE ADD COLUMN with no
+  // Re-running must be a no-op. The second fixture is an ALTER TABLE ADD COLUMN with no
   // IF NOT EXISTS — it would THROW on a second pass — so this check has teeth:
   // it fails loudly if the "already applied" guard ever stops working.
   let rerun = null;
@@ -168,17 +241,17 @@ async function main() {
 
   // A migration that FAILS must leave the database at the last version that
   // fully applied — Postgres has transactional DDL, so this is a real guarantee.
-  write('028-probe-broken.sql',
+  write(`${V3}-probe-broken.sql`,
     'ALTER TABLE mig_probe ADD COLUMN ok BIGINT; SELECT * FROM no_such_table_at_all;');
   let broke = null;
   try { await dbMod.applySchema({ migrationsDir: tmp }); } catch (e) { broke = e; }
   chk('a failing migration propagates rather than being swallowed', broke !== null);
   chk('…the version stays at the last one that fully applied',
-    (await dbMod.schemaVersion()) === 27, String(await dbMod.schemaVersion()));
+    (await dbMod.schemaVersion()) === V2, String(await dbMod.schemaVersion()));
   chk('…and its partial work is rolled back, not left half-applied',
     !(await q.get("SELECT 1 AS ok FROM information_schema.columns "
       + "WHERE table_name = 'mig_probe' AND column_name = 'ok'")));
-  fs.rmSync(path.join(tmp, '028-probe-broken.sql'));
+  fs.rmSync(path.join(tmp, `${V3}-probe-broken.sql`));
 
   // ── 5. the numbering rules, which are the only thing ordering rests on ───
   const throwsOn = (name, sql, re) => {
@@ -193,7 +266,7 @@ async function main() {
   chk('a migration at or below the baseline is refused — it would never run',
     throwsOn('025-too-old.sql', 'SELECT 1;', /baseline/));
   chk('two migrations with the same number are refused',
-    throwsOn('027-also-twenty-seven.sql', 'SELECT 1;', /two migrations are numbered/));
+    throwsOn(`${V2}-also-a-duplicate.sql`, 'SELECT 1;', /two migrations are numbered/));
 
   // ── 6. the shipped directory obeys its own rules ─────────────────────────
   let realErr = null;

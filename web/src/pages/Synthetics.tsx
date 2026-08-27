@@ -5,11 +5,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useTab, useQueryState, useOverlayParam } from '../state';
 import { api } from '../api';
 import { SEV } from '../format';
-import { Card, Button,
+import { AddTile, Card, Button,
   LineChart, Spark, GlowDot, StatusPill, Toggle, Modal, Field, TableScroll,
   PageHeader, TableSkeleton, CardsSkeleton, BarsSkeleton,
-  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, KpiTabs, Chip,
-  Segmented, Input, HostInput, Textarea, COL} from '../ui';
+  HeatBar, StatusBadge, StatusGrid, Honeycomb, TipHost, TipBody, CELL_COLOR, Tabs, KpiTabs, Chip, Flyout,
+  Segmented, Input, HostInput, Textarea, COL, Busy, Skeleton} from '../ui';
 import type { CellState, GridCell, HeatBucket } from '../ui';
 import { Select } from '../Select';
 import type {
@@ -31,6 +31,15 @@ const PLACEHOLDER: Record<SynthCheck['type'], string> = {
   tcp: 'host.example.com:443',
   traceroute: 'host.example.com',
 };
+
+/* The fleet an org actually uses: everything it owns, plus the managed
+ * locations it has BOOKED. One predicate, three readers — the tab count read
+ * `locations.length` while the tab body and the check form both filtered, so
+ * the tab said "Sensor Agents 3" over two cards for as long as any managed
+ * location in the catalog sat unbooked. Same shape as `canReturnTo`: a rule
+ * written twice is a rule that disagrees with itself. */
+const usableLocations = (locs: SynthLocation[] | null) =>
+  (locs ?? []).filter((l) => l.kind !== 'managed' || l.booked);
 
 // HeatBar ranges — decided bucket counts: 30min/1h/6h/12h → 30 buckets,
 // 24h → 32×45min, 7d → 28×6h (shift boundaries), 30d → 30×1 day.
@@ -238,7 +247,7 @@ export default function Synthetics() {
           Count reserves the box first and shimmers until the number exists. */}
       <Tabs value={tab} onChange={setTab} tabs={[
         ['checks', 'Checks', checks?.length ?? null],
-        ['agents', 'Sensor Agents', locations?.length ?? null]] as const} />
+        ['agents', 'Sensor Agents', locations ? usableLocations(locations).length : null]] as const} />
 
       {tab === 'checks' && (
         <>
@@ -313,7 +322,8 @@ export default function Synthetics() {
       {tab === 'agents' && (
         <AgentsTab locations={locations} results={results} checks={checks} route={route}
           selLoc={selLoc} setSelLoc={setSelLoc} canWrite={canWrite}
-          onDeleted={() => { loadLocations(); loadResults(); }} />
+          onDeleted={() => { loadLocations(); loadResults(); }}
+          onAdd={() => setShowAddAgent(true)} />
       )}
 
       {flyCheck && (
@@ -362,36 +372,24 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
   const gridCells = cells((locId) => setAgentLoc(locId));
 
   return (
-    <>
-      <div className="overlay-dim" onClick={onClose} />
-      <div className="slide-over" style={{ width: 560 }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--bg3)',
-          position: 'sticky', top: 0, background: 'var(--bg1)', zIndex: 'var(--z-sticky)' }}>
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="row" style={{ gap: 8, minWidth: 0 }}>
-              <span className="mono text-md font-bold text-text0" style={{
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{check.target}</span>
-              <StatusBadge label={check.type} state={badgeState(status)} />
-              <StatusPill text={status === 'degraded' ? `degraded · ${okCount}/${latest.length}` : status}
-                color={STATUS_COLOR[status]} />
-            </div>
-            <button className="text-text2" aria-label="Close" onClick={onClose}
-              style={{ display: 'inline-flex' }}><XIcon size={17} /></button>
-          </div>
-          {canWrite && (
-            <div className="row" style={{ gap: 8, marginTop: 10 }}>
-              <span className="row" style={{ gap: 6 }}>
-                <Toggle on={check.enabled} onClick={onToggle} />
-                <span className="mono text-2xs text-text2">
-                  {check.enabled ? 'enabled' : 'paused'}</span>
-              </span>
-              <span style={{ flex: 1 }} />
-              <Button size="sm" variant="danger" onClick={onDelete} >Delete</Button>
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <Flyout title={check.target} onClose={onClose}
+      badges={<>
+        <StatusBadge label={check.type} state={badgeState(status)} />
+        <StatusPill text={status === 'degraded' ? `degraded · ${okCount}/${latest.length}` : status}
+          color={STATUS_COLOR[status]} />
+      </>}
+      actions={canWrite ? (
+        <>
+          <span className="row" style={{ gap: 6 }}>
+            <Toggle on={check.enabled} onClick={onToggle} />
+            <span className="mono text-2xs text-text2">
+              {check.enabled ? 'enabled' : 'paused'}</span>
+          </span>
+          <span style={{ flex: 1 }} />
+          <Button size="sm" variant="danger" onClick={onDelete} >Delete</Button>
+        </>
+      ) : undefined}>
+      <>
           {/* stats */}
           <div className="row" style={{ gap: 20, flexWrap: 'wrap' }}>
             {([
@@ -468,18 +466,42 @@ function CheckFlyout({ check, status, range, badgeState, heatBuckets, uptime, ce
             {check.assertions && <>assertions: {JSON.stringify(check.assertions)}<br /></>}
             agents: all ({latest.length} reporting)
           </div>
-        </div>
-      </div>
-    </>
+      </>
+    </Flyout>
   );
 }
 
+/**
+ * User-Agent presets for HTTP checks.
+ *
+ * The default identifies the monitor, and that is the right default: a probe
+ * that says what it is can be allow-listed at a WAF, recognised in an access log
+ * and kept out of analytics. The browser strings exist because a check pointed
+ * at a site behind bot protection is refused for exactly that reason — and a red
+ * check that means "the WAF blocked our monitor" is a signal nobody can act on.
+ *
+ * Said plainly in the form rather than hidden here: a browser UA gets you past a
+ * User-Agent rule and nothing else. JA3/TLS fingerprinting and JS challenges see
+ * a Node client either way.
+ */
+const UA_PRESETS: [value: string, label: string][] = [
+  ['', 'OpsCat (default — identifies the monitor)'],
+  ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    'Chrome on Windows'],
+  ['Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+    'Chrome on Android'],
+  ['Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+    'Safari on iPhone'],
+  ['curl/8.5.0', 'curl'],
+  ['__custom__', 'Custom…'],
+];
+
 // ---------------------------------------------------------- sensor agents tab
 
-function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWrite, onDeleted }: {
+function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWrite, onDeleted, onAdd }: {
   locations: SynthLocation[] | null; results: SynthResult[]; checks: SynthCheck[] | null;
   route: Hop[] | null; selLoc: number | null; setSelLoc: (id: number) => void;
-  canWrite: boolean; onDeleted: () => void;
+  canWrite: boolean; onDeleted: () => void; onAdd: () => void;
 }) {
   const icmpIds = useMemo(
     () => new Set((checks ?? []).filter((c) => c.type === 'icmp').map((c) => c.id)),
@@ -504,21 +526,18 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
     onDeleted();
   };
 
-  // the agents tab shows the fleet the org actually uses: own + booked managed
-  const mine = (locations ?? []).filter((l) => l.kind !== 'managed' || l.booked);
+  const mine = usableLocations(locations);
 
   return (
     <>
       {/* agent cards */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {locations === null && <CardsSkeleton count={4} w={150} h={116} />}
-        {locations && mine.length === 0 && (
-          <div className="text-text3 text-sm">No sensor agents yet.</div>
-        )}
         {mine.map((loc) => {
           const res = locResult(loc.id);
           const ms = res?.latencyMs ?? null;
           const active = loc.id === selLoc;
+          const n = checkCount(loc.id);
           return (
             <div key={loc.id} onClick={() => setSelLoc(loc.id)} style={{ width: 150, cursor: 'pointer',
               background: 'var(--bg2)', borderRadius: 8, padding: 12,
@@ -539,7 +558,18 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
                 {loc.kind === 'local' ? 'built-in'
                   : loc.kind === 'managed' ? 'opscat managed'
                     : loc.provider ? `${loc.provider} hosted` : 'self hosted'}
-                {' · '}{checkCount(loc.id)} checks
+                {' · '}{n} check{n === 1 ? '' : 's'}
+              </div>
+              {/* The address checks leave from — the answer to "what do I
+                  allow-list?", which used to need the cloud provider's console.
+                  The built-in probe runs INSIDE the OpsCat server and has no
+                  last_ip of its own, so this rendered a bare `—`: an orphan dash
+                  under the meta line, answering nothing and reading like a bug.
+                  Say where it runs instead; "your OpsCat server" is a true and
+                  actionable answer to the same question. */}
+              <div className="mono text-2xs text-text3" style={{ overflow: 'hidden',
+                textOverflow: 'ellipsis' }} title={loc.lastIp ?? undefined}>
+                {loc.lastIp ?? (loc.kind === 'local' ? 'this OpsCat server' : 'address not reported yet')}
               </div>
               <div className="row" style={{ gap: 5, marginTop: 6, justifyContent: 'space-between' }}>
                 <span className="row" style={{ gap: 5 }}>
@@ -560,6 +590,16 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
             </div>
           );
         })}
+        {/* The tile stays after the cards rather than replacing them when the
+            list is empty: "add another" then needs no second affordance, and
+            the empty state is the same control rather than a different screen. */}
+        {locations !== null && canWrite && (
+          <AddTile label="Add Sensor Agent" onClick={onAdd} h={116}
+            icon={<PlusIcon size={16} />} />
+        )}
+        {locations !== null && !canWrite && mine.length === 0 && (
+          <div className="text-text3 text-sm">No sensor agents yet.</div>
+        )}
       </div>
 
       {/* route card for selected agent */}
@@ -589,7 +629,145 @@ function AgentsTab({ locations, results, checks, route, selLoc, setSelLoc, canWr
       </Card>
 
       {canWrite && <CloudCredentialsCard />}
+      {canWrite && <SensorSshCard />}
+      {canWrite && <CheckIdentityCard />}
     </>
+  );
+}
+
+/**
+ * The org-wide default User-Agent for HTTP checks — what a check sends when it
+ * does not carry one of its own. Per check it is set in the check form; here so
+ * an org can identify its whole monitoring fleet in one place.
+ */
+function CheckIdentityCard() {
+  const [ua, setUa] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    api.get<Record<string, string>>('/api/admin/settings')
+      .then((s) => setUa(s.synthetic_user_agent || '')).catch(() => setUa(''));
+  }, []);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr(''); setMsg('');
+    try {
+      await api.patch('/api/admin/settings', { synthetic_user_agent: (ua || '').trim() });
+      setMsg((ua || '').trim() ? 'saved' : 'cleared — checks send the OpsCat default again');
+    } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card style={{ padding: 0 }}>
+      <div className="card-title" style={{ padding: '12px 16px 0' }}>Check identity
+        <span className="mono text-2xs text-text3 font-normal">
+          default User-Agent for HTTP checks — a check may override it</span>
+      </div>
+      <form onSubmit={save} style={{ padding: '10px 16px 14px' }}>
+        {ua === null && (
+          <Busy>
+            <Skeleton w={150} h={8} style={{ display: 'block', marginBottom: 6 }} />
+            <Skeleton h={30} radius={6} />
+          </Busy>
+        )}
+        {ua !== null && (
+          <>
+            <Field label="Default User-Agent (empty = OpsCat's own)">
+              <Input className="mono" width="100%" value={ua} maxLength={200}
+                placeholder="OpsCat-Synthetics/1.0 (+https://opscat.io/bot)"
+                onChange={(e) => setUa(e.target.value)} />
+            </Field>
+            <div className="row row-wrap" style={{ gap: 8 }}>
+              <Button type="submit" variant="primary" size="sm" disabled={busy}>Save</Button>
+              {msg && <span className="mono text-2xs text-text3">{msg}</span>}
+              {err && <span className="mono text-2xs" style={{ color: SEV.critical }}>{err}</span>}
+            </div>
+          </>
+        )}
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * Break-glass SSH for AUTO-PROVISIONED sensors (docs/SENSOR-AGENTS.md §11).
+ *
+ * Off by default and deliberately two fields: a key with no source range would
+ * be an open port 22, and a range with no key would be a rule protecting
+ * nothing. The server refuses each half on its own, so this form only has to
+ * present them together — and it says, rather than implies, that the setting
+ * applies to the NEXT node: cloud-init runs once, so an existing box cannot
+ * grow a key it did not boot with.
+ */
+function SensorSshCard() {
+  const [key, setKey] = useState<string | null>(null);
+  const [cidrs, setCidrs] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    api.get<Record<string, string>>('/api/admin/settings')
+      .then((s) => { setKey(s.sensor_ssh_key || ''); setCidrs(s.sensor_ssh_cidrs || ''); })
+      .catch(() => setKey(''));
+  }, []);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr(''); setMsg('');
+    try {
+      await api.patch('/api/admin/settings',
+        { sensor_ssh_key: (key || '').trim(), sensor_ssh_cidrs: cidrs.trim() });
+      setMsg((key || '').trim() ? 'saved — applies to sensors provisioned from now on' : 'break-glass SSH disabled');
+    } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card style={{ padding: 0 }}>
+      <div className="card-title" style={{ padding: '12px 16px 0' }}>Break-glass SSH
+        <span className="mono text-2xs text-text3 font-normal">
+          optional — off unless both fields are set</span>
+      </div>
+      <form onSubmit={save} style={{ padding: '10px 16px 14px' }}>
+        {key === null && (
+          /* Derived from the real fields below — two labelled rows, same
+             rhythm — rather than a second layout that goes stale. */
+          <Busy>
+            {[0, 1].map((i) => (
+              <div key={i} style={{ marginBottom: 10 }}>
+                <Skeleton w={i ? 210 : 170} h={8} style={{ display: 'block', marginBottom: 6 }} />
+                <Skeleton h={30} radius={6} />
+              </div>
+            ))}
+            <Skeleton w={64} h={28} radius={6} />
+          </Busy>
+        )}
+        {key !== null && (
+          <>
+            <Field label="Authorized public key (opscat-admin)">
+              <Input className="mono" width="100%" value={key} maxLength={1200}
+                placeholder="ssh-ed25519 AAAA… you@example.com" onChange={(e) => setKey(e.target.value)} />
+            </Field>
+            <Field label="Allowed source addresses (comma separated, /16 or narrower)">
+              <HostInput className="mono" width="100%" value={cidrs} maxLength={200}
+                placeholder="91.98.197.223, 10.4.0.0/16" onChange={(e) => setCidrs(e.target.value)} />
+            </Field>
+            <div className="row row-wrap" style={{ gap: 8 }}>
+              <Button type="submit" variant="primary" size="sm" disabled={busy}>Save</Button>
+              {msg && <span className="mono text-2xs text-text3">{msg}</span>}
+              {err && <span className="mono text-2xs" style={{ color: SEV.critical }}>{err}</span>}
+            </div>
+            <div className="mono text-2xs text-text3" style={{ marginTop: 8, lineHeight: 1.7 }}>
+              opens tcp/22 on new AWS/GCP sensors for those addresses only<br />
+              ssh opscat-admin@&lt;sensor ip&gt; — the IP is on the agent card once it checks in
+            </div>
+          </>
+        )}
+      </form>
+    </Card>
   );
 }
 
@@ -713,11 +891,12 @@ function AddCheckModal({ locations, onClose, onAdded }: {
   const [jsonValue, setJsonValue] = useState('');
   const [allAgents, setAllAgents] = useState(true);
   const [selAgents, setSelAgents] = useState<number[]>([]);
+  const [uaPreset, setUaPreset] = useState('');
+  const [uaCustom, setUaCustom] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  // agents this org can run checks from: own + booked managed
-  const usable = locations.filter((l) => l.kind !== 'managed' || l.booked);
+  const usable = usableLocations(locations);
   const toggleAgent = (id: number) => setSelAgents((cur) =>
     cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
 
@@ -731,7 +910,10 @@ function AddCheckModal({ locations, onClose, onAdded }: {
     } : undefined;
     try {
       await api.post('/api/synthetics/checks', { type, target, intervalS, timeoutMs, assertions,
-        locationIds: allAgents ? [] : selAgents });
+        locationIds: allAgents ? [] : selAgents,
+        // '' = inherit (org default, then ours). The sentinel never leaves the form.
+        userAgent: type === 'http'
+          ? (uaPreset === '__custom__' ? uaCustom.trim() : uaPreset) : undefined });
       onAdded();
     } catch (ex) { setErr(ex instanceof Error ? ex.message : 'error'); setBusy(false); }
   };
@@ -755,6 +937,23 @@ function AddCheckModal({ locations, onClose, onAdded }: {
         </Field>
         {type === 'http' && (
           <>
+            <Field label="Sends as (User-Agent)">
+              <Select title="User agent" value={uaPreset} onChange={setUaPreset}
+                options={UA_PRESETS.map(([value, label]) => ({ value, label }))} />
+            </Field>
+            {uaPreset === '__custom__' && (
+              <Field label="Custom User-Agent">
+                <Input className="mono" width="100%" value={uaCustom} maxLength={200}
+                  placeholder="MyMonitor/1.0 (+https://example.com/bot)"
+                  onChange={(e) => setUaCustom(e.target.value)} />
+              </Field>
+            )}
+            {uaPreset !== '' && (
+              <div className="mono text-2xs text-text3" style={{ margin: '-4px 0 10px', lineHeight: 1.6 }}>
+                a browser string gets past a User-Agent rule, not past JA3 fingerprinting
+                or a JS challenge — prefer allow-listing our IP where you can
+              </div>
+            )}
             <div className="micro text-2xs" style={{ margin: '4px 0 6px' }}>
               ASSERTIONS (optional — leave empty for "reachable = ok")</div>
             <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
@@ -790,7 +989,11 @@ function AddCheckModal({ locations, onClose, onAdded }: {
         <div className="row" style={{ justifyContent: 'space-between', margin: '4px 0 6px' }}>
           <span className="micro text-2xs">RUN FROM THESE SENSOR AGENTS</span>
           <span className="row" style={{ gap: 6 }}>
-            <span className="mono text-2xs text-text2">all agents (incl. future)</span>
+            {/* It used to say "incl. future", and it meant it — the check was
+                stored with no location rows and every sensor booked afterwards
+                picked it up. The server writes today's fleet out explicitly
+                now, so the promise is gone along with the behaviour. */}
+            <span className="mono text-2xs text-text2">all agents</span>
             <Toggle on={allAgents} onClick={() => setAllAgents(!allAgents)} />
           </span>
         </div>
@@ -845,6 +1048,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
   const [probeKey, setProbeKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const wizApp = useApp();
 
   useEffect(() => {
     api.get<CloudCredential[]>('/api/synthetics/cloud-credentials').then(setCreds).catch(() => setCreds([]));
@@ -854,13 +1058,22 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
   const managed = locations.filter((l) => l.kind === 'managed');
   const managedBooked = managed.filter((l) => l.booked).length;
   const credFor = (p: 'aws' | 'gcp') => creds.filter((c) => c.provider === p);
+  /* `managed.length === 0` has TWO causes and the card used to name only one.
+   * In the community edition there is no OpsCat fleet, which is permanent and
+   * worth saying. In the cloud edition it means the fleet is momentarily empty —
+   * every node torn down, or the first one still provisioning — and telling a
+   * paying customer "not available in OpsCat CE" then is simply false. It reads
+   * as a plan limit, so the operator stops looking. Measured the hard way: it
+   * cost an evening of "why can this org not book the node?" while the answer
+   * was that the node did not exist for those 90 seconds. */
+  const isCE = wizApp.edition === 'community';
 
   const pick = (p: WizProvider) => {
     if ((p === 'aws' || p === 'gcp') && credFor(p).length === 0) {
       setErr(`no ${p.toUpperCase()} key stored — add one under Cloud credentials on the Sensor Agents tab`);
       return;
     }
-    if (p === 'managed' && managed.length === 0) return; // CE: card is informational
+    if (p === 'managed' && managed.length === 0) return; // nothing to pick — see isCE above
     setErr(''); setProv(p); setRegion(null); setEntry(null);
     setCredId((p === 'aws' || p === 'gcp') ? credFor(p)[0].id : null);
     setStep(2);
@@ -934,7 +1147,8 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
             'Ready in seconds — we run the fleet, you pick a location.',
             managed.length
               ? <span className="mono text-xs text-text0"><b>{managedBooked}</b> in use</span>
-              : <StatusPill text="not available in OpsCat CE" color={SEV.info} />,
+              : <StatusPill text={isCE ? 'not available in OpsCat CE' : 'no location online right now'}
+                  color={isCE ? SEV.info : SEV.medium} />,
             managed.length === 0)}
           {(['aws', 'gcp'] as const).map((p) => provCard(p, `${p.toUpperCase()} hosted`,
             'Provisioned into your cloud account — runs on your cloud bill. Unlimited.',
@@ -979,7 +1193,7 @@ function NewAgentWizard({ locations, onClose, onChanged }: {
                 ))}
               </div>
               <div className="micro text-2xs" style={{ marginBottom: 6 }}>City</div>
-              <div style={{ gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
                 {!region && <span className="mono text-xs text-text3" style={{ gridColumn: '1/-1' }}>
                   pick a region above</span>}
                 {region && cityChoices.filter((e) => e.region === region).map((e) => {

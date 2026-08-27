@@ -31,20 +31,33 @@ function transport() {
 function mailConfigured() { return transport() !== null; }
 
 // to: array of addresses. Throws with a transport-tagged message on failure.
-async function sendMail({ from, to, subject, html }) {
+//
+// `text` is the plain-text alternative and both transports carry it natively.
+// It is optional because the three auth mails are a link and a sentence, but
+// anything a machine sends repeatedly should pass one: a message with no
+// text/plain part scores as bulk with most filters, and it is the only thing a
+// terminal client or a watch notification ever renders.
+//
+// `headers` is an object of extra headers. Values must already be header-safe
+// — see `lib/alert-mail.js` `headerSafe()`; a bare CR or LF in one ends the
+// header and begins another, which in a mail is a forged Bcc.
+async function sendMail({ from, to, subject, html, text, headers }) {
   const t = transport();
   if (!t) throw new Error('no mail transport configured (set RESEND_API_KEY or SMTP_HOST)');
+  const extra = headers && Object.keys(headers).length ? headers : undefined;
   if (t === 'resend') {
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, subject, html }),
+      body: JSON.stringify({ from, to, subject, html, ...(text ? { text } : {}),
+        ...(extra ? { headers: extra } : {}) }),
     });
     if (!resp.ok) throw new Error(`resend ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
     return;
   }
   try {
-    await smtp().sendMail({ from, to, subject, html });
+    await smtp().sendMail({ from, to, subject, html, ...(text ? { text } : {}),
+      ...(extra ? { headers: extra } : {}) });
   } catch (e) {
     throw new Error(`smtp: ${String(e.message).slice(0, 200)}`);
   }

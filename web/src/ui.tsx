@@ -4,7 +4,7 @@ import { SEV, sevBand, sevColor, sevLabel, alpha } from './format';
 import { HAS_POPOVER, topLayer } from './toplayer';
 import markLight from './assets/opscat-mark.png';
 import markDark from './assets/opscat-mark-dark.png';
-import { AlertTriangleIcon, CheckIcon, CopyIcon, XIcon } from 'lucide-react';
+import { AlertTriangleIcon, CheckIcon, CopyIcon, EyeIcon, XIcon } from 'lucide-react';
 
 // The OpsCat brand mark (transparent line art). Renders both stroke variants;
 // tokens.css shows the one matching body[data-theme].
@@ -60,14 +60,111 @@ export function StatusPill({ text, color }: { text: string; color: string }) {
  *
  * Only the colour stays inline — it is data, not geometry.
  */
-export function Avatar({ i, c, size = 26 }: { i: string; c: string; size?: number }) {
+/**
+ * Initials on a colour, or an uploaded image on top of them.
+ *
+ * `src` is layered OVER the initials rather than replacing them: the coloured
+ * disc stays the background, so a picture that is still loading, 404s, or was
+ * deleted between render and fetch degrades to the default avatar instead of
+ * to a broken-image glyph. Same reasoning as the alert mail's header cell,
+ * where the image can be blocked outright.
+ *
+ * `square` is for an ORGANISATION. A person is a circle and an org is a rounded
+ * square — the distinction is worth keeping because both appear in the same
+ * screens (Users beside the workspace switcher, an on-call schedule beside the
+ * org it belongs to) and shape is what the eye separates them by before it
+ * reads either.
+ */
+export function Avatar({ i, c, size = 26, src, square, alt }:
+{ i: string; c: string; size?: number; src?: string | null; square?: boolean; alt?: string }) {
   return (
-    <span className="avatar" style={{
+    <span className={`avatar${square ? ' avatar-sq' : ''}`} style={{
       ['--av' as string]: `${size}px`,
       background: `linear-gradient(135deg, ${c}, ${alpha(c, 0.6)})`,
-    }} role="img" aria-label={i}>
+    }} role="img" aria-label={alt || i}>
       <svg viewBox="0 0 100 100" aria-hidden="true"><text x="50" y="63.9">{i}</text></svg>
+      {src && <img src={src} alt="" aria-hidden="true" />}
     </span>
+  );
+}
+
+/**
+ * The formats an upload route accepts, sniffed by MAGIC BYTES server-side
+ * (server/src/lib/status-branding.js). This attribute is a convenience for the
+ * file picker and nothing more — an SVG renamed to .png passes it and is
+ * refused by the server, which is the only check that counts.
+ */
+export const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/x-icon';
+
+/**
+ * One uploaded image: preview, replace, remove.
+ *
+ * The file never touches a multipart parser — it is read to a data URI in the
+ * browser and handed to `onUpload` as a string, which every upload route in
+ * this app takes as JSON and strips the `data:...;base64,` prefix from.
+ *
+ * It is a FIELD, not a row: the label and hint come from the `FormRow` around
+ * it, so it lines up with the text fields above and below instead of carrying
+ * its own label column.
+ *
+ * It was written twice before it was shared — the status page's logo/favicon
+ * and the org avatar are the same interaction — so the reading, the
+ * same-file-twice reset and the busy state live here once.
+ */
+export function ImageUpload({ preview, hasAsset, disabled, onUpload, onRemove, label = 'image' }: {
+  preview: React.ReactNode;
+  hasAsset: boolean;
+  disabled?: boolean;
+  onUpload: (dataUri: string) => Promise<void>;
+  onRemove: () => Promise<void>;
+  label?: string;
+}) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+
+  const pick = (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true); setErr('');
+    const rd = new FileReader();
+    rd.onerror = () => { setBusy(false); setErr('could not read that file'); };
+    rd.onload = async () => {
+      try { await onUpload(String(rd.result)); } catch (e) {
+        setErr(e instanceof Error ? e.message : 'upload failed');
+      } finally {
+        setBusy(false);
+        // the same file picked twice must re-fire the change event
+        if (fileRef.current) fileRef.current.value = '';
+      }
+    };
+    rd.readAsDataURL(f);
+  };
+
+  const remove = async () => {
+    setBusy(true); setErr('');
+    try { await onRemove(); } catch (e) {
+      setErr(e instanceof Error ? e.message : 'could not remove');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div className="row row-wrap" style={{ gap: 8, alignItems: 'center' }}>
+        {preview}
+        <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} hidden
+          aria-label={`Upload ${label}`} onChange={(e) => pick(e.target.files?.[0])} />
+        <Button size="sm" type="button" disabled={disabled || busy}
+          onClick={() => fileRef.current?.click()}>{hasAsset ? 'Replace' : 'Upload'}</Button>
+        {hasAsset && (
+          <Button size="sm" type="button" variant="danger" disabled={disabled || busy}
+            onClick={remove}>Remove</Button>
+        )}
+      </div>
+      {/* the failure a reader can actually hit here is "that file is not a PNG"
+          or "larger than 512 KB", and it belongs beside the button that caused
+          it rather than at the top of the card */}
+      {err && <ErrorNote onDismiss={() => setErr('')}>{err}</ErrorNote>}
+    </div>
   );
 }
 
@@ -622,6 +719,73 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * THE right-side detail panel — the shape this app opens an EXISTING record in.
+ *
+ * The split against `Modal` is not cosmetic, it is what the thing IS:
+ *
+ *   Modal   — a task with a commit point. Create, invite, register, confirm.
+ *             It takes over the screen because nothing behind it matters until
+ *             you are done, and it is NOT a place: no URL, no back button.
+ *   Flyout  — a record you are looking at. It slides in beside the list you came
+ *             from, because "next case, next check" is the actual workflow and a
+ *             box in the middle of the screen hides exactly the rows you are
+ *             working through. It IS a place, so it pairs with useOverlayParam.
+ *
+ * It exists because `.slide-over` was a CSS class with no component behind it and
+ * five pages had each built the same header by hand — the same sticky bar, the
+ * same ellipsised title, the same 17px close button, character for character.
+ * Two of them had Escape, three did not. That is the `.chip` story again.
+ *
+ * On a phone `.slide-over` is `max-width: 92vw`, i.e. nearly full screen, which is
+ * the right answer there — but it scrolls DOWN only. Nothing inside may be sized
+ * in fixed pixels wider than the panel (see the `fluid` note on Spark).
+ */
+export function Flyout({ title, badges, sub, actions, onClose, width = 560, children }: {
+  title: React.ReactNode;
+  /** Pills beside the title — status, kind, severity. */
+  badges?: React.ReactNode;
+  /** A second, quieter line under the title (rDNS, a target, a timestamp). */
+  sub?: React.ReactNode;
+  /** Controls that belong to the record as a whole, under the title. */
+  actions?: React.ReactNode;
+  onClose: () => void;
+  width?: number;
+  children: React.ReactNode;
+}) {
+  // Escape closes. Reputation had this and Synthetics did not, which is precisely
+  // the drift a shared component removes: the panel's own note read "every other
+  // slide-over in the app is dismissible that way" and it was not true.
+  const close = React.useRef(onClose);
+  close.current = onClose;
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close.current(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <>
+      <div className="overlay-dim" onClick={onClose} />
+      <div className="slide-over" role="dialog" aria-modal="true" style={{ width }}>
+        <div className="fly-head">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="row" style={{ gap: 8, minWidth: 0 }}>
+              <span className="mono text-md font-bold text-text0 fly-title">{title}</span>
+              {badges}
+            </div>
+            <button className="text-text2" aria-label="Close" onClick={onClose}
+              style={{ display: 'inline-flex' }}><XIcon size={17} /></button>
+          </div>
+          {sub && <div className="mono text-2xs text-text3" style={{ marginTop: 4 }}>{sub}</div>}
+          {actions && <div className="row row-wrap" style={{ gap: 8, marginTop: 10 }}>{actions}</div>}
+        </div>
+        <div className="fly-body">{children}</div>
+      </div>
+    </>
   );
 }
 
@@ -1223,6 +1387,43 @@ export function CopyField({ value, label, width }:
   );
 }
 
+/**
+ * A label/value list — the "everything about this one thing" block inside a
+ * slide-over or a card.
+ *
+ * It exists because the pattern was written by hand every time, and the
+ * hand-written version had a defect no reviewer catches by reading: a `<div>`
+ * carrying `gridTemplateColumns` but no `display: grid`. The property is then
+ * dead CSS, the two spans lay themselves out inline, and the screen reads
+ * "RegionNorth America". That shipped on Platform › Managed Fleet in both the
+ * details block and the history block. `check-table-grids.mjs` fails the build
+ * on it now, and this is what the call sites use instead.
+ *
+ * The rows are `display: contents`, so every label in the list resolves against
+ * ONE grid — the alternative (a grid per row) lets each row pick its own column
+ * width the moment a track is intrinsic, which is the same drift `TableScroll`
+ * exists to prevent one level up.
+ */
+export function DetailList({ labelWidth = 110, children }:
+  { labelWidth?: number | string; children: React.ReactNode }) {
+  const w = typeof labelWidth === 'number' ? `${labelWidth}px` : labelWidth;
+  return (
+    <div className="detail-list" style={{ ['--kv-label' as string]: w }}>{children}</div>
+  );
+}
+
+/** One row of a `DetailList`. `label` takes a node so a timeline can put a
+ *  timestamp where a caption would go. */
+export function DetailRow({ label, mono = true, children }:
+  { label: React.ReactNode; mono?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="detail-row">
+      <span className="text-xs text-text3">{label}</span>
+      <span className={mono ? 'mono text-sm text-text1' : 'text-sm text-text1'}>{children}</span>
+    </div>
+  );
+}
+
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
@@ -1342,6 +1543,83 @@ export function HeatBar({ buckets, big = false }: { buckets: HeatBucket[]; big?:
           style={{ flex: 1, height: big ? 18 : 14, borderRadius: 1.5, minWidth: 2,
             background: CELL_COLOR[b.s], opacity: b.s === 'ok' ? 0.85 : 1 }} />
       ))}
+    </div>
+  );
+}
+
+/**
+ * A percentage as a bar plus its number — CPU, memory, disk, anything 0-100.
+ *
+ * `value === null` is NOT KNOWN and renders an empty track with an em dash. It
+ * must never fall back to 0: on a fleet screen "cpu 0%" is a claim that the box
+ * is idle, and a node we have never heard from has made no such claim. Same
+ * rule the `Count` atom above is built on.
+ *
+ * The colour is derived from the value rather than passed in, so two screens
+ * cannot disagree about what "hot" means. The thresholds are deliberately
+ * generous — a sensor node at 70% CPU is working, not failing — and `warn`
+ * shifts them for a metric where filling up is the failure (disk).
+ */
+export function Meter({ value, label, warn = 75, crit = 90, width = 120 }:
+  { value: number | null; label?: React.ReactNode; warn?: number; crit?: number; width?: number | string }) {
+  const v = value == null ? null : Math.max(0, Math.min(100, value));
+  const color = v == null ? 'var(--line)' : v >= crit ? SEV.critical : v >= warn ? SEV.medium : SEV.green;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <span role="meter" aria-valuenow={v ?? undefined} aria-valuemin={0} aria-valuemax={100}
+        aria-label={typeof label === 'string' ? label : undefined}
+        style={{ display: 'inline-block', width, height: 6, borderRadius: 3,
+          background: 'var(--bg2)', overflow: 'hidden', flex: 'none' }}>
+        {v != null && (
+          <span style={{ display: 'block', width: `${v}%`, height: '100%', background: color }} />
+        )}
+      </span>
+      <span className="mono text-sm" style={{ color: v == null ? 'var(--text3)' : 'var(--text1)',
+        fontVariantNumeric: 'tabular-nums', minWidth: 46, textAlign: 'right' }}>
+        {v == null ? '—' : `${v}%`}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The impersonation bar: a full-width strip above everything, saying whose
+ * account you are in and offering the way out.
+ *
+ * Deliberately NOT a floating button and NOT an item in the profile menu. The
+ * problem it solves is not "the exit is hard to find", it is "you do not know
+ * you are impersonating" — that is ambient state, so it must be ambient. A bar
+ * that pushes the whole app down cannot be missed, and it has room for the
+ * identity, which is the part a button could never carry.
+ *
+ * `canReturn` false means the operator behind the session is gone or no longer
+ * a super-admin. The bar still shows — knowing is the point — but says the way
+ * back is shut instead of offering a button that would 403.
+ */
+export function ImpersonationBar({ email, org, canReturn, onReturn, busy }: {
+  email: string | null; org: string | null; canReturn: boolean;
+  onReturn: () => void; busy?: boolean;
+}) {
+  return (
+    <div role="status" className="row row-wrap" style={{
+      background: SEV.medium, color: '#1a1205', gap: 10,
+      padding: '7px 14px', justifyContent: 'space-between' }}>
+      <span className="text-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <EyeIcon size={15} />
+        <span>
+          <b>Impersonating</b>
+          {email ? <> — acting as <b className="mono">{email}</b></> : null}
+          {org ? <> in <b>{org}</b></> : null}
+        </span>
+      </span>
+      {canReturn
+        ? (
+          <button className="btn btn-sm" disabled={busy} onClick={onReturn}
+            style={{ background: '#1a1205', color: SEV.medium, borderColor: '#1a1205' }}>
+            {busy ? 'returning…' : 'Return to platform'}
+          </button>
+        )
+        : <span className="text-xs">the platform account behind this session is gone — sign out to leave</span>}
     </div>
   );
 }
@@ -1492,7 +1770,10 @@ export function TableSkeleton({ cols, rows = 5, flush = false, dense = false }:
   return (
     <Busy>
       {Array.from({ length: rows }, (_, r) => (
-        <div key={r} className="tbl-row" style={{ ...(cols ? { gridTemplateColumns: cols } : null),
+        <div key={r} className="tbl-row" style={{
+          /* grid-display-exempt: .tbl-row carries display:grid from tokens.css, so this
+             track list is an OVERRIDE on an element that is already a grid */
+          ...(cols ? { gridTemplateColumns: cols } : null),
           padding: `${py} ${flush ? '0' : '16px'}` }}>
           {tracks.map((_t, c) => (
             // percentage width fits any track type (px, fr, minmax) — the grid
@@ -1568,6 +1849,31 @@ export function ListSkeleton({ rows = 4, lines = 2, divided = true }:
 }
 
 // Grid of card placeholders (tile rows that are not KPI cards).
+/* The empty state of a card grid, and the action that fills it.
+ *
+ * A grid whose empty state is a sentence ("No sensor agents yet.") sends the
+ * reader hunting for a button in the page header — the one place they are not
+ * looking, because they are looking at the empty box. A tile the size and shape
+ * of the ones that will appear puts the action where the content goes, and it
+ * keeps working once there IS content: it stays as the last tile, so "add
+ * another" needs no second affordance.
+ *
+ * `icon` is a node rather than a name so this file keeps importing no icon set —
+ * and a plain `+` is text, not an icon (it takes the font's baseline and cannot
+ * be sized with the box), so the call site passes a real one.
+ */
+export function AddTile({ label, onClick, icon, w = 150, h = 104 }: {
+  label: string; onClick: () => void; icon?: React.ReactNode; w?: number; h?: number;
+}) {
+  return (
+    <button type="button" onClick={onClick} className="add-tile"
+      style={{ width: w, minHeight: h }}>
+      {icon}
+      <span className="text-2xs">{label}</span>
+    </button>
+  );
+}
+
 export function CardsSkeleton({ count = 4, w = 150, h = 104 }:
   { count?: number; w?: number; h?: number }) {
   return (

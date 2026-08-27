@@ -22,7 +22,7 @@ function pathParamNames(p) { return [...p.matchAll(/:([A-Za-z0-9_]+)/g)].map((m)
 
 /* Which credential the route accepts. This mirrors the three token families the
  * /v1 surface actually uses (docs/API.md): ock_ api keys, oca_ agent tokens,
- * ocp_ probe keys — plus the browser session for /api. */
+ * ocs_ sensor keys — plus the browser session for /api. */
 const SECURITY_SCHEMES = {
   apiKey: {
     type: 'http', scheme: 'bearer',
@@ -34,7 +34,7 @@ const SECURITY_SCHEMES = {
   },
   probeKey: {
     type: 'http', scheme: 'bearer',
-    description: 'Remote probe key (`ocp_…`) — issued per synthetic probe.',
+    description: 'Sensor Agent key (`ocs_…`, legacy `ocp_…`) — issued per sensor location.',
   },
   mcpToken: {
     type: 'http', scheme: 'bearer',
@@ -84,9 +84,13 @@ function operationFor(route) {
   const responses = {};
   for (const [status, schema] of Object.entries(route.responses)) {
     const code = Number(status);
+    const ok = code >= 200 && code < 300;
+    // `contentType` applies to the SUCCESS response only: an error is a JSON
+    // problem document on every route, including the two that serve a script.
+    const media = ok && route.contentType ? route.contentType : 'application/json';
     responses[status] = {
-      description: code >= 200 && code < 300 ? 'Success' : 'Error',
-      content: { 'application/json': { schema: jsonSchema(schema, 'output') } },
+      description: ok ? 'Success' : 'Error',
+      content: { [media]: { schema: jsonSchema(schema, 'output') } },
     };
   }
 

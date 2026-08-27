@@ -11,6 +11,16 @@ const crypto = require('crypto');
 const API_VERSION = '2016-11-15';
 const HTTP_TIMEOUT_MS = 25000;
 const CANONICAL_UBUNTU_OWNER = '099720109477';
+const SSH_GROUP = 'opscat-sensor-ssh';
+
+// tcp/22 from each range, in the shape the EC2 Query API wants.
+const ingressParams = (cidrs) => Object.assign(
+  { 'IpPermissions.1.IpProtocol': 'tcp', 'IpPermissions.1.FromPort': '22', 'IpPermissions.1.ToPort': '22' },
+  ...cidrs.map((c, i) => ({
+    [`IpPermissions.1.IpRanges.${i + 1}.CidrIp`]: c,
+    [`IpPermissions.1.IpRanges.${i + 1}.Description`]: 'OpsCat break-glass',
+  })),
+);
 
 const hmac = (key, data) => crypto.createHmac('sha256', key).update(data, 'utf8').digest();
 const hexHash = (data) => crypto.createHash('sha256').update(data, 'utf8').digest('hex');
@@ -83,9 +93,9 @@ async function resolveUbuntuAmi(cred, region) {
 }
 
 // -> { providerInstanceId, ip } (ip is usually null right after launch)
-async function createInstance(cred, { region, instanceType, userData, locationId }) {
+async function createInstance(cred, { region, instanceType, userData, locationId, securityGroupId }) {
   const imageId = await resolveUbuntuAmi(cred, region);
-  const xml = await ec2(cred, region, {
+  const xml = await ec2(cred, region, Object.assign({
     Action: 'RunInstances', Version: API_VERSION,
     ImageId: imageId, InstanceType: instanceType, MinCount: '1', MaxCount: '1',
     UserData: Buffer.from(userData, 'utf8').toString('base64'),
@@ -93,7 +103,10 @@ async function createInstance(cred, { region, instanceType, userData, locationId
     'TagSpecification.1.Tag.1.Key': 'opscat-sensor', 'TagSpecification.1.Tag.1.Value': '1',
     'TagSpecification.1.Tag.2.Key': 'opscat-location', 'TagSpecification.1.Tag.2.Value': String(locationId),
     'MetadataOptions.HttpTokens': 'required', // IMDSv2 only
-  });
+    // Without a group the instance lands in the VPC's default security group,
+    // which allows no inbound from outside itself — that IS the no-SSH default,
+    // and it stays that way unless break-glass access is configured.
+  }, securityGroupId ? { 'SecurityGroupId.1': securityGroupId } : {}));
   const id = tag(xml, 'instanceId');
   if (!id) throw new Error('aws: RunInstances returned no instanceId');
   return { providerInstanceId: id, ip: tag(xml, 'ipAddress') };
@@ -126,4 +139,65 @@ async function listInstances(cred, { region }) {
   return out;
 }
 
-module.exports = { key: 'aws', createInstance, destroyInstance, listInstances };
+// Idempotent: one `opscat-sensor-ssh` group per region, holding exactly the
+// ranges the org configured. Returns its id for RunInstances.
+//
+// Called on EVERY provision rather than once, because the group is the only
+// thing enforcing "port 22 from these addresses" — if an operator widens or
+// deletes it by hand, the next node provisioned puts it back, and a narrowed
+// list takes effect without anyone remembering this group exists.
+async function ensureSshAccess(cred, { region, cidrs }) {
+  if (!Array.isArray(cidrs) || !cidrs.length) throw new Error('aws: ensureSshAccess needs at least one CIDR');
+  const found = await ec2(cred, region, {
+    Action: 'DescribeSecurityGroups', Version: API_VERSION,
+    'Filter.1.Name': 'group-name', 'Filter.1.Value.1': SSH_GROUP,
+  });
+  let groupId = tag(found, 'groupId');
+  if (!groupId) {
+    // Sensors launch into the default VPC (RunInstances picks its subnet), so
+    // the group has to live there or the launch fails with a mismatch.
+    const vpcs = await ec2(cred, region, {
+      Action: 'DescribeVpcs', Version: API_VERSION,
+      'Filter.1.Name': 'isDefault', 'Filter.1.Value.1': 'true',
+    });
+    const vpcId = tag(vpcs, 'vpcId');
+    if (!vpcId) throw new Error(`aws: no default VPC in ${region} — create one or disable sensor SSH`);
+    const created = await ec2(cred, region, {
+      Action: 'CreateSecurityGroup', Version: API_VERSION, GroupName: SSH_GROUP,
+      GroupDescription: 'OpsCat sensor break-glass SSH', VpcId: vpcId,
+    });
+    groupId = tag(created, 'groupId');
+    if (!groupId) throw new Error('aws: CreateSecurityGroup returned no groupId');
+  }
+  // Revoke what is there and authorise what is configured, so removing a range
+  // in OpsCat actually closes it. Both calls tolerate "nothing to do".
+  const existing = [];
+  const desc = await ec2(cred, region, {
+    Action: 'DescribeSecurityGroups', Version: API_VERSION, 'GroupId.1': groupId,
+  });
+  const re = /<cidrIp>([^<]+)<\/cidrIp>/g;
+  let m;
+  while ((m = re.exec(desc))) existing.push(m[1]);
+  const stale = existing.filter((c) => !cidrs.includes(c));
+  if (stale.length) {
+    await ec2(cred, region, Object.assign({
+      Action: 'RevokeSecurityGroupIngress', Version: API_VERSION, GroupId: groupId,
+    }, ingressParams(stale))).catch((e) => {
+      if (!/InvalidPermission\.NotFound/.test(e.message)) throw e;
+    });
+  }
+  const missing = cidrs.filter((c) => !existing.includes(c));
+  if (missing.length) {
+    try {
+      await ec2(cred, region, Object.assign({
+        Action: 'AuthorizeSecurityGroupIngress', Version: API_VERSION, GroupId: groupId,
+      }, ingressParams(missing)));
+    } catch (e) {
+      // two provisions racing into the same fresh group is not an error
+      if (!/InvalidPermission\.Duplicate/.test(e.message)) throw e;
+    }
+  }
+  return groupId;
+}
+
+module.exports = { key: 'aws', createInstance, destroyInstance, listInstances, ensureSshAccess };

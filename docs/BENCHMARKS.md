@@ -408,6 +408,67 @@ The first attempt ran with `RESEND_API_KEY` inherited from the shell. The seeded
 created, producing a live outbound HTTPS call per event. Everything in §1 and §3
 was re-measured with the variable unset.
 
+### 4.4 The agent's probe cycle had no re-entrancy guard — FIXED in agent v0.4.0
+
+> **Status: fixed.** `probeCycle()` opens with `if (probeRunning) return;` since
+> v0.4.0, like the three server engines it should always have matched. The
+> measurement below is what motivated the change and is kept for that reason —
+> read it in the past tense.
+
+`engine/synthetics.js`, `engine/vendors.js` and `engine/reconcile.js` all open
+with `if (running) return;`. `probeCycle()` in `agent/opscat-agent.js` did not —
+it was called from a bare `setInterval(run, 30000)`.
+
+Measured rather than reasoned about: 200 checks against a target answering in
+150 ms is a 45 s sweep, i.e. longer than the 30 s poll. The stub target saw
+**two requests in flight from a single agent process** and served 730 requests
+where 600 were expected — a sequential prober cannot do that. The overlapping
+cycle re-runs checks that are due again, reports them twice, and adds load to a
+node that is already behind, which is the wrong direction for a box under
+pressure.
+
+It does not corrupt anything (the server records both results and the dedupe
+still folds the events), but it makes an overloaded sensor spend its remaining
+capacity on duplicate work. Every capacity number in §6 was therefore measured
+with a sweep that fits inside the poll interval, and the 45 s run is reported
+here rather than in the results.
+
+### 4.5 A remote probe's interval was quantised to the 30 s poll — FIXED in agent v0.4.0
+
+> **Status: fixed.** v0.4.0 separates the two clocks that were one: the work
+> list is still refreshed every 30 s (`PROBE_LIST_MS`), but the due-check tick
+> runs every 5 s (`PROBE_TICK_MS`) against the cached list — the same 5 s grid
+> `engine/synthetics.js` uses for the local probe. A 60 s check now fires within
+> 5 s of its deadline instead of slipping to 90 s, so **detection on a remote
+> sensor is back to the advertised ~2 minutes**, not 2-3. The measurement below
+> is what motivated the change; read it in the past tense.
+
+The agent polled every 30 s and ran whatever was due; `due` is
+`now - last >= intervalS * 1000`. A 60 s interval therefore only survives if the
+poll lands *after* the 60 s boundary, and `setInterval` firing two milliseconds
+early is enough to miss it:
+
+```
+# debug agent 0 cycle 0: offsets 1@0 2@5 3@8 4@13 …
+# debug agent 0 cycle 1: offsets 1@90015 2@90019 3@90023 4@90025 …
+```
+
+That was a 60 s check executing every **90 s**, reproducibly, on an idle node with
+eight checks. The same rounding turned a 45 s interval into 60 s and a 20 s
+interval into 30 s.
+
+It mattered beyond tidiness because detection time is two consecutive failures:
+on a remote sensor the advertised "~2 minutes at defaults" was really 2-3
+minutes. The local cloud probe was never affected — `engine/synthetics.js` has
+always ticked every 5 s, which is where the fix's 5 s grid comes from.
+
+**The lesson worth keeping is why one constant did two jobs.** "How often do I
+ask the server what to run" and "how often do I check whether something is due"
+are different questions with different right answers, and they were the same
+`setInterval`. Lowering the single constant to 5 s would have multiplied the
+control-plane request rate by six for no benefit; raising it would have made the
+quantisation worse. Two constants was the fix, not a smaller one.
+
 ---
 
 ## 5. PostgreSQL vs ClickHouse, head to head
@@ -686,6 +747,61 @@ Two honest qualifications, because this number replaces a published claim:
   actual stack is closer to 400 MB. So the honest headline is not "350 → 750";
   it is "**~400 MB → ~750 MB, and the old number was never the whole stack**".
 
+### 5.7.4 The settled figure, and the two numbers above that went stale
+
+§ 5.7.3 was measured **thirty seconds after boot**, and it said so — but a
+number with a caveat next to it still gets copied without the caveat, and this
+one was: the marketing page carried "around 720 MB" and "each one is capped at
+1 GB" straight out of that table. Both stopped being true within a day of being
+published, for two different reasons, neither of which touched the table itself.
+
+**What moved.** #180 raised ClickHouse's ceiling — `max_server_memory_usage`
+768 MiB → 1.15 GiB and the container `mem_limit` 1g → 1.5g — because the
+original figure was sized for an idle experiment rather than for a database
+serving reads. So "both databases carry `mem_limit: 1g`" is simply wrong now,
+and the sentence was on a public web page.
+
+**Re-measured on the production host, settled rather than fresh** — `docker
+stats` again, so RSS per container, with uptimes given because that is the whole
+difference between this table and the one above:
+
+| container | | uptime |
+|---|---|---|
+| `app` | 126.9 MiB | 8 h |
+| `clickhouse` | 521.1 MiB | 23 h |
+| `db` (PostgreSQL) | 181.5 MiB | 45 h |
+| `caddy` | 29.8 MiB | 2 d |
+| `unbound` | 11.3 MiB | 8 h |
+| `livekit` (profile-gated, off by default) | 13.9 MiB | 12 d |
+| **total without livekit** | **~871 MiB** | |
+
+So the fresh-boot 721 MiB settles at **~871 MiB**, and § 5.7.3's own prediction
+("nearer 1 GB") was the right shape and slightly pessimistic: ClickHouse settled
+at 521 MiB, not at its 1.15 GiB ceiling. PostgreSQL went the other way — 245
+MiB at boot, 181 MiB now, and part of that is § 5.7.5 below.
+
+**The bounded worst case is what should be quoted, not the idle figure**, and it
+is no longer one number: PostgreSQL 1 GB, ClickHouse 1.5 GB, everything else
+unbounded but small. On a 3.7 GB host with no swap that is the plan-against
+figure, and it is why `mem_limit` is not optional here (see the comment in
+`docker-compose.yml`).
+
+### 5.7.5 What 14× less disk looks like once it is real
+
+Incidental, and the best confirmation in this document, because nobody set it
+up: the same production host, after the pre-cutover Postgres rows were dropped
+(#189).
+
+| | rows | on disk | per row |
+|---|---|---|---|
+| PostgreSQL `logs` (before the drop) | 347,024 | 145 MB | 438 B |
+| ClickHouse `logs` (now) | ~365,000 | **8.36 MiB**, 15 active parts | **24 B** |
+
+That is **18×**, against the 14× § 5.3 measured on an identical corpus. The
+published claim stays at 14× — § 5.3 is the apples-to-apples measurement and
+these two row sets are not the same rows — but it is worth knowing that the
+conservative number is the one on the website.
+
 ---
 
 ### 5.8 The recommendation, and what was decided
@@ -766,7 +882,166 @@ loading both engines from one file.
 
 ---
 
-## 6. Claim sheet
+## 6. Sensor probe capacity
+
+`scripts/loadtest-probe.mjs` drives the **real, unmodified** `opscat-agent.js
+--probe` against two stubs it hosts itself: a control plane answering
+`GET /v1/synthetics/checks` and `POST /v1/synthetics/report`, and a target
+server that responds after a configurable delay. No OpsCat server and no
+database are involved, so the number describes the agent rather than our API.
+
+Two details decide whether the measurement means anything:
+
+- **Every check gets its own origin** (`127.x.y.z`). Pointing 1000 checks at one
+  host measures a warm keep-alive socket, which is the opposite of a real probe
+  where every check is a different site and pays TCP — and TLS — setup again.
+  Same run with `--same-origin` is available for comparison.
+- **The agents are pinned to two cores** (`--pin 0,1`) with the driver and stubs
+  on the other two, the same convention §0 uses for the ingest numbers. A
+  t3.small has 2 vCPU, so this is an upper bound for one, not a simulation of
+  one — see the burst caveat at the end.
+
+All runs: Node 22.22.2, agent v0.3.0, TLS 1.3 to the stub, 8 KB response body.
+
+| Scenario (per agent process) | wall per check | throughput | CPU per check | RSS |
+|---|---|---|---|---|
+| HTTP, no network delay, 200 checks | 2.5 ms | 406 checks/s | 1.70 ms | 91 MB |
+| **HTTPS**, no network delay, 200 checks | 5.0 ms | 202 checks/s | 3.48 ms | 102 MB |
+| HTTPS, no network delay, 1000 checks | 4.8 ms | 207 checks/s | 3.46 ms | 195 MB |
+| HTTPS, 150 ms target delay, 100 checks | 155.7 ms | 6.4 checks/s | 4.65 ms | 92 MB |
+| HTTPS, 150 ms delay, 100 checks x **4 agents** | 156.1 ms | 25.6 checks/s | 4.94 ms | 89 MB each |
+| HTTPS, no delay, 200 checks x **8 agents** | 16.9 ms | **473 checks/s** | 4.17 ms | 105 MB each |
+
+### 6.0 Re-measured after the agent grew a pool
+
+Everything below was measured on the **sequential** agent (v0.3.0), and it is
+kept because it is what motivated the change. v0.4.0 runs its due list through a
+bounded pool (`--concurrency`, default 8), and the same rig says:
+
+| Concurrency | wall per check | throughput | CPU per check | in flight at target |
+|---|---|---|---|---|
+| 1 (v0.3.0's behaviour) | 243.7 ms | 4.1 checks/s | 9.75 ms | 1 |
+| **8 (the new default)** | 19.6 ms | **50.9 checks/s** | 3.55 ms | 8 |
+| 16 | 10.3 ms | 97.4 checks/s | 3.65 ms | 16 |
+
+200 checks, HTTPS, one origin each, target answering after 150 ms, agents pinned
+to two cores. Scaling is linear in the pool size because the wait is the network,
+not us — at 16 the node is at ~18% of the CPU ceiling below.
+
+**One node at a 60 s interval therefore carries ~3,000 checks at the default
+pool, not ~385**, and ~1,500 at the half-interval operating point this section
+recommends. The CPU ceiling did not move: it was never the constraint.
+
+> **Superseded by §6.0.1.** The table above was measured on a developer
+> workstation, and the `--concurrency` flag it names **did not work** — see
+> below. Use §6.0.1 for anything customer-facing.
+
+### 6.0.1 Measured on a real sensor node, and a bug in this benchmark
+
+The first opportunity to run the rig **on a provisioned node** (break-glass SSH,
+§11 of `docs/SENSOR-AGENTS.md`) produced three identical results for
+`--concurrency 1`, `8` and `16` — 31.2, 31.2 and 30.8 checks/s, each reporting
+`max in flight at target 8`.
+
+That line was the tell. **`--concurrency` was neither parsed nor forwarded**:
+`loadtest-probe.mjs` never declared the constant, and it spawned the agent as
+`[AGENT, '--probe']` with nothing carrying the setting. Every run measured the
+agent's default of 8, and the summary printed "8" each time — which reads as
+confirmation instead of the contradiction it was. The fix passes
+`OPSCAT_PROBE_CONCURRENCY` through the child's environment (not argv: the
+`taskset` path rewrites argv).
+
+Re-run on **AWS t3.small, us-east-1** (2 vCPU burstable, 2 GiB — the `standard`
+node class from `providers/index.js`), agent v0.4.0,
+200-400 checks, HTTPS, one origin each, target answering after 150 ms:
+
+| Concurrency | throughput | in flight | check latency p50 | cores busy | checks @ 60 s |
+|---|---|---|---|---|---|
+| 1 | 5.6/s | 1 | 160 ms | 0.03 | ~333 |
+| 8 (previous default) | 31.3/s | 8 | 160 ms | 0.16 | ~1,877 |
+| **16 (default since v0.4.1)** | **44.1/s** | 16 | 164 ms | 0.23 | **~2,644** |
+| 32 | 85.5/s | 32 | 182 ms | 0.40 | ~5,128 |
+| 64 | 99.2/s | 64 | 261 ms | 0.44 | ~5,953 |
+
+**A real node is slower than the workstation** — 31.3 checks/s at the default
+against the 50.9 measured on the dev box — so the honest capacity figure is
+**~1,900 checks per node at a 60 s interval**, ~950 at the half-interval
+operating point. Not ~3,000. Anything quoted to a customer uses these.
+
+**The pool trades throughput against the number this product exists to report.**
+The target answers in a fixed 150 ms, so every millisecond of p50 above ~160 ms
+is the agent's own queue being reported as the site's latency: +2% at 16, +14%
+at 32, **+63% at 64**. A synthetic monitor that inflates the latency it measures
+is broken in a way no error message will ever surface. That, not CPU, is what
+caps the pool — the box never went past **0.44 of its 2 cores** at any setting.
+
+On this evidence 16 is nearly free (+41% capacity for +2% latency) and 8 was
+conservative; beyond 16 the measurement quality is what is being spent. **The
+agent default moved to 16 in v0.4.1** on exactly this table.
+
+**And the CPU column has a second reading, because the node BURSTS.** A t3.small
+sustains 20% per vCPU — **0.4 vCPU** — and earns credits below that, spends them
+above. Against that line:
+
+| Pool | cores busy | vs the 0.4 baseline |
+|---|---|---|
+| 8 | 0.16 | 40% of it — indefinitely sustainable |
+| 16 | 0.23 | 58% — sustainable |
+| 32 | 0.40 | exactly at it — no margin |
+| 64 | 0.44 | **above it — burns credits, then throttles** |
+
+So the last two rows are not capacities a node can hold. They are what it does
+while its credit balance drains; once that is empty the instance is capped at
+baseline and the sweep stops fitting in the interval. The usable ceiling on this
+class is **~2,600 checks at pool 16**, and the 5,000-6,000 figures are peak, not
+steady state.
+
+**Both numbers are also a LINEAR extrapolation** from 200-400 measured checks —
+`60 s ÷ measured ms-per-check` — and they assume per-check cost stays flat as the
+work list grows. §6 measured it flat from 100 to 1000 checks (155.7 → 156.1 ms),
+which is the evidence for extrapolating at all, but RSS grows ~100 MB per 1000
+checks, so a 2 GiB node has its own limit somewhere past this. Nobody has run a
+sensor at 2,000 real checks yet; treat these as an upper bound with a known
+method, not as an observation.
+
+**The agent WAS sequential, and that was the whole story.** The target's in-flight
+counter never exceeded 1 for a single agent process, and per-check cost was flat
+from 100 to 1000 checks (155.7 ms vs 156.1 ms with four agents; 5.0 ms vs 4.8 ms
+without network delay). Four agent processes multiplied throughput by exactly
+four at unchanged per-check cost, which says the box was not the constraint at
+all — the loop was.
+
+**Where the box actually ends:** eight concurrent agents on two pinned cores
+reached **473 checks/s at 1.98 cores busy** — saturation, and it agrees with the
+per-check CPU cost (2000 core-ms/s ÷ 4.17 ms ≈ 479/s). Over a 60 s interval that
+CPU ceiling is ~28,000 checks. A single sequential agent reaches ~385 in the same
+minute. **The gap between the loop and the hardware is a factor of ~70.**
+
+### 6.1 What one node carries
+
+A check against a real HTTPS site costs roughly three round trips (TCP, TLS 1.3,
+request) plus the ~5 ms the node spends itself. For a site 50 ms away that is
+~155 ms per check, sequentially:
+
+| Interval | Sequential capacity | Recommended (50% headroom) |
+|---|---|---|
+| 60 s | ~385 checks | **~190** |
+| 30 s | ~190 checks | ~95 |
+| 15 s | ~95 checks | ~48 |
+
+Halve the numbers for targets 150 ms away, double them for 25 ms ones — the
+network round trip is the term that moves, and it is the customer's, not ours.
+
+At the recommended point the node is idle: 190 checks x 4.65 ms of CPU is 0.88
+core-seconds per minute, **1.5% of one core**. That matters specifically on AWS,
+because a t3.small is burstable — baseline is 20% of 2 vCPU and sustained load
+above it either throttles or, in `unlimited` mode (the T3 default), bills extra.
+A realistic probe fleet sits an order of magnitude below the baseline. A node
+pushed past ~2000 checks would not.
+
+---
+
+## 7. Claim sheet
 
 Each row is a sentence that is true **with the condition next to it attached**.
 Detaching the condition makes it false.
@@ -792,11 +1067,26 @@ Detaching the condition makes it false.
 | Two of those three are **a missing rollup, not an engine limit** | `event_buckets` folds events per minute on the ingest path; nothing equivalent exists for `logs`, so the chart scans every row on every page load | §5.7.2 |
 | ClickHouse costs **609 MB resident**, ~3.8× the whole Postgres cluster | at rest, PSS, after the 6 M-row run | §5.6 |
 | Postgres log search **stops being monotone** at 6 M rows: 24 h costs 916 ms, 7 d costs 51 ms | plan flip between seq scan and backward index scan; not reproduced at 596 k | §5.5 |
+| One sensor node sustains **~2,600 HTTPS checks at a 60 s interval** | agent v0.4.1 at the default pool of 16, measured ON a provisioned AWS t3.small; the monitored site is ~150 ms away; the sweep may fill the interval. Replaces an earlier ~3,000 taken on a workstation with a broken `--concurrency` flag | §6.0.1 |
+| **~1,300 checks** per node at 60 s with headroom | same, keeping the sweep at half the interval so a slow target cannot push the cycle past its own deadline | §6.0.1 |
+| Raising the pool costs **latency fidelity, not CPU** | p50 rises 160 → 261 ms from pool 8 → 64 against a target pinned at 150 ms; the box stays under 0.44 of 2 cores throughout, so the queue is being reported as the site's latency | §6.0.1 |
+| The **sequential** agent (v0.3.0) sustained ~385 / ~190 | the numbers this change was made against — same rig, pool of 1 | §6, §6.1 |
+| A probe node saturates two cores at **~473 HTTPS checks/s** | eight concurrent agent processes, zero network wait, TLS 1.3 to a loopback target, cores pinned — a CPU ceiling, ~70x above what the sequential agent reaches | §6 |
+| A check costs the node **3.5-5 ms of CPU and ~0 idle RAM** | HTTPS, 8 KB body; RSS is ~90-105 MB per agent process plus ~100 MB per 1000 checks in the work list | §6 |
 
 ---
 
 ## What these numbers do NOT say
 
+- **The probe numbers do not include the network.** The stub target delays its
+  *response*; the TCP and TLS handshakes complete at loopback speed. Real per-check
+  wall time is roughly `3 x RTT + 5 ms`, which is why §5 reports the node's own
+  cost separately instead of quoting one figure that silently contains a
+  particular customer's latency.
+- **They were not measured on a t3.small.** Two pinned sandbox cores are faster
+  than a burstable t3 baseline. Treat §5 as a ceiling, and note that the
+  recommended operating point sits at 1.5% of one core, far under the burst
+  baseline where the difference would start to matter.
 - **They do not describe production.** They were produced on a 4 vCPU / 16 GB
   sandbox. The 2-core column exists to narrow that gap, and it still has 16 GB of
   page cache behind it, no Docker layer, and no Caddy, unbound or livekit

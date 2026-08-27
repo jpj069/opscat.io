@@ -159,7 +159,14 @@ function harness() {
     process.exit(1);
   };
 
-  return { chk, until, untilAsync, report, onExit, die };
+  /* How many checks have been recorded so far. It exists for ONE caller and a
+   * specific staleness: `e2e-logstore` prints a notice saying how much of itself
+   * did not run without ClickHouse, and that notice carried its totals as typed
+   * numbers — which went wrong the first time anyone added a parity assertion,
+   * silently, in the one message whose entire job is to be believed about
+   * counts. */
+  const count = () => R.length;
+  return { chk, until, untilAsync, report, onExit, die, count };
 }
 
 /* Wait for the app to answer /api/health.
