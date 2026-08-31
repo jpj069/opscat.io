@@ -821,6 +821,157 @@ async function main() {
   chk('an explicit list is still taken verbatim', JSON.stringify(await clOf(pinChk))
     === JSON.stringify([Number(locId)]), `rows: ${JSON.stringify(await clOf(pinChk))}`);
 
+  // ── 14. the agent NAME namespace ──────────────────────────────────────────
+  // `agents.name` was UNIQUE across the whole table, i.e. across every tenant,
+  // and the duplicate pre-check in routes/admin.js had no `org_id` either. The
+  // symptom was not a subtle one: onboarding's Server Agent tab registers an
+  // agent called `my-first-server`, so the FIRST organisation on an instance to
+  // open that tab took the name away from every other one — every later org got
+  // a 409 about a row it is not allowed to see, and the tab sat on
+  // "registering agent…" forever. Fixed by migration 032 (UNIQUE (org_id, name))
+  // plus the scoped lookup; these are the checks that were red before it.
+  const BETA = await mkOrg('Beta-sensors', 'enterprise');
+  const betaLead = await login(await mkUser('lead@beta.sensors', 'lead', BETA));
+  const agentsNamed = async (orgId) => (await q.prepare(
+    'SELECT COUNT(*) c FROM agents WHERE org_id = ? AND name = ?').get(orgId, 'my-first-server')).c;
+
+  const firstAgent = await call(lead, 'POST', '/api/admin/agents', { name: 'my-first-server' });
+  chk('an org registers the name onboarding uses', firstAgent.status === 200, JSON.stringify(firstAgent.j));
+  chk('…and is handed a token it can install with',
+    typeof firstAgent.j.token === 'string' && firstAgent.j.token.startsWith('oca_'));
+
+  const otherOrg = await call(betaLead, 'POST', '/api/admin/agents', { name: 'my-first-server' });
+  chk('ANOTHER org may use the same name — a label is not a namespace',
+    otherOrg.status === 200, JSON.stringify(otherOrg.j));
+  chk('…and both rows exist, one per org',
+    (await agentsNamed(ACME)) === 1 && (await agentsNamed(BETA)) === 1);
+  chk('…with different tokens', otherOrg.j.token !== firstAgent.j.token);
+
+  const dupe = await call(lead, 'POST', '/api/admin/agents', { name: 'my-first-server' });
+  chk('the SAME org is still refused a second time', dupe.status === 409, JSON.stringify(dupe.j));
+  // A refusal is only a refusal if nothing happened: a 409 written onto a
+  // response after the INSERT already landed reads identically from here.
+  chk('…and the refusal wrote no second row', (await agentsNamed(ACME)) === 1);
+
+  // ── 15. a check must have a target the probe can resolve ──────────────────
+  // `isStr(target, 300)` was the whole gate, so the onboarding form's own
+  // placeholder — a bare `https://` — created a live check. It is not an
+  // inert row: it runs every interval, fails with `invalid url`, and the
+  // uptime column then reports the endpoint as DOWN rather than the address as
+  // nonsense. Refused at the write instead, where the person who typed it is.
+  const checksTargeted = async (t) => (await q.prepare(
+    'SELECT COUNT(*) c FROM synthetic_checks WHERE org_id = ? AND target = ?').get(ACME, t)).c;
+
+  const bare = await call(lead, 'POST', '/api/synthetics/checks', { type: 'http', target: 'https://' });
+  chk('a scheme with no host is refused', bare.status === 400, JSON.stringify(bare.j));
+  chk('…and says what to type instead', /URL/i.test(String(bare.j && bare.j.error)), JSON.stringify(bare.j));
+  chk('…and wrote no check', (await checksTargeted('https://')) === 0);
+  chk('an empty target is refused',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'http', target: '   ' })).status === 400);
+  chk('a target with a space is refused',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'http', target: 'https://ac me.test' })).status === 400);
+  chk('a tcp port outside 1-65535 is refused',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'tcp', target: 'db.acme.test:99999' })).status === 400);
+
+  const good = await call(lead, 'POST', '/api/synthetics/checks',
+    { type: 'http', target: 'https://acme.test/health' });
+  chk('a real URL still goes through', good.status === 200, JSON.stringify(good.j));
+  chk('a single-label host is NOT rejected — `core-switch-01` is a target',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'icmp', target: 'core-switch-01' })).status === 200);
+  chk('a dns check may name its resolver',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'dns', target: 'acme.test @ 1.1.1.1' })).status === 200);
+  chk('a tcp host:port still goes through',
+    (await call(lead, 'POST', '/api/synthetics/checks', { type: 'tcp', target: 'db.acme.test:5432' })).status === 200);
+
+  // The interval the response reports is the one that was WRITTEN. A plan floor
+  // silently lifting 30s to 60s while the caller prints the number it asked for
+  // is the same shape as a status nobody measured — and onboarding renders this
+  // value straight into its check list.
+  const stored = async (id) => (await q.prepare(
+    'SELECT interval_s FROM synthetic_checks WHERE id = ?').get(id)).interval_s;
+  chk('the create response reports the interval it stored', good.j.intervalS === await stored(good.j.id));
+  const floored = await call(lead, 'POST', '/api/synthetics/checks',
+    { type: 'http', target: 'https://acme.test/floor', intervalS: 3 });
+  chk('an interval under the plan floor is raised', await stored(floored.j.id) > 3);
+  chk('…and the response says the raised value, not the one asked for',
+    floored.j.intervalS === await stored(floored.j.id), JSON.stringify(floored.j));
+
+  // The edit path is the same door. Refusing only on create leaves the invalid
+  // state one PATCH away, and PATCH is how a typo gets "fixed".
+  const patchBad = await call(lead, 'PATCH', `/api/synthetics/checks/${good.j.id}`, { target: 'https://' });
+  chk('an edit to a target with no host is refused too', patchBad.status === 400, JSON.stringify(patchBad.j));
+  chk('…and the check kept the target it had',
+    (await q.prepare('SELECT target FROM synthetic_checks WHERE id = ?').get(good.j.id)).target
+      === 'https://acme.test/health');
+  // ── 16. the canonical target, and the agent actually getting it ───────────
+  //
+  // §15 refuses a target that can never workList. This is the other half: a target
+  // that DOES workList has to reach the Sensor Agent in a form it can fetch.
+  //
+  // A person types `link11.com`. That is a fine thing to monitor and it is not
+  // a URL, so something has to add the scheme — and TWO things did, differently.
+  // engine/synthetics.js prepended `https://`; agent/opscat-agent.js called
+  // fetch(target) straight, where undici answers `TypeError: Failed to parse URL
+  // from link11.com`. One check, green from Nuremberg, red from N. Virginia and
+  // Los Angeles, with a message about OUR parser shown where the customer reads
+  // "is my site up?".
+  //
+  // The check that matters is the second one. Asserting the stored value is
+  // normalised tests the writer; asserting that the value THE AGENT IS HANDED
+  // parses is the property that was actually violated, stated the way the agent
+  // experiences it — and it stays true if the workList list ever stops serving the
+  // column verbatim.
+  const ownLocal = Number(await q.prepare(`INSERT INTO synthetic_locations
+      (org_id, city, cc, kind, active, created_at)
+    VALUES (?, 'Localville', 'DE', 'local', 1, ?)`).insert(ACME, now()));
+
+  const schemeless = (await call(lead, 'POST', '/api/synthetics/checks',
+    { type: 'http', target: 'link11.com', locationIds: [locId] })).j.id;
+  chk('a scheme-less target is stored with one', (await q.prepare(
+    'SELECT target FROM synthetic_checks WHERE id = ?').get(schemeless)).target === 'https://link11.com');
+
+  const workList = await (await fetch(`${BASE}/v1/synthetics/checks`,
+    { headers: { Authorization: `Bearer ${probeKey}` } })).json();
+  const servedChk = workList.find((c) => c.id === schemeless);
+  let agentCanFetch = false;
+  try { agentCanFetch = !!(servedChk && new URL(servedChk.target)); } catch { agentCanFetch = false; }
+  chk('…and every target the Sensor Agent is handed is one it can fetch',
+    agentCanFetch, `servedChk: ${servedChk && JSON.stringify(servedChk.target)}`);
+
+  await call(lead, 'PATCH', `/api/synthetics/checks/${schemeless}`, { target: 'lynk.run' });
+  chk('an edit is canonicalised the same way — the edit path is not a way around it',
+    (await q.prepare('SELECT target FROM synthetic_checks WHERE id = ?').get(schemeless)).target
+      === 'https://lynk.run');
+
+  // ── runNow: a new check carries a verdict, not an empty bar ────────────────
+  const synth = require('./src/engine/synthetics');
+  const realHttp = synth.RUNNERS.http;
+  synth.RUNNERS.http = async () => ({ ok: true, latency: 7, meta: { status: 200 } });
+  try {
+    const resultsOf = async (id) => (await q.prepare(
+      'SELECT COUNT(*) c FROM synthetic_results WHERE check_id = ?').get(id)).c;
+
+    const eager = (await call(lead, 'POST', '/api/synthetics/checks',
+      { type: 'http', target: 'https://eager.example', locationIds: [ownLocal], runNow: true })).j;
+    chk('runNow reports that it ran', eager.ran === true);
+    chk('…and the result is already there when the create returns — no tick waited on',
+      (await resultsOf(eager.id)) === 1, `${await resultsOf(eager.id)} rows`);
+
+    const lazy = (await call(lead, 'POST', '/api/synthetics/checks',
+      { type: 'http', target: 'https://lazy.example', locationIds: [ownLocal] })).j;
+    chk('…while leaving it out runs nothing', lazy.ran === false);
+    chk('…and writes no result', (await resultsOf(lazy.id)) === 0, `${await resultsOf(lazy.id)} rows`);
+
+    // The honest null: nothing local to run means nothing is invented.
+    const remoteOnly = (await call(lead, 'POST', '/api/synthetics/checks',
+      { type: 'http', target: 'https://remote.example', locationIds: [locId], runNow: true })).j;
+    chk('a check assigned to remote agents only reports that nothing ran locally',
+      remoteOnly.ran === false);
+    chk('…rather than inventing a result from a probe it does not run on',
+      (await resultsOf(remoteOnly.id)) === 0);
+  } finally { synth.RUNNERS.http = realHttp; }
+
+
   report();
 }
 

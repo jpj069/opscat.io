@@ -20,8 +20,11 @@ const { z } = require('zod');
 const { McpEventSchema, toMcpEvent } = require('../schemas/domain');
 const q = require('../db/shim');
 const logs = require('../db/log-store');   // log LINES may not be in `q` — see db/log-store.js
-const { now, isStr, clampInt } = require('../util');
+const { now, isStr, clampInt, sha256, encrypt } = require('../util');
 const sec = require('../security');
+const config = require('../config');
+const tokens = require('../lib/tokens');   // credential namespace + mint(); see lib/tokens.js
+const plans = require('../plans');         // per-plan resource caps, mirrored from the REST create paths
 const incidents = require('../lib/incidents');
 const cases = require('../lib/cases');
 const chain = require('../engine/alert-chain');
@@ -98,6 +101,35 @@ const READ = 'read';
 const WRITE = 'write';
 
 const TOOLS = [
+  {
+    // The only tool that is NOT about one organization — it answers which ones
+    // there are, so it cannot itself require the argument it exists to supply.
+    // `orgless` is read in mcp/server.js: no `organization` parameter, no
+    // resolution, no per-org role check.
+    name: 'opscat_list_organizations',
+    title: 'List organizations',
+    description: 'The organizations this connection covers, with your role in each. '
+      + 'Pass one of these names as `organization` to every other tool. '
+      + 'A connection covering exactly one organization needs no such argument.',
+    scope: READ, role: 'analyst', orgless: true,
+    inputSchema: {},
+    outputSchema: {
+      organizations: z.array(z.object({
+        name: z.string(), slug: z.string(), role: z.string(), plan: z.string(),
+      })),
+      count: z.number(),
+      // What a model needs in order to know whether it may omit the argument.
+      argumentRequired: z.boolean(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (a, p) => {
+      const orgs = (p.orgs && p.orgs.length ? p.orgs : [{
+        name: p.org.name, slug: p.org.slug, role: p.role, plan: p.org.plan,
+      }]).map((o) => ({ name: o.name, slug: o.slug, role: o.role, plan: o.plan }));
+      return ok({ organizations: orgs, count: orgs.length, argumentRequired: orgs.length > 1 });
+    },
+  },
+
   {
     name: 'opscat_list_events',
     title: 'List events',
@@ -352,8 +384,15 @@ const TOOLS = [
     inputSchema: { limit: z.number().min(1).max(100).optional() },
     outputSchema: {
       incidents: z.array(z.object({
-        id: z.number(), label: z.string(), title: z.string(), severity: z.string().nullable(),
-        status: z.string(), published: z.number(), startedAt: z.number(), resolvedAt: z.number().nullable(),
+        // `severity` said `string` and `incidents.severity` is a BIGINT, so this
+        // tool answered an output-VALIDATION error for any org that had an
+        // incident — i.e. it worked only while there was nothing to report, and
+        // the empty array validated happily. Found by listing incidents in an
+        // org that had one, which no check had done before.
+        id: z.number(), label: z.string(), title: z.string(), severity: z.number(),
+        // boolean like its two siblings (create/update). Nothing depends on the
+        // old shape: the non-empty path has never returned successfully.
+        status: z.string(), published: z.boolean(), startedAt: z.number(), resolvedAt: z.number().nullable(),
       })),
       count: z.number(),
     },
@@ -363,7 +402,7 @@ const TOOLS = [
         .all(p.orgId, Math.min(a.limit || 25, 100));
       const incidents = rows.map((i) => ({
         id: i.id, label: `INC-${1000 + i.id}`, title: i.title, severity: i.severity,
-        status: i.status, published: i.published, startedAt: i.started_at, resolvedAt: i.resolved_at,
+        status: i.status, published: !!i.published, startedAt: i.started_at, resolvedAt: i.resolved_at,
       }));
       return ok({ incidents, count: incidents.length });
     },
@@ -392,6 +431,80 @@ const TOOLS = [
         FROM heartbeats WHERE org_id = ? ORDER BY name`).all(p.orgId))
         .map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, intervalSeconds: r.interval_s, lastPingAt: r.last_ping_at })),
     }),
+  },
+
+  {
+    name: 'opscat_get_agent_metrics',
+    title: 'Get host agent metrics',
+    description: 'Recent CPU / load / memory / disk for one host agent — the "how is this box doing?" read. '
+      + 'Identify the agent by numeric id (from opscat_list_infrastructure) or by name. Returns the latest '
+      + 'sample plus a summary over the window; a healthy box that has simply never reported has 0 samples.',
+    scope: READ, role: 'analyst',
+    inputSchema: {
+      agentId: z.number().optional().describe('Agent id from opscat_list_infrastructure.'),
+      name: z.string().optional().describe('Agent name — alternative to agentId.'),
+      hours: z.number().min(1).max(168).optional().describe('Look-back window in hours. Default 24.'),
+    },
+    outputSchema: {
+      agent: z.object({
+        id: z.number(), name: z.string(), hostname: z.string().nullable(),
+        platform: z.string().nullable(), version: z.string().nullable(), lastSeenAt: z.number().nullable(),
+      }).nullable(),
+      windowHours: z.number(), samples: z.number(),
+      latest: z.object({
+        ts: z.number(), cpuPct: z.number().nullable(), load1: z.number().nullable(),
+        memUsedPct: z.number().nullable(), diskUsedPct: z.number().nullable(),
+      }).nullable(),
+      summary: z.object({ cpuAvgPct: z.number(), cpuMaxPct: z.number(), load1Max: z.number() }).nullable(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (a, p) => {
+      // The agent is resolved WITHIN the org — agent_metrics itself is org-less
+      // (it keys on agent_id), so the org boundary lives entirely in this lookup,
+      // exactly as GET /api/admin/agents/:id/metrics guards it before returning.
+      const agent = a.agentId
+        ? await q.prepare(`SELECT id, name, hostname, platform, version, last_seen_at
+            FROM agents WHERE id = ? AND org_id = ?`).get(a.agentId, p.orgId)
+        : (isStr(a.name, 100)
+          ? await q.prepare(`SELECT id, name, hostname, platform, version, last_seen_at
+              FROM agents WHERE name = ? AND org_id = ?`).get(a.name, p.orgId)
+          : null);
+      const hours = clampInt(a.hours, 1, 168, 24);
+      if (!agent) {
+        // A read tool always answers: with neither agentId nor name supplied
+        // there is nothing to resolve, so return an empty but VALID payload
+        // (agent null). A bad id/name that WAS supplied is a real mistake and
+        // still errors.
+        if (a.agentId != null || isStr(a.name, 100)) {
+          return fail('No agent with that id or name in this organization.');
+        }
+        return ok({ agent: null, windowHours: hours, samples: 0, latest: null, summary: null });
+      }
+      const rows = await q.prepare(`SELECT ts, cpu_pct, load1, mem_used, mem_total, disk_used, disk_total
+        FROM agent_metrics WHERE agent_id = ? AND ts >= ? ORDER BY ts`).all(agent.id, now() - hours * 3600000);
+      const info = {
+        id: agent.id, name: agent.name, hostname: agent.hostname,
+        platform: agent.platform, version: agent.version, lastSeenAt: agent.last_seen_at,
+      };
+      if (!rows.length) return ok({ agent: info, windowHours: hours, samples: 0, latest: null, summary: null });
+      const pct = (u, t) => (t ? Math.round((u / t) * 1000) / 10 : null);
+      const round1 = (n) => Math.round(n * 10) / 10;
+      let cpuSum = 0; let cpuMax = 0; let loadMax = 0;
+      for (const r of rows) {
+        cpuSum += r.cpu_pct || 0;
+        if ((r.cpu_pct || 0) > cpuMax) cpuMax = r.cpu_pct;
+        if ((r.load1 || 0) > loadMax) loadMax = r.load1;
+      }
+      const l = rows[rows.length - 1];
+      return ok({
+        agent: info, windowHours: hours, samples: rows.length,
+        latest: {
+          ts: l.ts, cpuPct: l.cpu_pct, load1: l.load1,
+          memUsedPct: pct(l.mem_used, l.mem_total), diskUsedPct: pct(l.disk_used, l.disk_total),
+        },
+        summary: { cpuAvgPct: round1(cpuSum / rows.length), cpuMaxPct: round1(cpuMax), load1Max: round1(loadMax) },
+      });
+    },
   },
 
   {
@@ -723,6 +836,184 @@ const TOOLS = [
       if (!v) return fail(`No vendor ${a.id} in this organization.`);
       auditTool(p, 'vendor_poll', `vendor ${v.id} ${v.name}`);
       return ok({ id: v.id, name: v.name, status: v.status ?? null });
+    },
+  },
+
+  // ── assets & provisioning write tools ───────────────────────────────────────
+  // The "setup" half of the surface: register the things OpsCat then watches.
+  // Each mirrors its REST create path (roles, plan caps, credential mint) so an
+  // action taken through the MCP is indistinguishable from the same action in the
+  // UI — including that a minted secret is RETURNED ONCE and only its hash stored.
+
+  {
+    name: 'opscat_add_agent',
+    title: 'Add a host agent',
+    description: 'Register a host agent and get its enrollment token PLUS a ready-to-run install command. '
+      + 'Run the command on the target server (as root; needs Node >= 18) to start shipping heartbeat, '
+      + 'CPU/RAM/disk metrics and — with --logs — journald logs. The token is shown ONCE and only its hash '
+      + 'is stored. One record is ONE host: every report updates THIS record\'s hostname and metrics, so the '
+      + 'same token on a second host overwrites the first. To enroll a fleet, call this once per host — which '
+      + 'is exactly what a provisioning flow does, naming each agent after the server it bakes the token into.',
+    scope: WRITE, role: 'lead',
+    inputSchema: {
+      name: z.string().max(100).describe('Display name for the agent record — use the target host\'s name; one record per host.'),
+      group: z.string().max(100).optional().describe('Workspace/group label. Default "default".'),
+      logs: z.boolean().optional().describe('Include --logs (ship journald logs) in the install command. Default true.'),
+    },
+    outputSchema: {
+      id: z.number(), name: z.string(), token: z.string(), installCommand: z.string(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    handler: async (a, p) => {
+      if (!isStr(a.name, 100)) return fail('name required.');
+      // Agent name is globally UNIQUE (schema.sql: agents.name UNIQUE), so mirror
+      // the REST check that spans all orgs — an org-scoped check would pass and
+      // then the insert would trip the constraint with an opaque error.
+      if (await q.prepare('SELECT id FROM agents WHERE name = ?').get(a.name)) {
+        return fail(`An agent named "${a.name}" already exists.`);
+      }
+      const lim = await plans.checkLimit(p.orgId, p.org.plan, 'agents');
+      if (!lim.ok) return fail(`Plan limit reached (${lim.used}/${lim.limit} agents) — upgrade the plan to add more.`);
+      const token = tokens.mint('agentToken');
+      const id = await q.prepare(`INSERT INTO agents (org_id, name, grp, token_hash, auto_update, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .insert(p.orgId, a.name, isStr(a.group, 100) ? a.group : 'default', sha256(token), 1, now());
+      auditTool(p, 'agent_create', a.name);
+      const base = config.baseUrl;
+      const flags = a.logs === false ? '' : '--logs';
+      // The canonical one-liner from the agent README: the instance serves
+      // install.sh under /agent/, which downloads the agent when piped.
+      const installCommand = `curl -fsSL ${base}/agent/install.sh | sudo `
+        + `OPSCAT_URL=${base} OPSCAT_AGENT_TOKEN=${token} OPSCAT_AGENT_FLAGS="${flags}" sh`;
+      return ok({ id: Number(id), name: a.name, token, installCommand });
+    },
+  },
+
+  {
+    name: 'opscat_add_heartbeat',
+    title: 'Add a heartbeat monitor',
+    description: 'Create a dead-man\'s-switch: a job (cron, backup, pipeline) pings the returned URL on '
+      + 'success, and SILENCE past the interval + grace is the alert. The ping URL is returned ONCE — only '
+      + 'its token hash is stored. Ideal for "did the nightly backup actually run?".',
+    scope: WRITE, role: 'lead',
+    inputSchema: {
+      name: z.string().max(100),
+      intervalS: z.number().optional().describe('Expected seconds between pings. Default 3600 (clamped 30..2592000).'),
+      graceS: z.number().optional().describe('Grace period in seconds before alerting. Default 300 (clamped 0..86400).'),
+    },
+    outputSchema: { id: z.number(), name: z.string(), pingUrl: z.string() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    handler: async (a, p) => {
+      if (!isStr(a.name, 100)) return fail('name required.');
+      const token = tokens.mint('heartbeat');
+      const id = await q.prepare(`INSERT INTO heartbeats (org_id, name, token_hash, interval_s, grace_s,
+        enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)`)
+        .insert(p.orgId, a.name, sha256(token), clampInt(a.intervalS, 30, 30 * 86400, 3600),
+          clampInt(a.graceS, 0, 86400, 300), now());
+      auditTool(p, 'heartbeat_create', a.name);
+      // URL returned once, exactly as POST /v1/heartbeats does — the token IS the URL.
+      return ok({ id: Number(id), name: a.name, pingUrl: `${config.baseUrl}/v1/heartbeat/${token}` });
+    },
+  },
+
+  {
+    name: 'opscat_add_check',
+    title: 'Add a synthetic check',
+    description: 'Create a synthetic monitoring check (http / icmp / dns / tcp / traceroute). It runs from all '
+      + 'of the organization\'s agents on the given interval; use opscat_list_checks / opscat_run_checks to see '
+      + 'results. HTTP assertions and per-location targeting are set in the UI.',
+    scope: WRITE, role: 'lead',
+    inputSchema: {
+      type: z.enum(['http', 'icmp', 'dns', 'tcp', 'traceroute']),
+      target: z.string().max(300).describe('URL for http, host for icmp/dns/traceroute, host:port for tcp.'),
+      intervalS: z.number().optional().describe('Seconds between runs. Default 60 (floored by your plan; capped 3600).'),
+      timeoutMs: z.number().optional().describe('Per-run timeout in ms. Default 5000 (clamped 500..60000).'),
+    },
+    outputSchema: { id: z.number(), type: z.string(), target: z.string(), intervalSeconds: z.number(), enabled: z.number() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    handler: async (a, p) => {
+      if (!['http', 'icmp', 'dns', 'tcp', 'traceroute'].includes(a.type)) return fail('bad type.');
+      if (!isStr(a.target, 300)) return fail('target required.');
+      const minIv = plans.minIntervalFor(p.org.plan);   // plan-dependent cadence floor
+      const intervalS = clampInt(a.intervalS, minIv, 3600, Math.max(60, minIv));
+      // insertWithinLimit enforces the shared checks budget in the WHERE of the
+      // insert itself — the same atomic cap the REST create uses, so an agent
+      // cannot race past the plan limit. assertions/user_agent are UI-only here.
+      const r = await plans.insertWithinLimit(p.orgId, p.org.plan, 'checks',
+        `INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms,
+           enabled, assertions, user_agent, created_at)
+         SELECT ?, ?, ?, ?, ?, 1, ?, ?, ?`,
+        [p.orgId, a.type, a.target, intervalS, clampInt(a.timeoutMs, 500, 60000, 5000), null, null, now()],
+        '', { returningId: true });
+      if (r.refused) return fail('Plan check limit reached — upgrade the plan to add more checks.');
+      auditTool(p, 'check_create', `${a.type} ${a.target}`);
+      return ok({ id: r.id, type: a.type, target: a.target, intervalSeconds: intervalS, enabled: 1 });
+    },
+  },
+
+  {
+    name: 'opscat_add_snmp_target',
+    title: 'Add an SNMP target',
+    description: 'Register a device to poll over SNMP (router, switch, UPS, printer). Supports v2c (community) '
+      + 'and v3 (user + auth/priv). Community and v3 keys are stored encrypted and never returned.',
+    scope: WRITE, role: 'lead',
+    inputSchema: {
+      name: z.string().max(100),
+      host: z.string().max(255),
+      port: z.number().optional().describe('Default 161.'),
+      version: z.enum(['2c', '3']).optional().describe('Default "2c".'),
+      community: z.string().max(200).optional().describe('Required for v2c.'),
+      intervalS: z.number().optional().describe('Poll interval seconds. Default 60 (clamped 15..3600).'),
+      oids: z.array(z.object({ oid: z.string(), label: z.string().max(100) })).optional()
+        .describe('Optional OIDs to collect (numeric OID + label), max 48.'),
+      v3User: z.string().max(100).optional(),
+      v3Level: z.enum(['noAuthNoPriv', 'authNoPriv', 'authPriv']).optional(),
+      v3AuthProtocol: z.enum(['md5', 'sha']).optional(),
+      v3AuthKey: z.string().max(200).optional(),
+      v3PrivProtocol: z.enum(['des', 'aes']).optional(),
+      v3PrivKey: z.string().max(200).optional(),
+    },
+    outputSchema: { id: z.number(), name: z.string(), host: z.string(), version: z.string() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    handler: async (a, p) => {
+      if (!isStr(a.name, 100)) return fail('name required.');
+      if (!isStr(a.host, 255)) return fail('host required.');
+      const ver = a.version === '3' ? '3' : '2c';
+      // v2c vs v3 validation mirrors POST /api/admin/snmp/targets exactly; keys
+      // are encrypted with the platform secret and only their ciphertext stored.
+      const v3 = { user: null, level: null, authProto: null, authKeyEnc: null, privProto: null, privKeyEnc: null };
+      if (ver === '2c') {
+        if (!isStr(a.community, 200)) return fail('community required for v2c.');
+      } else {
+        if (!isStr(a.v3User, 100)) return fail('v3User required for v3.');
+        if (!['noAuthNoPriv', 'authNoPriv', 'authPriv'].includes(a.v3Level)) return fail('bad v3Level.');
+        v3.user = a.v3User; v3.level = a.v3Level;
+        if (a.v3Level !== 'noAuthNoPriv') {
+          if (!isStr(a.v3AuthKey, 200) || a.v3AuthKey.length < 8) return fail('v3AuthKey required (min 8 chars).');
+          v3.authProto = a.v3AuthProtocol === 'sha' ? 'sha' : 'md5';
+          v3.authKeyEnc = encrypt(a.v3AuthKey, config.secret);
+        }
+        if (a.v3Level === 'authPriv') {
+          if (!isStr(a.v3PrivKey, 200) || a.v3PrivKey.length < 8) return fail('v3PrivKey required (min 8 chars).');
+          v3.privProto = a.v3PrivProtocol === 'aes' ? 'aes' : 'des';
+          v3.privKeyEnc = encrypt(a.v3PrivKey, config.secret);
+        }
+      }
+      const lim = await plans.checkLimit(p.orgId, p.org.plan, 'snmpTargets');
+      if (!lim.ok) return fail(`Plan limit reached (${lim.used}/${lim.limit} SNMP targets) — upgrade the plan to add more.`);
+      let oidsJson = '[]';
+      if (Array.isArray(a.oids)) {
+        const clean = a.oids.filter((o) => o && /^[0-9.]+$/.test(o.oid) && isStr(o.label, 100)).slice(0, 48);
+        oidsJson = JSON.stringify(clean);
+      }
+      const id = await q.prepare(`INSERT INTO snmp_targets (org_id, name, host, port, version, community_enc, oids,
+        interval_s, enabled, v3_user, v3_level, v3_auth_protocol, v3_auth_key_enc, v3_priv_protocol, v3_priv_key_enc,
+        created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
+        .insert(p.orgId, a.name, a.host, clampInt(a.port, 1, 65535, 161), ver,
+          encrypt(ver === '2c' ? a.community : '', config.secret), oidsJson, clampInt(a.intervalS, 15, 3600, 60),
+          v3.user, v3.level, v3.authProto, v3.authKeyEnc, v3.privProto, v3.privKeyEnc, now());
+      auditTool(p, 'snmp_target_create', `${a.name} (${a.host}, v${ver})`);
+      return ok({ id: Number(id), name: a.name, host: a.host, version: ver });
     },
   },
 ];

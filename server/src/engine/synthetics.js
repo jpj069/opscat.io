@@ -8,7 +8,7 @@ const net = require('net');
 const tls = require('tls');
 const q = require('../db/shim');
 const config = require('../config');
-const { now, DEFAULT_ORG_ID } = require('../util');
+const { now, DEFAULT_ORG_ID, httpTarget } = require('../util');
 const pipeline = require('./pipeline');
 const { assertPublicHost } = require('../lib/ssrf');
 const { resolveUserAgent } = require('../lib/useragent');
@@ -82,6 +82,62 @@ function run(cmd, args, timeoutMs) {
 
 const isSafeTarget = (t) => /^[a-zA-Z0-9._:\/?#\[\]@!$&'()*+,;=%-]+$/.test(t) && !t.startsWith('-');
 
+// A hostname LABEL may hold letters, digits and inner hyphens; a bare IPv4/IPv6
+// literal passes the same test (`[` `]` and `:` are handled by the callers that
+// strip them). Single-label names are deliberately allowed — `core-switch-01`
+// is a perfectly good target on a self-hosted probe, and only DNS can say
+// whether a name resolves.
+const HOSTNAME_RE = /^\[?[a-zA-Z0-9](?:[a-zA-Z0-9.:_-]*[a-zA-Z0-9\]])?$/;
+
+// What the runners need in order to have a target at all, applied when the check
+// is WRITTEN instead of being discovered on every probe forever after.
+//
+// The runner already returns `invalid url` / `invalid target` for these, which
+// is the wrong place for a typo to surface: the check is created, it is listed
+// as a check, and it then fails every interval — i.e. it reads as "the endpoint
+// is down" rather than "this was never a valid address". Onboarding shipped a
+// live check on the bare placeholder `https://` for exactly that reason.
+//
+// SYNTAX ONLY — no DNS, no reachability. `assertPublicHost` still owns the
+// question of whether a resolvable host may be probed, at run time, where the
+// answer can change after the check was written.
+function targetError(type, target) {
+  const t = String(target == null ? '' : target).trim();
+  if (!t) return 'target required';
+  if (/\s/.test(t) && type !== 'dns') return 'target must not contain spaces';
+  if (!isSafeTarget(t.replace(/\s/g, ''))) return 'target contains characters that are not allowed';
+  if (type === 'dns') {
+    // "name" or "name @ resolver" — the same split checkDns does.
+    const [name, server] = t.split('@').map((x) => x.trim());
+    if (!HOSTNAME_RE.test(name)) return 'enter a name to resolve, e.g. acme.com';
+    if (server !== undefined && !HOSTNAME_RE.test(server)) return 'the resolver after @ is not a host';
+    return null;
+  }
+  if (type === 'tcp') {
+    const [host, portStr, extra] = t.replace(/^[a-z]+:\/\//, '').split(':');
+    if (extra !== undefined) return 'expected host or host:port';
+    const port = portStr === undefined ? 443 : Number(portStr);
+    if (!HOSTNAME_RE.test(host || '')) return 'enter a host, e.g. db.acme.com:5432';
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return 'port must be between 1 and 65535';
+    return null;
+  }
+  if (type === 'http') {
+    // Validate what will actually be FETCHED, not what was typed — and through
+    // the same function that decides it (util.httpTarget), because this branch
+    // used to prepend the scheme itself. Two copies of that rule are what put
+    // `Failed to parse URL from link11.com` on the customer's screen once
+    // already; a third one here would be the same mistake in the guard.
+    const url = httpTarget(t);
+    if (!url) return 'enter a URL, e.g. https://acme.com/health';
+    if (!HOSTNAME_RE.test(new URL(url).hostname)) return 'the URL has no valid host';
+    return null;
+  }
+  // icmp / traceroute — the host is everything up to the first slash
+  const host = t.replace(/^[a-z]+:\/\//, '').split('/')[0];
+  if (!HOSTNAME_RE.test(host)) return 'enter a host or IP address, e.g. acme.com';
+  return null;
+}
+
 // SSRF guard: private / loopback / link-local space is refused so a probe cannot
 // be pointed at the cloud metadata endpoint (169.254.169.254), localhost, or a
 // neighbouring compose service. The implementation moved to lib/ssrf.js when the
@@ -139,14 +195,16 @@ function failedAssertion(assertions, status, bodyText) {
 }
 
 async function checkHttp(check) {
-  const url = /^https?:\/\//.test(check.target) ? check.target : `https://${check.target}`;
+  // One rule, one place (util.httpTarget). This line used to BE the rule, and
+  // the Sensor Agent did not have it — same check, green here, "Failed to parse
+  // URL from link11.com" from every remote agent.
+  const url = httpTarget(check.target);
+  if (!url) return { ok: false, latency: null, meta: { error: 'invalid url' } };
   let assertions = null;
   try { assertions = check.assertions ? JSON.parse(check.assertions) : null; } catch { /* noop */ }
   const started = process.hrtime.bigint();
   try {
-    let parsed;
-    try { parsed = new URL(url); }
-    catch { return { ok: false, latency: null, meta: { error: 'invalid url' } }; }
+    const parsed = new URL(url);   // httpTarget already proved this parses
     const host = parsed.hostname.replace(/^\[|\]$/g, '');
     await assertPublicHost(host);
     const ctrl = new AbortController();
@@ -319,6 +377,34 @@ async function tick() {
 }
 
 // Run every enabled check for one org now (or all orgs if orgId omitted).
+/**
+ * Run ONE check on the org's local probe right now, for "create and see it".
+ *
+ * A new check that shows an empty row until the next scheduler tick reads as
+ * "did that work?" — the question the screen exists to answer. Bounded by the
+ * check's own timeout, so a create is never slower than the check it made.
+ *
+ * Returns null rather than throwing when there is nothing to run: an unknown or
+ * foreign check, a type with no runner, or — the one worth knowing about — a
+ * check the operator assigned to remote agents ONLY. There is no local result
+ * to produce then, and inventing one from a probe the check does not run on
+ * would be a measurement nobody asked for.
+ */
+async function runCheckOnce(checkId, orgId) {
+  const check = await getCheck.get(checkId);
+  if (!check || check.org_id !== orgId) return null;
+  const runner = RUNNERS[check.type];
+  if (!runner) return null;
+  const locId = await ensureLocalLocation(check.org_id);
+  if (!(await runsOnLocation(check.id, locId))) return null;
+  lastRun.set(check.id, now());
+  let res;
+  try { res = await runner(check); }
+  catch (e) { res = { ok: false, latency: null, meta: { error: String(e.message).slice(0, 200) } }; }
+  await recordResult(check.id, locId, res);
+  return res;
+}
+
 async function runAllNow(orgId = null) {
   const results = [];
   const checks = (await getChecks.all()).filter((c) => orgId == null || c.org_id === orgId);
@@ -358,4 +444,6 @@ function start() {
   iv.unref();
 }
 
-module.exports = { start, runAllNow, recordResult, RUNNERS, assertPublicHost };
+module.exports = {
+  start, runAllNow, runCheckOnce, recordResult, RUNNERS, assertPublicHost, targetError,
+};

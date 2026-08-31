@@ -667,6 +667,19 @@ Page admin screen.
   orgs and the CE have no `'0'` flag, so they never see it. The flow is
   responsive: below 720px the step rail is replaced by a compact dot-stepper header
   (`.onb-*` classes in `web/src/tokens.css`).
+  Three properties are load-bearing and each of them shipped broken once, which is
+  why they are written down. **Every lazily-provisioned block says why it could
+  not be produced** — the ingest key, the agent token and the syslog endpoint are
+  all minted on demand, and all three used to swallow the error and leave the box
+  reading "registering agent…" forever; a first run is exactly where a plan cap or
+  a name collision is most likely and the one screen where nobody thinks to open
+  devtools. **The agent name is retried numbered** (`my-first-server`,
+  `-2`, …): a token is shown once and never retrievable, so re-opening the tab
+  has to mint a NEW agent and the org already owns the first name. **The step
+  renders the records it wrote, not its own form state** — checks are listed by
+  id with a delete button and the form stays put for the next one, and no status
+  is claimed for a check that has not been probed yet ("first probe pending", not
+  "operational").
 - `OPSCAT_EDITION` selects the runtime edition (`server/src/edition.js`):
   `community` (default — single organization, no limits) or `cloud` (multi-tenant
   SaaS: plan limits from `server/src/plans.js` enforced with `402`, Stripe billing,

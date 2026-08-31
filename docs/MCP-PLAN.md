@@ -45,19 +45,42 @@ The flow, once per connection:
 client → DCR (RFC 7591) → /oauth/authorize
                               ↓  existing session, or log in
                           consent screen
-                              ↓  ← organization picker, when the user has >1
+                              ↓  ← organization CHECKBOXES, when the user has >1
                           code (PKCE S256) → /oauth/token
                               ↓
-                          access token bound to (user, org, scopes)
+                          access token bound to (user, orgs, scopes)
 ```
 
 The consent screen lists every organization the user is a member of, with the
-role they hold in each, and the user picks the one this connection is for. With
-exactly one membership the picker is skipped — no pointless click. Connecting a
-second organization means running the flow a second time; the MCP client then
-holds two connections, which is honest about what is happening and keeps the org
-boundary inside the credential rather than in a tool argument an agent could get
-wrong.
+role they hold in each. With exactly one membership the picker is skipped — no
+pointless click.
+
+**This decision was reversed (migration 037), and the original objection was
+right.** It read: keep the org boundary inside the credential rather than in a
+tool argument an agent could get wrong, and connect a second organization by
+running the flow a second time. What that cost in practice was the thing nobody
+weighed — somebody who looks after three organizations authorized three times
+and switched clients by hand, for a boundary that was never a security property
+but a single column.
+
+So a connection now covers a SET of organizations: checkboxes, all pre-ticked,
+plus an opt-in for the ones joined later (`org_scope` = `list` | `all`). The
+objection is answered by making the argument impossible to get wrong rather than
+by removing it:
+
+- with several organizations `organization` is **required** on every tool, and
+  `resolveOrg` has **no default** — a call that names none is refused, never
+  answered for whichever org sorts first;
+- it is matched on the NAME, because a name is what survives a conversation and
+  a uuid is not; an ambiguous name (`organizations.name` is not unique) is a
+  refusal that offers the slugs, not a coin toss;
+- the role is re-checked **per call** against the org that call resolved to, so
+  admin in one and analyst in another behaves like exactly that;
+- a connection with ONE organization is byte-identical to before — no argument,
+  no extra concept.
+
+What did not change is the part that carries the weight: the grant's org set is
+an upper bound and `memberships` is the authority, re-read on every request.
 
 ### What this buys us
 
@@ -68,7 +91,7 @@ user's real role in that org:
 
 | Concern | Resolution |
 |---|---|
-| Org scoping | `org_id` on the token, chosen at consent time |
+| Org scoping | the token's org SET (`org_id` + `org_scope`/`org_ids`, migration 037), chosen at consent time and intersected with `memberships` on every request |
 | Permissions | `memberships.role` for that `(user, org)` — the same row the UI reads |
 | Revocation | Revoking a token, or removing the membership, both cut access immediately |
 | Role changes | Follow automatically; the token carries no cached role |
@@ -303,10 +326,13 @@ invent a parallel rule.
 **1. Log reading — full message bodies, no redaction layer.**
 
 `opscat_search_logs` returns log content as stored. The reasoning that makes this
-safe is the org boundary: a token reads only the logs of the organization it was
-issued for, and it was issued by a member of that organization who chose to
-connect their own data to their own AI client. It is not a cross-tenant path, so
-the Personio-style redaction layer would be protecting an org from itself.
+safe is the org boundary: a token reads only the logs of the organizations it was
+issued for — every one of them chosen by a member of that organization, who is
+connecting their own data to their own AI client. Multi-org (037) does not widen
+that: a call reads exactly the org it named, out of a set the person ticked, and
+every org in the set is one they hold a membership in *at the moment of the
+call*. It is still not a cross-tenant path, so the Personio-style redaction layer
+would be protecting an org from itself.
 
 What this does **not** remove is the standing logging-hygiene rule: applications
 should not write secrets into logs in the first place. MCP makes the consequence

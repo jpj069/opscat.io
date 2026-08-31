@@ -5,7 +5,7 @@
 const express = require('express');
 const q = require('../db/shim');
 const config = require('../config');
-const { now, sha256, isStr, clampInt, httpError, encrypt, decrypt } = require('../util');
+const { now, sha256, isStr, clampInt, httpError, encrypt, decrypt, httpTarget } = require('../util');
 const sec = require('../security');
 const tokens = require('../lib/tokens');
 const synthEngine = require('../engine/synthetics');
@@ -348,6 +348,16 @@ router.post('/checks', sec.requireRole('lead'), async (req, res) => {
   const { type, target, intervalS, timeoutMs, assertions, locationIds, userAgent } = req.body || {};
   if (!['http', 'icmp', 'dns', 'tcp', 'traceroute'].includes(type)) return httpError(res, 400, 'bad type');
   if (!isStr(target, 300)) return httpError(res, 400, 'target required');
+  // A target the runner cannot turn into a host is refused HERE. Accepted, it
+  // becomes a check that fails every interval with `invalid url` — which the
+  // uptime column reports as an endpoint that is down, not as a typo.
+  const tErr = synthEngine.targetError(type, target);
+  if (tErr) return httpError(res, 400, tErr);
+  // …and what is STORED is the canonical form, so no runner has to have an
+  // opinion about a scheme-less target. targetError has already proved this
+  // parses (it asks util.httpTarget the same question), so the fallback is for
+  // the non-http types, which are stored as typed.
+  const canonical = type === 'http' ? httpTarget(target) : target;
   let ua = null;
   try { ua = type === 'http' ? validateUserAgent(userAgent) : null; }
   catch (e) { return httpError(res, 400, e.message); }
@@ -355,11 +365,15 @@ router.post('/checks', sec.requireRole('lead'), async (req, res) => {
   // The `checks` budget spans synthetic_checks AND reputation_assets, and both
   // counts live in the WHERE of this one statement — so two simultaneous
   // creations at 24 of 25 cannot both be told they are the twenty-fifth.
+  // Named, because the caller is TOLD it: a plan floor silently lifting 30s to
+  // 60s and a UI that then prints the number the operator picked is the same
+  // lie as a status nobody measured.
+  const storedInterval = clampInt(intervalS, minIv, 3600, Math.max(60, minIv));
   const r = await plans.insertWithinLimit(req.orgId, req.org.plan, 'checks',
     `INSERT INTO synthetic_checks (org_id, type, target, interval_s, timeout_ms,
        enabled, assertions, user_agent, created_at)
      SELECT ?, ?, ?, ?, ?, 1, ?, ?, ?`,
-    [req.orgId, type, target, clampInt(intervalS, minIv, 3600, Math.max(60, minIv)),
+    [req.orgId, type, canonical, storedInterval,
       clampInt(timeoutMs, 500, 60000, 5000),
       type === 'http' ? cleanAssertions(assertions) : null, ua, now()],
     '', { returningId: true });
@@ -368,8 +382,18 @@ router.post('/checks', sec.requireRole('lead'), async (req, res) => {
   // lastInsertRowid: the shim refuses that on both engines, and "a number came
   // back" is not the same claim as "this is the row that was written".
   await setCheckLocations(req, r.id, locationIds);
-  sec.audit(req.user.id, 'check_create', `${type} ${target}`, req.orgId);
-  res.json({ id: r.id });
+  sec.audit(req.user.id, 'check_create', `${type} ${canonical}`, req.orgId);
+  // Run it once before answering, so the row the operator lands on carries a
+  // verdict instead of an empty bar. Awaited rather than fired and forgotten:
+  // the reload that follows this response would otherwise race the result and
+  // show nothing about half the time, which is the failure this exists to fix.
+  // It can never fail the creation — the check is created either way.
+  let ran = false;
+  if (req.body && req.body.runNow) {
+    try { ran = !!(await synthEngine.runCheckOnce(r.id, req.orgId)); }
+    catch { ran = false; }
+  }
+  res.json({ id: r.id, intervalS: storedInterval, ran });
 });
 
 router.patch('/checks/:id', sec.requireRole('lead'), async (req, res) => {
@@ -378,6 +402,15 @@ router.patch('/checks/:id', sec.requireRole('lead'), async (req, res) => {
   if (!c) return httpError(res, 404, 'check not found');
   const b = req.body || {};
   const minIv = plans.minIntervalFor(req.org.plan);
+  // Same gate as the create path, and the same canonicalisation after it — an
+  // edit must not be a way around either. The type is the row's, not the
+  // body's: PATCH cannot change it.
+  let targetPatch = null;
+  if (isStr(b.target, 300)) {
+    const tErr = synthEngine.targetError(c.type, b.target);
+    if (tErr) return httpError(res, 400, tErr);
+    targetPatch = c.type === 'http' ? httpTarget(b.target) : b.target;
+  }
   let uaPatch = null;
   try { uaPatch = b.userAgent !== undefined ? validateUserAgent(b.userAgent) : null; }
   catch (e) { return httpError(res, 400, e.message); }
@@ -387,7 +420,7 @@ router.patch('/checks/:id', sec.requireRole('lead'), async (req, res) => {
       interval_s = COALESCE(?, interval_s), enabled = COALESCE(?, enabled),
       assertions = CASE WHEN ? THEN ? ELSE assertions END,
       user_agent = CASE WHEN ? THEN ? ELSE user_agent END WHERE id = ? AND org_id = ?`)
-    .run(isStr(b.target, 300) ? b.target : null,
+    .run(targetPatch,
       Number.isFinite(b.intervalS) ? clampInt(b.intervalS, minIv, 3600, Math.max(60, minIv)) : null,
       typeof b.enabled === 'boolean' ? (b.enabled ? 1 : 0) : null,
       b.assertions !== undefined && c.type === 'http' ? 1 : 0, cleanAssertions(b.assertions),

@@ -1277,7 +1277,11 @@ router.get('/agents', async (req, res) => {
 router.post('/agents', sec.requireRole('lead'), async (req, res) => {
   const { name, group, autoUpdate } = req.body || {};
   if (!isStr(name, 100)) return httpError(res, 400, 'name required');
-  if (await q.prepare('SELECT id FROM agents WHERE name = ?').get(name)) {
+  // Scoped to the org, and the UNIQUE constraint behind it is too (migration
+  // 036). Unscoped, this answered 409 about a row in ANOTHER tenant — which
+  // both leaks that the name is taken somewhere and made onboarding's fixed
+  // `my-first-server` claimable exactly once per instance.
+  if (await q.prepare('SELECT id FROM agents WHERE name = ? AND org_id = ?').get(name, req.orgId)) {
     return httpError(res, 409, 'agent name already exists');
   }
   if (!(await withinPlan(req, res, 'agents'))) return undefined;

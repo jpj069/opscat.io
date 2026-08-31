@@ -144,6 +144,22 @@ das ist Absicht: Ein Check, der *nirgends* läuft, meldet nichts, alarmiert nich
 und sieht dabei exakt aus wie ein gesunder. Von den beiden möglichen Fehlern ist
 das mit Abstand der schlechtere.
 
+**Ein HTTP-Target ist kanonisch, bevor es gespeichert wird.** Jemand tippt
+`link11.com` — ein völlig sinnvolles Monitoring-Ziel und keine URL. Irgendwas
+muss das Schema ergänzen, und lange taten das ZWEI Stellen unterschiedlich: die
+In-Process-Probe stellte `https://` voran, der Sensor Agent rief `fetch(target)`
+direkt auf und undici antwortete `TypeError: Failed to parse URL from
+link11.com`. Derselbe Check war aus Nürnberg grün und aus N. Virginia und Los
+Angeles rot — mit einer Meldung über UNSEREN Parser an der Stelle, an der der
+Kunde „läuft meine Seite?" liest.
+
+`util.httpTarget()` ist jetzt die einzige Regel; Create und PATCH gehen beide
+hindurch, und Migration 038 backfillt die Bestandszeilen. Das ist auch, was die
+**bereits ausgerollten Agents** repariert: sie lesen das Target aus der
+Work-List, eine kanonische Zeile heilt sie also ohne Agent-Update. Ergänzt wird
+nur das Schema — ein anders kaputtes Target (`https://` ohne Host) bleibt stehen
+und sichtbar rot, statt still in einen anderen Check umgeschrieben zu werden.
+
 **Key-Scoping:** Der Probe Key bleibt an der Location. Für `managed` Locations
 liefert `GET /v1/synthetics/checks` die Checks aller Orgs, die die Location per
 `org_location_access` gebucht und per `check_locations` zugewiesen haben — der
@@ -769,7 +785,9 @@ zeigt beides nebeneinander.
 
 Drei Details, die still danebengehen würden:
 
-- **`agents.name` ist UNIQUE**, und zwei Nodes in einer Stadt ist der
+- **`agents.name` ist UNIQUE pro Org** (`UNIQUE (org_id, name)`, Migration 036
+  — davor global, was bedeutete, dass die erste Org auf einer Instanz einen
+  Namen allen anderen wegnahm), und zwei Nodes in einer Stadt ist der
   Normalfall. Die Node-ID steht deshalb **im** Namen (`Sensor Frankfurt DE
   (node 42)`) statt bei einer Kollision nachgeschlagen und angehängt zu werden
   — ein Lookup wäre ein Rennen zwischen zwei Provisionierungen, die ID ist per

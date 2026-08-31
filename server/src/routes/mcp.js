@@ -41,7 +41,7 @@ router.all('/mcp', mcpOriginGuard(ALLOWED_ORIGINS), requireMcpAuth, async (req, 
   await handleMcpRequest(req, res, {
     label: 'mcp',
     store: SESSIONS,
-    createServer: (principal) => createMcpServer(principal),
+    createServer: (principalRef) => createMcpServer(principalRef),
   });
 });
 

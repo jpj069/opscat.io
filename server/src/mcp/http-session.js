@@ -33,9 +33,15 @@ class McpSessionStore {
     return s;
   }
 
-  add(sessionId, transport, userId, orgId) {
+  // `ref` is the LIVE principal holder, not a copy of the principal. An MCP
+  // session outlives the request that opened it, so anything the session closed
+  // over is a snapshot — and a snapshot of "which organizations may I act in?"
+  // keeps answering yes for one somebody was removed from, until the session
+  // idles out. The middleware re-resolves that set on every request; this is
+  // what carries the fresh answer into a server object built once.
+  add(sessionId, transport, userId, orgId, ref) {
     const t = Date.now();
-    this.sessions.set(sessionId, { transport, userId, orgId, createdAt: t, lastSeenAt: t });
+    this.sessions.set(sessionId, { transport, userId, orgId, ref, createdAt: t, lastSeenAt: t });
   }
 
   remove(sessionId) { this.sessions.delete(sessionId); }
@@ -85,11 +91,23 @@ async function handleMcpRequest(req, res, opts) {
   const cached = store.touch(sessionId);
 
   // The token already authenticated the caller; this only stops a session id
-  // from being replayed across accounts or organizations.
-  if (cached && (cached.userId !== principal.user.id || cached.orgId !== principal.orgId)) {
+  // from being replayed across accounts or organizations. The org test is
+  // "does the caller still cover the org this session was opened for?" rather
+  // than equality: a multi-org connection whose primary membership was revoked
+  // legitimately keeps its other organizations, and equality would end the
+  // session instead of shrinking it.
+  const covers = (p, orgId) => p.orgId === orgId
+    || !!(p.orgs && p.orgs.some((o) => o.id === orgId));
+  if (cached && (cached.userId !== principal.user.id || !covers(principal, cached.orgId))) {
     res.status(403).json({ error: 'session_owned_by_other_principal' });
     return;
   }
+
+  // Point the session's holder at THIS request's principal before anything is
+  // dispatched. Tool handlers read through it, so a membership revoked a second
+  // ago is gone from the next call rather than from the next session.
+  const ref = cached ? cached.ref : { current: principal };
+  ref.current = principal;
 
   // Only `initialize` may allocate. Anything else that does not resolve to a
   // live session is answered 404 so the client re-initializes — and, critically,
@@ -115,12 +133,12 @@ async function handleMcpRequest(req, res, opts) {
   } else {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => store.add(id, transport, principal.user.id, principal.orgId),
+      onsessioninitialized: (id) => store.add(id, transport, principal.user.id, principal.orgId, ref),
     });
     transport.onclose = () => { if (transport.sessionId) store.remove(transport.sessionId); };
     transport.onerror = (err) => console.error(`[${label}] transport error:`, err.message);
 
-    const server = createServer(principal);
+    const server = createServer(ref);
     await server.connect(transport);
     active = transport;
   }

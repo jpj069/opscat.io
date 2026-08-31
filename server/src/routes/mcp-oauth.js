@@ -172,6 +172,17 @@ function renderPage(res, status, title, bodyHtml) {
   label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#8b949e;margin-bottom:6px}
   select{width:100%;background:#0b0e14;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
     padding:9px 10px;font:14px Inter,system-ui,sans-serif;margin-bottom:18px}
+  .orgs{border:1px solid #30363d;border-radius:6px;margin-bottom:14px;overflow:hidden}
+  .orgs label{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;margin:0;
+    border-bottom:1px solid #161b22;text-transform:none;letter-spacing:0;font-size:13px;color:#c9d1d9;cursor:pointer}
+  .orgs label:last-child{border-bottom:none}
+  .orgs input{margin:2px 0 0;accent-color:#58a6ff;flex:none}
+  .orgs .role{display:block;color:#6e7681;font-size:11.5px;margin-top:1px}
+  .future{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;margin-bottom:18px;
+    border:1px solid #21262d;border-radius:6px;background:#11161f;cursor:pointer;
+    text-transform:none;letter-spacing:0;font-size:12.5px;color:#8b949e}
+  .future input{margin:2px 0 0;accent-color:#58a6ff;flex:none}
+  .future b{display:block;color:#c9d1d9;font-weight:600;font-size:13px;margin-bottom:1px}
   ul.scopes{list-style:none;padding:0;margin:0 0 20px}
   ul.scopes li{padding:7px 0;border-bottom:1px solid #161b22;font-size:13px;display:flex;gap:9px;align-items:baseline}
   ul.scopes li:last-child{border-bottom:none}
@@ -244,9 +255,20 @@ router.get('/oauth/authorize', async (req, res) => {
 
   // One membership: no picker, but still name the organization — the user should
   // never have to guess what the connection will be able to see.
+  //
+  // Several: CHECKBOXES, all pre-ticked, plus an opt-in for the ones joined
+  // later. Deliberately not a multi-select `<select multiple>`: on a phone that
+  // control is unusable, and its selected state is invisible until you open it.
+  // The "future" box is OFF by default and stays a separate decision — picking
+  // organizations is the normal path, and a grant that silently grows is not.
   const orgBlock = memberships.length > 1
-    ? `<label for="org">Organization</label><select id="org" name="org_id">${memberships.map((m) =>
-        `<option value="${m.org_id}">${esc(m.name)} — ${esc(m.role)}</option>`).join('')}</select>`
+    ? `<label>Organizations</label>
+       <div class="orgs">${memberships.map((m) =>
+        `<label><input type="checkbox" name="org_id" value="${esc(m.org_id)}" checked>
+          <span>${esc(m.name)}<span class="role">${esc(m.role)}</span></span></label>`).join('')}</div>
+       <label class="future"><input type="checkbox" name="org_future" value="1">
+         <span><b>Include organizations I join later</b>
+         The list is then read from your memberships on every request.</span></label>`
     : `<input type="hidden" name="org_id" value="${memberships[0].org_id}">
        <p>Connecting <b style="color:#c9d1d9">${esc(memberships[0].name)}</b> as
        <b style="color:#c9d1d9">${esc(memberships[0].role)}</b>.</p>`;
@@ -291,18 +313,38 @@ router.post('/oauth/authorize/consent', async (req, res) => {
 
   // Membership is re-checked here rather than trusted from the ticket: it may
   // have been revoked between rendering the consent screen and submitting it.
-  const orgId = String(b.org_id || '').trim();
-  const membership = isOrgId(orgId) ? await getMembership(ctx.user.id, orgId) : null;
-  if (!membership) {
+  // One checkbox and many arrive the same way — express gives a bare string for
+  // one `org_id` field and an array for several, so both paths normalise here
+  // and a single-org client that posts one value keeps working untouched.
+  const picked = [...new Set((Array.isArray(b.org_id) ? b.org_id : [b.org_id])
+    .map((x) => String(x || '').trim()).filter(isOrgId))].slice(0, 50);
+  const orgFuture = String(b.org_future || '') === '1';
+  const orgIds = [];
+  for (const id of picked) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await getMembership(ctx.user.id, id)) orgIds.push(id);
+  }
+  // Every checkbox must be a real membership. Dropping the unknown ones and
+  // carrying on would grant SOMETHING for a request that asked for something
+  // else, which is the one outcome a consent screen may never produce.
+  if (!orgIds.length || orgIds.length !== picked.length) {
     return renderPage(res, 403, 'Not a member',
-      '<h1>Not a member</h1><p class="err">You are not a member of the selected organization.</p>');
+      '<h1>Not a member</h1><p class="err">You are not a member of every selected organization.</p>');
   }
 
+  // The primary org: what revocation, the grant list and every pre-multi-org
+  // reader key on. With `all` it is only a starting point — the real set is
+  // resolved per request.
+  const orgId = orgIds[0];
+  const orgScope = orgFuture ? 'all' : 'list';
   const code = await oauth.issueCode({
-    clientId: t.c, userId: ctx.user.id, orgId, redirectUri: t.r,
+    clientId: t.c, userId: ctx.user.id, orgId, orgScope, orgIds, redirectUri: t.r,
     codeChallenge: t.ch, scopes: t.s, resource: t.res,
   });
-  sec.audit(ctx.user.id, 'mcp.authorize', `client=${t.c} scopes=${t.s.join('+')}`, orgId);
+  // The trail names the whole grant, not just its primary org — "which orgs did
+  // I hand this client?" is the question a revocation starts from.
+  sec.audit(ctx.user.id, 'mcp.authorize',
+    `client=${t.c} scopes=${t.s.join('+')} orgs=${orgScope === 'all' ? 'all' : orgIds.length}`, orgId);
   u.searchParams.set('code', code);
   res.redirect(302, u.toString());
 });
@@ -322,6 +364,7 @@ router.post('/oauth/token', async (req, res) => {
     if (out.error) return res.status(400).json({ error: out.error });
     return res.json(await oauth.issueTokens({
       clientId, userId: out.row.user_id, orgId: out.row.org_id,
+      orgScope: out.row.org_scope, orgIds: oauth.grantOrgs(out.row).ids,
       scopes: out.row.scopes, resource: out.row.resource,
     }));
   }
@@ -333,12 +376,19 @@ router.post('/oauth/token', async (req, res) => {
     // `!Promise` is `false`, so a lost await here would keep refreshing tokens
     // for somebody who was removed from the organization — and would do it
     // silently, with a 200 (db.js § memberships).
-    if (!(await getMembership(out.row.user_id, out.row.org_id))) {
+    // Multi-org changes WHICH membership ends the grant, and the distinction
+    // matters: leaving one of three organizations must not cost the other two,
+    // so the test is "does this grant still reach anything?" rather than "is the
+    // primary org still mine?". Empty means the connection can do nothing at
+    // all, and a grant that can do nothing should not keep refreshing.
+    const stillMine = await oauth.resolveOrgs(out.row.user_id, out.row);
+    if (!stillMine.length) {
       await oauth.revokeGrant(clientId, out.row.user_id, out.row.org_id);
       return res.status(400).json({ error: 'invalid_grant', error_description: 'Membership revoked' });
     }
     return res.json(await oauth.issueTokens({
       clientId, userId: out.row.user_id, orgId: out.row.org_id,
+      orgScope: out.row.org_scope, orgIds: oauth.grantOrgs(out.row).ids,
       scopes: out.row.scopes, resource: out.row.resource,
     }));
   }

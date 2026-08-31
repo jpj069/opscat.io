@@ -517,6 +517,284 @@ async function main() {
   const afterRevoke = await mcp({ jsonrpc: '2.0', method: 'tools/list', id: 6 }, S);
   chk('a revoked token can no longer drive /mcp', afterRevoke.status === 401, `got ${afterRevoke.status}`);
 
+  // ── 7. several organizations in ONE connection ───────────────────────────
+  // Until migration 037 a connection was bound to a single org. What makes the
+  // multi-org version safe is not the consent screen but the sentence the
+  // single-org version already lived by: the grant's org set is an UPPER BOUND
+  // and `memberships` is the authority, re-read on every request. These checks
+  // are about the places where that could quietly stop being true.
+  const { addMembership, removeMembership } = require('./src/db');
+  const { newId } = require('./src/util');
+  const mkOrg = async (name, plan = 'enterprise') => {
+    const id = newId();
+    await q.prepare(`INSERT INTO organizations (id, name, slug, plan, status, created_at)
+      VALUES (?, ?, ?, ?, 'active', ?)`).run(id, name, name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), plan, Date.now());
+    return { id, name };
+  };
+  const ORG_B = await mkOrg('Beta-mcp');       // admin  — in the grant
+  const ORG_C = await mkOrg('Gamma-mcp');      // analyst — in the grant
+  const ORG_D = await mkOrg('Delta-mcp');      // admin  — deliberately NOT picked
+  await addMembership(user.id, ORG_B.id, 'admin');
+  await addMembership(user.id, ORG_C.id, 'analyst');
+  await addMembership(user.id, ORG_D.id, 'admin');
+
+  // A full authorization of its own, so nothing here depends on the state the
+  // sections above left behind.
+  const mkClient = async (name) => (await (await fetch(`${B}/oauth/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_name: name, redirect_uris: ['http://127.0.0.1:9999/cb'], scope: 'read write' }),
+  })).json());
+  const authorize = async (cl, orgIds, future) => {
+    const v = crypto.randomBytes(32).toString('base64url');
+    const ch = crypto.createHash('sha256').update(v).digest('base64url');
+    const u = new URL(`${B}/oauth/authorize`);
+    for (const [k, val] of Object.entries({
+      response_type: 'code', client_id: cl.client_id, redirect_uri: 'http://127.0.0.1:9999/cb',
+      code_challenge: ch, code_challenge_method: 'S256', scope: 'read write', resource: `${config.baseUrl}/mcp`,
+    })) u.searchParams.set(k, val);
+    const html2 = await (await fetch(u, { headers: { cookie } })).text();
+    const tk = /name="ticket" value="([^"]+)"/.exec(html2)?.[1];
+    const form = new URLSearchParams({ ticket: tk, decision: 'allow' });
+    for (const id of orgIds) form.append('org_id', id);
+    if (future) form.append('org_future', '1');
+    const cs = await fetch(`${B}/oauth/authorize/consent`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+      body: form, redirect: 'manual',
+    });
+    if (cs.status !== 302) return { html: html2, consent: cs };
+    const c = new URL(cs.headers.get('location')).searchParams.get('code');
+    const tok = await (await tokenReq({
+      grant_type: 'authorization_code', client_id: cl.client_id, code: c,
+      redirect_uri: 'http://127.0.0.1:9999/cb', code_verifier: v,
+    })).json();
+    return { html: html2, consent: cs, tok };
+  };
+
+  // A consent that names an org the person is not in must be refused whole. The
+  // tempting alternative — drop the unknown ones and grant the rest — issues a
+  // credential for something OTHER than what the screen asked about, which is
+  // the one answer a consent screen may never give.
+  const ORG_F = await mkOrg('Zeta-mcp');   // no membership, deliberately
+  const strayClient = await mkClient('Stray');
+  const stray = await authorize(strayClient, [org.id, ORG_F.id]);
+  chk('a consent naming an organization the user is not in is refused',
+    stray.consent.status === 403, `got ${stray.consent.status}`);
+  chk('…and mints no code at all — not even for the org that WAS valid',
+    !stray.tok && !(stray.consent.headers.get('location') || '').includes('code='),
+    stray.consent.headers.get('location') || '');
+  chk('…and wrote no grant', (await q.prepare(
+    'SELECT COUNT(*) c FROM oauth_codes WHERE client_id = ?').get(strayClient.client_id)).c === 0);
+
+  const multiClient = await mkClient('Multi');
+  const mGrant = await authorize(multiClient, [org.id, ORG_B.id, ORG_C.id]);
+  chk('consent screen offers CHECKBOXES once there is more than one membership',
+    mGrant.html.includes('type="checkbox" name="org_id"'), 'no checkbox list');
+  chk('…every organization pre-ticked, so the default is "what I have"',
+    (mGrant.html.match(/name="org_id"[^>]*checked/g) || []).length >= 4);
+  chk('…and the future opt-in is present and NOT ticked',
+    mGrant.html.includes('name="org_future"')
+    && !/name="org_future"[^>]*checked/.test(mGrant.html), 'future box wrong');
+  chk('a multi-org consent mints a token', !!mGrant.tok?.access_token, JSON.stringify(mGrant.tok));
+
+  const mMcp = (body2, extra = {}) => fetch(`${B}/mcp`, {
+    method: 'POST', headers: { ...H, authorization: `Bearer ${mGrant.tok.access_token}`, ...extra },
+    body: JSON.stringify(body2),
+  });
+  const mInit = await mMcp({
+    jsonrpc: '2.0', method: 'initialize', id: 1,
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mGrant', version: '1' } },
+  });
+  const mS = { 'mcp-session-id': mInit.headers.get('mcp-session-id') };
+  const mCall = async (name, args, id = 20) => parse(await mMcp({
+    jsonrpc: '2.0', method: 'tools/call', id, params: { name, arguments: args },
+  }, mS));
+  // A tool that answers an error — including the SDK's own output-VALIDATION
+  // error, which is how the incidents bug below surfaced — must turn a check
+  // red, never kill the run: a harness that throws reports nothing at all, so
+  // the mutation that plants such a bug would look like a harness fault.
+  const jsonOf = (r) => {
+    try { return JSON.parse(r.result.content[0].text); } catch { return null; }
+  };
+  const mTools = (await parse(await mMcp({ jsonrpc: '2.0', method: 'tools/list', id: 2 }, mS))).result?.tools || [];
+
+  const evTool = mTools.find((t) => t.name === 'opscat_list_events');
+  chk('with several orgs EVERY tool takes `organization`',
+    mTools.filter((t) => t.name !== 'opscat_list_organizations')
+      .every((t) => t.inputSchema?.properties?.organization),
+    mTools.find((t) => t.name !== 'opscat_list_organizations' && !t.inputSchema?.properties?.organization)?.name);
+  chk('…and it is REQUIRED, so nothing is guessed',
+    (evTool.inputSchema.required || []).includes('organization'), JSON.stringify(evTool.inputSchema.required));
+  chk('the tool that answers WHICH organizations does not itself require one',
+    !(mTools.find((t) => t.name === 'opscat_list_organizations').inputSchema?.properties?.organization));
+  chk('a single-org connection is unchanged — no organization argument at all',
+    !tools.find((t) => t.name === 'opscat_list_events').inputSchema?.properties?.organization);
+
+  const orgList = jsonOf(await mCall('opscat_list_organizations', {})) || { organizations: [] };
+  chk('list_organizations names exactly the granted orgs',
+    orgList.count === 3 && orgList.organizations.map((o) => o.name).sort().join(',')
+      === [org.name, ORG_B.name, ORG_C.name].sort().join(','), JSON.stringify(orgList));
+  chk('…and says the argument is required', orgList.argumentRequired === true);
+  chk('…reporting the role PER organization, which genuinely differs',
+    orgList.organizations.find((o) => o.name === ORG_C.name).role === 'analyst'
+    && orgList.organizations.find((o) => o.name === ORG_B.name).role === 'admin',
+    JSON.stringify(orgList.organizations));
+
+  // ── the resolver, on its own ─────────────────────────────────────────────
+  // Driven directly, because over the wire the SDK refuses a missing
+  // `organization` from the input schema first and the resolver is never
+  // reached — so a resolver that quietly defaulted to `orgs[0]` would leave
+  // every wire check green. Measured: it did. This is the last line between a
+  // call that names no organization and a write into whichever one sorts first.
+  const { resolveOrg } = require('./src/mcp/server');
+  const threw = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+  const P3 = { orgs: [
+    { id: 'id-a', name: 'Acme', slug: 'acme', role: 'admin' },
+    { id: 'id-b', name: 'Beta', slug: 'beta', role: 'analyst' },
+    { id: 'id-c', name: 'Acme', slug: 'acme-two', role: 'lead' },
+  ] };
+  const P1 = { orgs: [{ id: 'id-a', name: 'Acme', slug: 'acme', role: 'admin' }] };
+  chk('resolver: no name with several organizations THROWS rather than picking one',
+    /required/i.test(threw(() => resolveOrg(P3)) || ''), threw(() => resolveOrg(P3)));
+  chk('resolver: …and the message names the choices',
+    /Acme/.test(threw(() => resolveOrg(P3)) || '') && /Beta/.test(threw(() => resolveOrg(P3)) || ''));
+  chk('resolver: no name with exactly one is that one — a single-org connection stays argument-free',
+    resolveOrg(P1).id === 'id-a');
+  chk('resolver: an exact name resolves, case-insensitively', resolveOrg(P3, 'beta').id === 'id-b');
+  chk('resolver: an unknown name is refused, not guessed',
+    /does not cover/.test(threw(() => resolveOrg(P3, 'Nope')) || ''));
+  // organizations.name is NOT unique — only the slug is — so two orgs a person
+  // belongs to can genuinely share one. Picking either would be a coin toss over
+  // which tenant a write lands in.
+  chk('resolver: an AMBIGUOUS name is refused and the slugs are offered',
+    /acme, acme-two/.test(threw(() => resolveOrg(P3, 'Acme')) || ''), threw(() => resolveOrg(P3, 'Acme')));
+  chk('resolver: …and the slug then resolves it', resolveOrg(P3, 'acme-two').id === 'id-c');
+  chk('resolver: the id resolves too, for a model that read one off a resource URI',
+    resolveOrg(P3, 'id-b').id === 'id-b');
+
+  const incidentCount = async () => (await q.prepare('SELECT COUNT(*) c FROM incidents').get()).c;
+  const beforeUnnamed = await incidentCount();
+  const unnamed = await mCall('opscat_create_incident', { title: 'no org named' }, 21);
+  chk('a write naming NO organization is refused',
+    unnamed.result?.isError === true || /organization/i.test(JSON.stringify(unnamed)),
+    JSON.stringify(unnamed).slice(0, 200));
+  // The refusal is only a refusal if nothing happened — the same claim
+  // e2e-retention makes about its caps. A 3-tenant connection that writes into
+  // "the first one" on an unnamed call is the whole failure mode this guards.
+  chk('…and it wrote no incident anywhere', (await incidentCount()) === beforeUnnamed);
+
+  const foreign = await mCall('opscat_create_incident',
+    { title: 'into an org outside the grant', organization: ORG_D.name }, 22);
+  chk('an organization the grant does not cover is refused, even though the user IS a member',
+    /does not cover/.test(JSON.stringify(foreign)), JSON.stringify(foreign).slice(0, 200));
+  chk('…and wrote nothing', (await incidentCount()) === beforeUnnamed);
+
+  // Role is per org: lead+ is required to open an incident, and the connection
+  // holds admin in B and analyst in C. Listing is gated on the BEST role, so the
+  // tool is visible — the refusal has to come from the per-call check.
+  chk('the lead-only tool is LISTED (admin somewhere in the connection)',
+    !!mTools.find((t) => t.name === 'opscat_create_incident'));
+  const inB = await mCall('opscat_create_incident', { title: 'B incident', organization: ORG_B.name }, 23);
+  chk('…and works in the organization where the role is admin',
+    !inB.result?.isError, JSON.stringify(inB).slice(0, 200));
+  const inC = await mCall('opscat_create_incident', { title: 'C incident', organization: ORG_C.name }, 24);
+  chk('…and is refused in the one where it is analyst',
+    /role in .* is analyst/.test(JSON.stringify(inC)), JSON.stringify(inC).slice(0, 200));
+  chk('…having written exactly ONE incident, in B', (await q.prepare(
+    'SELECT COUNT(*) c FROM incidents WHERE org_id = ?').get(ORG_B.id)).c === 1
+    && (await q.prepare('SELECT COUNT(*) c FROM incidents WHERE org_id = ?').get(ORG_C.id)).c === 0);
+
+  // Reads land in the named org and nowhere else.
+  const readB = jsonOf(await mCall('opscat_list_incidents', { organization: ORG_B.name }, 25));
+  const readC = jsonOf(await mCall('opscat_list_incidents', { organization: ORG_C.name }, 26));
+  // Found here rather than designed for: `opscat_list_incidents` declared
+  // `severity` as a string against a BIGINT column, so it returned an output
+  // validation error for every org that HAD an incident and validated fine for
+  // every org that did not. No check had ever listed incidents with data in
+  // them, which is the only reason 64 green checks meant nothing here.
+  chk('listing incidents with data in them validates at all',
+    !!readB && typeof readB.incidents?.[0]?.severity === 'number', JSON.stringify(readB).slice(0, 200));
+  chk('a read is answered from the organization it named',
+    !!readB && !!readC && readB.incidents.some((i) => i.title === 'B incident')
+      && !readC.incidents.some((i) => i.title === 'B incident'),
+    `B=${readB && readB.count} C=${readC && readC.count}`);
+
+  // ── the org set survives a refresh, and a lost membership shrinks it ──────
+  const mRefreshed = await (await tokenReq({
+    grant_type: 'refresh_token', client_id: multiClient.client_id, refresh_token: mGrant.tok.refresh_token,
+  })).json();
+  chk('a refresh keeps the connection alive', !!mRefreshed.access_token, JSON.stringify(mRefreshed));
+  const rMcp = (body2, extra = {}) => fetch(`${B}/mcp`, {
+    method: 'POST', headers: { ...H, authorization: `Bearer ${mRefreshed.access_token}`, ...extra },
+    body: JSON.stringify(body2),
+  });
+  const rInit = await rMcp({
+    jsonrpc: '2.0', method: 'initialize', id: 1,
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'r', version: '1' } },
+  });
+  const rS = { 'mcp-session-id': rInit.headers.get('mcp-session-id') };
+  const rList = async () => jsonOf(await parse(await rMcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 30,
+    params: { name: 'opscat_list_organizations', arguments: {} },
+  }, rS))) || { organizations: [] };
+  chk('…with the SAME organizations — a refresh may not widen or narrow the grant',
+    (await rList()).count === 3);
+
+  await removeMembership(user.id, ORG_B.id);
+  const afterDrop = await rList();
+  chk('losing ONE membership drops exactly that organization',
+    afterDrop.count === 2 && !afterDrop.organizations.some((o) => o.name === ORG_B.name),
+    JSON.stringify(afterDrop));
+  const stillC = await parse(await rMcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 31,
+    params: { name: 'opscat_list_incidents', arguments: { organization: ORG_C.name } },
+  }, rS));
+  chk('…and the others keep working — leaving one org must not cost the rest',
+    !stillC.result?.isError, JSON.stringify(stillC).slice(0, 160));
+  const goneB = await parse(await rMcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 32,
+    params: { name: 'opscat_list_incidents', arguments: { organization: ORG_B.name } },
+  }, rS));
+  chk('…while the dropped one is refused with the SAME token that reached it a moment ago',
+    /does not cover/.test(JSON.stringify(goneB)), JSON.stringify(goneB).slice(0, 160));
+
+  // ── "include organizations I join later" ─────────────────────────────────
+  const allClient = await mkClient('AllOrgs');
+  const all = await authorize(allClient, [org.id], true);
+  const aMcp = (body2, extra = {}) => fetch(`${B}/mcp`, {
+    method: 'POST', headers: { ...H, authorization: `Bearer ${all.tok.access_token}`, ...extra },
+    body: JSON.stringify(body2),
+  });
+  const aInit = await aMcp({
+    jsonrpc: '2.0', method: 'initialize', id: 1,
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'a', version: '1' } },
+  });
+  const aS = { 'mcp-session-id': aInit.headers.get('mcp-session-id') };
+  const aList = async () => jsonOf(await parse(await aMcp({
+    jsonrpc: '2.0', method: 'tools/call', id: 40,
+    params: { name: 'opscat_list_organizations', arguments: {} },
+  }, aS))) || { organizations: [] };
+  const allBefore = await aList();
+  chk('an `all` grant covers every current membership, not just the box that was ticked',
+    allBefore.count === 3 && allBefore.organizations.some((o) => o.name === ORG_D.name),
+    JSON.stringify(allBefore));
+  const ORG_E = await mkOrg('Epsilon-mcp');
+  await addMembership(user.id, ORG_E.id, 'admin');
+  chk('…and an organization joined AFTERWARDS appears with no re-authorization',
+    (await aList()).organizations.some((o) => o.name === ORG_E.name));
+  // The `list` grant from earlier must NOT have grown the same way — that is the
+  // whole difference between the two modes, and it is one column apart.
+  chk('…while a `list` grant does not grow', !(await rList()).organizations.some((o) => o.name === ORG_E.name));
+
+  // ── nothing left to act in ends the grant ────────────────────────────────
+  for (const o of [org.id, ORG_C.id]) await removeMembership(user.id, o);
+  const deadRefresh = await (await tokenReq({
+    grant_type: 'refresh_token', client_id: multiClient.client_id, refresh_token: mRefreshed.refresh_token,
+  })).json();
+  chk('when a grant can reach NO organization at all, the refresh dies',
+    deadRefresh.error === 'invalid_grant', JSON.stringify(deadRefresh));
+  // Put the seat back: later sections must not inherit a user with no org.
+  await addMembership(user.id, org.id, 'admin');
+
   // (no row cleanup: the whole database goes with the temp directory)
   report();
 }

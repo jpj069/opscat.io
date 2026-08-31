@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const q = require('../db/shim');
 const { now, sha256, randHex } = require('../util');
 const tokens = require('./tokens');
+const { listMemberships } = require('../db');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -26,28 +27,74 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // family, so per-family scopes would be noise (see docs/MCP-PLAN.md).
 const AVAILABLE_SCOPES = ['read', 'write'];
 
+// How a grant names the organizations it covers. 'list' is the default and the
+// only one the consent screen picks unless the person asks for the other.
+const ORG_SCOPES = ['list', 'all'];
+
+// The stored set, normalised. It is an UPPER BOUND and never an authority —
+// every caller intersects it with `memberships`, which is what makes leaving an
+// organization take effect on the next request rather than at token expiry.
+//
+// A row written before multi-org existed has org_scope 'list' and org_ids NULL,
+// and answers [org_id]: the exact behaviour it had, with no branch anywhere that
+// has to know it is a legacy row.
+function grantOrgs(row) {
+  if (row.org_scope === 'all') return { scope: 'all', ids: null };
+  const ids = String(row.org_ids || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return { scope: 'list', ids: ids.length ? ids : [row.org_id] };
+}
+
+// The organizations a grant can actually act in, right now.
+//
+// This is THE function multi-org rests on, and the reason it is one function:
+// the stored set is an upper bound and `memberships` is the authority, so the
+// answer is an intersection that has to be recomputed per request. A snapshot
+// held anywhere — in the token, in a session, in a principal built at connect
+// time — would keep answering "yes" for an organization somebody was removed
+// from, for as long as that snapshot lived.
+//
+// Returns membership rows ({ org_id, role, name, slug, plan, status }), so the
+// role comes from the same place `requireRole` reads it and differs per org,
+// which it genuinely can: admin in one, analyst in another.
+async function resolveOrgs(userId, row) {
+  const g = grantOrgs(row);
+  const mine = await listMemberships(userId);
+  return g.scope === 'all' ? mine : mine.filter((m) => g.ids.includes(m.org_id));
+}
+
+// Written form of the same thing, for the two INSERTs. `all` deliberately
+// stores NO list: a snapshot taken at consent time would be a second answer to
+// "which orgs?" that silently disagrees with the first one a month later.
+function orgColumns(orgScope, orgIds) {
+  return orgScope === 'all'
+    ? ['all', null]
+    : ['list', (Array.isArray(orgIds) ? orgIds : []).filter(Boolean).join(',') || null];
+}
+
 const insClient = q.prepare(
   'INSERT INTO oauth_clients (client_id, name, redirect_uris, scopes, created_at) VALUES (?,?,?,?,?)');
 const getClientStmt = q.prepare('SELECT * FROM oauth_clients WHERE client_id = ?');
 
 const insCode = q.prepare(`INSERT INTO oauth_codes
-  (code_hash, client_id, user_id, org_id, redirect_uri, code_challenge, scopes, resource, expires_at, created_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  (code_hash, client_id, user_id, org_id, redirect_uri, code_challenge, scopes, org_scope, org_ids,
+   resource, expires_at, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
 const getCode = q.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?');
 const delCode = q.prepare('DELETE FROM oauth_codes WHERE code_hash = ?');
 
 const insToken = q.prepare(`INSERT INTO oauth_tokens
-  (token_hash, kind, client_id, user_id, org_id, scopes, resource, expires_at, created_at)
-  VALUES (?,?,?,?,?,?,?,?,?)`);
+  (token_hash, kind, client_id, user_id, org_id, scopes, org_scope, org_ids, resource,
+   expires_at, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
 const getToken = q.prepare("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = ?");
 const delToken = q.prepare('DELETE FROM oauth_tokens WHERE token_hash = ?');
 const touchToken = q.prepare('UPDATE oauth_tokens SET last_used_at = ? WHERE id = ?');
 const delTokensForClientUser = q.prepare(
   'DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ? AND org_id = ?');
-const listTokensForUser = q.prepare(`SELECT client_id, org_id, scopes, MAX(created_at) created_at,
-  MAX(last_used_at) last_used_at, COUNT(*) n
+const listTokensForUser = q.prepare(`SELECT client_id, org_id, scopes, org_scope, org_ids,
+  MAX(created_at) created_at, MAX(last_used_at) last_used_at, COUNT(*) n
   FROM oauth_tokens WHERE user_id = ? AND kind = 'access' AND expires_at > ?
-  GROUP BY client_id, org_id, scopes`);
+  GROUP BY client_id, org_id, scopes, org_scope, org_ids`);
 
 // ── clients ────────────────────────────────────────────────────────────────
 
@@ -83,11 +130,13 @@ async function getClient(clientId) {
 
 // ── authorization codes ────────────────────────────────────────────────────
 
-async function issueCode({ clientId, userId, orgId, redirectUri, codeChallenge, scopes, resource }) {
+async function issueCode({ clientId, userId, orgId, orgScope, orgIds, redirectUri,
+  codeChallenge, scopes, resource }) {
   const code = randHex(32);
   const t = now();
+  const [scope, ids] = orgColumns(orgScope, orgIds);
   await insCode.run(sha256(code), clientId, userId, orgId, redirectUri, codeChallenge,
-    scopes.join(','), resource || null, t + CODE_TTL_MS, t);
+    scopes.join(','), scope, ids, resource || null, t + CODE_TTL_MS, t);
   return code;
 }
 
@@ -125,13 +174,18 @@ async function consumeCode(code, { clientId, redirectUri, codeVerifier }) {
 
 // ── tokens ─────────────────────────────────────────────────────────────────
 
-async function issueTokens({ clientId, userId, orgId, scopes, resource }) {
+async function issueTokens({ clientId, userId, orgId, orgScope, orgIds, scopes, resource }) {
   const access = tokens.mint('mcpAccess', 32);
   const refresh = tokens.mint('mcpRefresh', 32);
   const t = now();
   const s = Array.isArray(scopes) ? scopes.join(',') : String(scopes);
-  await insToken.run(sha256(access), 'access', clientId, userId, orgId, s, resource || null, t + ACCESS_TTL_MS, t);
-  await insToken.run(sha256(refresh), 'refresh', clientId, userId, orgId, s, resource || null, t + REFRESH_TTL_MS, t);
+  // Carried through the rotation exactly like `scopes`: a refresh must not be a
+  // way to widen or narrow what was consented to.
+  const [oScope, oIds] = orgColumns(orgScope, orgIds);
+  await insToken.run(sha256(access), 'access', clientId, userId, orgId, s, oScope, oIds,
+    resource || null, t + ACCESS_TTL_MS, t);
+  await insToken.run(sha256(refresh), 'refresh', clientId, userId, orgId, s, oScope, oIds,
+    resource || null, t + REFRESH_TTL_MS, t);
   return {
     access_token: access,
     refresh_token: refresh,
@@ -184,9 +238,12 @@ async function listGrants(userId) {
   const rows = await listTokensForUser.all(userId, now());
   const out = [];
   for (const r of rows) {
+    const g = grantOrgs(r);
     out.push({
       clientId: r.client_id,
       orgId: r.org_id,
+      orgScope: g.scope,
+      orgIds: g.ids,
       scopes: r.scopes.split(','),
       createdAt: r.created_at,
       lastUsedAt: r.last_used_at,
@@ -206,7 +263,7 @@ async function purgeExpired() {
 }
 
 module.exports = {
-  AVAILABLE_SCOPES, ACCESS_TTL_MS, REFRESH_TTL_MS,
+  AVAILABLE_SCOPES, ORG_SCOPES, ACCESS_TTL_MS, REFRESH_TTL_MS, grantOrgs, resolveOrgs,
   registerClient, getClient, validRedirectUri,
   issueCode, consumeCode,
   issueTokens, consumeRefresh, verifyAccessToken, revokeToken, revokeGrant, listGrants,

@@ -890,6 +890,7 @@ function AddCheckModal({ locations, onClose, onAdded }: {
   const [jsonPath, setJsonPath] = useState('');
   const [jsonValue, setJsonValue] = useState('');
   const [allAgents, setAllAgents] = useState(true);
+  const [runNow, setRunNow] = useState(true);
   const [selAgents, setSelAgents] = useState<number[]>([]);
   const [uaPreset, setUaPreset] = useState('');
   const [uaCustom, setUaCustom] = useState('');
@@ -910,7 +911,7 @@ function AddCheckModal({ locations, onClose, onAdded }: {
     } : undefined;
     try {
       await api.post('/api/synthetics/checks', { type, target, intervalS, timeoutMs, assertions,
-        locationIds: allAgents ? [] : selAgents,
+        locationIds: allAgents ? [] : selAgents, runNow,
         // '' = inherit (org default, then ours). The sentinel never leaves the form.
         userAgent: type === 'http'
           ? (uaPreset === '__custom__' ? uaCustom.trim() : uaPreset) : undefined });
@@ -1016,10 +1017,22 @@ function AddCheckModal({ locations, onClose, onAdded }: {
             ))}
           </div>
         )}
+        {/* Default ON: a new check that shows an empty bar until the next tick
+            reads as "did that work?", which is the question this screen exists
+            to answer. It runs on the built-in probe — remote agents pick the
+            check up on their own next cycle, so the label promises one result,
+            not all of them. */}
+        <div className="row" style={{ justifyContent: 'space-between', margin: '4px 0 10px' }}>
+          <span className="micro text-2xs">RUN IT ONCE NOW</span>
+          <span className="row" style={{ gap: 6 }}>
+            <span className="mono text-2xs text-text2">check now</span>
+            <Toggle on={runNow} onClick={() => setRunNow(!runNow)} />
+          </span>
+        </div>
         {err && <div className="text-sm" style={{ color: SEV.critical, marginBottom: 8 }}>{err}</div>}
         <Button variant="primary" block
  disabled={busy || !target || (!allAgents && selAgents.length === 0)}>
-          {busy ? '…' : 'Create check'}</Button>
+          {busy ? (runNow ? 'creating and checking…' : '…') : 'Create check'}</Button>
       </form>
     </Modal>
   );

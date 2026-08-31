@@ -177,9 +177,48 @@ const utcDaySql = (col) => `${col} - ${col} % ${DAY_MS}`;
 const utcDayLabel = (ms) => new Date(Number(ms)).toISOString().slice(0, 10);
 
 
+/**
+ * The canonical form of an HTTP check target — `null` if it cannot be one.
+ *
+ * A person types `link11.com`, which is a perfectly good thing to monitor and
+ * not a URL. Something has to add the scheme, and for a long time TWO things
+ * did it differently: the in-process probe prepended `https://`, and the Sensor
+ * Agent called `fetch(target)` straight, where undici answers
+ *
+ *     TypeError: Failed to parse URL from link11.com
+ *
+ * So the same check passed from Nuremberg and failed from N. Virginia and Los
+ * Angeles, with an error message about OUR parser printed where the customer
+ * reads "is my site up?". Two implementations of one rule, and the one that
+ * drifted was the one running on the customer-facing fleet.
+ *
+ * The fix is not to copy the line into the agent — it is that the target is
+ * canonical BEFORE it is stored, so no runner has an opinion. Both writers go
+ * through here and migration 038 backfills; a deployed agent is therefore fixed
+ * by the migration alone, without waiting for it to self-update.
+ *
+ * Only the scheme is added. `new URL` is a validator here, not a formatter:
+ * returning `u.href` would rewrite `https://link11.com` to
+ * `https://link11.com/` and quietly edit what the customer typed.
+ */
+function httpTarget(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  // `new URL` is the whole validator, and that is deliberate rather than thin.
+  // A guard on `u.hostname` was written here first and MEASURED to be dead:
+  // for a special scheme the WHATWG parser rejects an empty host outright, so
+  // `https://`, `https:///`, `https://:8080` and `https://#x` all throw. The
+  // mutation that removed it left all 173 checks green, which is what a
+  // redundant line looks like — and a line kept "for safety" with a comment
+  // asserting a runtime difference nobody has seen is worse than no line.
+  try { new URL(withScheme); } catch { return null; }
+  return withScheme;
+}
+
 module.exports = {
   now, sha256, randHex, hashPassword, verifyPassword, encrypt, decrypt,
   RateLimiter, SseHub, isStr, optStr, clampInt, isEmail, httpError, escapeHtml,
   newId, DEFAULT_ORG_ID, isId, isOrgId,
-  DAY_MS, utcDaySql, utcDayLabel,
+  DAY_MS, utcDaySql, utcDayLabel, httpTarget,
 };
