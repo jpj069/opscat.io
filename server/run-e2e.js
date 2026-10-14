@@ -125,12 +125,18 @@ for (const f of files) {
      * it. Every harness but one asserts against the Postgres log store, which
      * is what the community edition runs and therefore what must stay covered;
      * `e2e-logstore` is the one that wants ClickHouse and reads OPSCAT_CH_URL
-     * to get it. Opting in by name beats inheriting by accident. */
+     * to get it. Opting in by name beats inheriting by accident.
+     *
+     * MAIL_TRANSPORT=off for the same reason: an exported mail key or relay
+     * would otherwise make every harness that creates a user or fires the
+     * seeded e-mail rule send LIVE mail. A harness that wants to see mail
+     * installs `mailer._setTestSink()`, which outranks 'off'. */
     env: {
       ...process.env,
       NODE_ENV: 'test',
       DATABASE_URL: dbUrl,
       CLICKHOUSE_URL: '',
+      MAIL_TRANSPORT: 'off',
       OPSCAT_CH_URL: process.env.OPSCAT_CH_URL || process.env.CLICKHOUSE_URL || '',
     },
   });

@@ -168,8 +168,9 @@ async function schemaVersion() {
  *
  * The precondition is what makes this safe, and it is measured rather than
  * assumed: there are ZERO writes to `settings` or `org_settings` anywhere
- * outside this file (the only direct SQL elsewhere is two READS in
- * lib/status-pages.js). A writer that bypassed `setSetting` would leave the
+ * outside this file (the only direct SQL elsewhere is READS — two in
+ * lib/status-pages.js, and engine/seed.js's legacy-sender sweep, which then
+ * writes back through setSetting / setOrgSetting). A writer that bypassed `setSetting` would leave the
  * cache stale with nothing to notice — so if one is ever added, it goes through
  * here or this comment is a lie. `e2e-pipeline`'s classifier checks and
  * `e2e-branding`'s plan gates both read through this path, so a broken cache

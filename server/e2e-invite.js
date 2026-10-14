@@ -2,7 +2,7 @@
 /* End-to-end check for the account-activation flow (docs/API.md § Users).
  *
  * Deliberately hermetic: throwaway database, and no mail ever leaves the process
- * — the Resend transport is exercised for real up to the HTTP call, which a stub
+ * — the mailer is exercised for real up to the transport call, which a sink
  * intercepts and records. So this runs in CI without network and without a mail
  * provider, and still proves the mail was BUILT correctly (subject, link, TTL).
  *
@@ -38,22 +38,20 @@ process.env.OPSCAT_EDITION = 'community';
 process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
-process.env.RESEND_API_KEY = 're_e2e_stub';
-process.env.MAIL_TRANSPORT = 'resend';
+process.env.MAIL_TRANSPORT = 'off'; // the sink below is the only transport
 
-// --- mail stub: intercept ONLY the provider call, leave every other fetch alone.
-// The mailer's own code path (transport selection, headers, body) still runs.
-const realFetch = global.fetch;
+// --- mail sink: capture the finished message where a transport would send it.
+// The mailer's own code path (selection, headers, body) still runs; only the
+// provider call is replaced, so nothing leaves the process.
+const mailer = require('./src/mailer');
 const MAILS = [];
 let mailFails = false;
-global.fetch = (url, opts) => {
-  if (String(url).startsWith('https://api.resend.com/')) {
-    if (mailFails) return Promise.resolve(new Response('upstream down', { status: 500 }));
-    MAILS.push(JSON.parse(opts.body));
-    return Promise.resolve(new Response('{"id":"stub"}', { status: 200 }));
-  }
-  return realFetch(url, opts);
+const mailSink = async (msg) => {
+  if (mailFails) throw new Error('stub 500: upstream down');
+  MAILS.push(msg);
 };
+mailer._setTestSink(mailSink);
+const realFetch = global.fetch;
 
 require('./src/index.js'); // boots the app on :3119
 
@@ -250,8 +248,7 @@ async function main() {
   chk('and the browser is told to force a change', nmLogin.user.mustChangePassword === true);
 
   // ── 6. no mail transport at all -> the documented fallback ────────────────
-  const keepKey = config.resendApiKey;
-  config.resendApiKey = '';
+  mailer._setTestSink(null);
   const offline = await call(admin, 'POST', '/api/admin/users',
     { email: 'offline@e2e.test', name: 'Off Line', role: 'analyst' });
   chk('without a transport an invite returns a password',
@@ -265,7 +262,7 @@ async function main() {
   const offReset = await call(admin, 'PATCH', `/api/admin/users/${off.id}`, { resetPassword: true });
   chk('a reset without a transport returns a password',
     typeof offReset.j.initialPassword === 'string' && offReset.j.invited === undefined);
-  config.resendApiKey = keepKey;
+  mailer._setTestSink(mailSink);
 
   // ── 7. reset by link ──────────────────────────────────────────────────────
   const victim = await mkUser('victim@e2e.test', 'analyst', DEFAULT_ORG_ID);
@@ -316,11 +313,10 @@ async function main() {
   // ── 10. the instance advertises whether it can mail at all ────────────────
   const pub = await (await realFetch(`${BASE}/api/plans`)).json();
   chk('/api/plans reports mail configured', pub.auth.mail === true, JSON.stringify(pub.auth));
-  const keep2 = config.resendApiKey;
-  config.resendApiKey = '';
+  mailer._setTestSink(null);
   const pub2 = await (await realFetch(`${BASE}/api/plans`)).json();
   chk('and reports it false without a transport', pub2.auth.mail === false);
-  config.resendApiKey = keep2;
+  mailer._setTestSink(mailSink);
 
   // ── 11. platform-initiated org creation takes the SAME path ───────────────
   // It used to be the odd one out: a random password, no mail, and — the part that

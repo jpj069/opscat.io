@@ -19,9 +19,8 @@ has no host port on purpose. Set your domain in `.env`:
 OPSCAT_DOMAIN=monitoring.example.com     # Caddy auto-provisions TLS
 OPSCAT_BASE_URL=https://monitoring.example.com
 OPSCAT_SECRET=<long random string>       # cookie/crypto secret; generate once
-# optional e-mail (alerts + magic-link login) — EITHER the Resend API:
-RESEND_API_KEY=
-# OR any SMTP relay (SES, Mailgun, corporate smarthost, …):
+# optional e-mail (alerts + magic-link login) via any SMTP relay (SES,
+# Mailgun, Resend's SMTP endpoint, a corporate smarthost, …):
 SMTP_HOST=
 SMTP_PORT=587                            # 587 submission (default); 465 with SMTP_SECURE=1
 SMTP_USER=

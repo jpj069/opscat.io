@@ -106,7 +106,7 @@ function orgName(orgId) {
 function fromAddress() {
   // status mails are notifications, so they share the alert sender
   const { getSetting } = require('../db');
-  return getSetting('alert_email_from', 'OpsCat Alerts <onboarding@resend.dev>');
+  return getSetting('alert_email_from', 'OpsCat Alerts <alerts@opscat.io>');
 }
 
 async function sendConfirmMail(page, email, token) {

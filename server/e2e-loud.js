@@ -58,7 +58,7 @@ process.env.OPSCAT_BASE_URL = 'http://127.0.0.1:3151';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 process.env.OPSCAT_ALLOW_PRIVATE_TARGETS = '1';
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 require('./src/index.js');

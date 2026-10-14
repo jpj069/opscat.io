@@ -79,7 +79,7 @@ router.post('/magic-link', async (req, res) => {
       await q.prepare(`INSERT INTO login_tokens (token_hash, user_id, created_at, expires_at, purpose)
         VALUES (?, ?, ?, ?, 'login')`).run(sha256(token), user.id, t, t + 15 * 60 * 1000);
       const url = `${config.baseUrl}/app/login?token=${token}`;
-      const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
+      const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <alerts@opscat.io>'));
       // audit before the send so a delivery failure is still visible as a
       // matched request (unknown addresses leave no trace on purpose)
       sec.audit(user.id, 'magic_link_requested', ip);

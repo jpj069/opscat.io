@@ -51,9 +51,9 @@ module.exports = {
   statusHost: (process.env.OPSCAT_STATUS_HOST || '').trim().toLowerCase(),
   // OPSCAT_SECRET encrypts SNMP communities and signs nothing else; generated+persisted if absent.
   secret: process.env.OPSCAT_SECRET || null,
-  resendApiKey: process.env.RESEND_API_KEY || null,
-  // MAIL_TRANSPORT forces 'resend' or 'smtp'; unset = Resend when its key is
-  // set, otherwise SMTP when SMTP_HOST is set (see mailer.js).
+  // MAIL_TRANSPORT forces a transport ('smtp', or the hosted one when present)
+  // or disables mail ('off'); unset = the hosted transport when configured,
+  // otherwise SMTP when SMTP_HOST is set (see mailer.js).
   mailTransport: process.env.MAIL_TRANSPORT || null,
   smtp: {
     host: process.env.SMTP_HOST || null,

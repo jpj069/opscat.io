@@ -1,7 +1,7 @@
 'use strict';
 /* End-to-end check for status-page subscribers (docs/INCIDENTS-V2.md slice 2).
  *
- * Hermetic like e2e-invite.js: throwaway database, and the Resend transport
+ * Hermetic like e2e-invite.js: throwaway database, and the mailer
  * runs for real up to the HTTP call, which a stub intercepts — so every mail
  * is proven to be BUILT right (recipient, subject, links) without a network.
  *
@@ -35,19 +35,12 @@ process.env.OPSCAT_EDITION = 'community';
 process.env.OPSCAT_BASE_URL = 'https://ops.e2e.test';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
-process.env.RESEND_API_KEY = 're_e2e_stub';
-process.env.MAIL_TRANSPORT = 'resend';
+process.env.MAIL_TRANSPORT = 'off'; // the sink below is the only transport
 
-// --- mail stub: intercept ONLY the provider call (invite-harness pattern) ----
+// --- mail sink: capture the finished message (invite-harness pattern) -------
 const realFetch = global.fetch;
 const MAILS = [];
-global.fetch = (url, opts) => {
-  if (String(url).startsWith('https://api.resend.com/')) {
-    MAILS.push(JSON.parse(opts.body));
-    return Promise.resolve(new Response('{"id":"stub"}', { status: 200 }));
-  }
-  return realFetch(url, opts);
-};
+require('./src/mailer')._setTestSink(async (msg) => { MAILS.push(msg); });
 
 require('./src/index.js');
 

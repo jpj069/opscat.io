@@ -64,10 +64,10 @@ process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 // The seat-cap checks CREATE users, and creating a user mails an activation
 // link whenever a transport is configured. On any machine with these exported
-// (this one has RESEND_API_KEY) the harness would send live mail to addresses
+// (this one has a mail key) the harness would send live mail to addresses
 // that do not exist and then race a network round trip. Same reasoning as
 // e2e-alerts.js, which removes them for the e-mail fallback in the ladder.
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 require('./src/index.js'); // boots the app on :3135

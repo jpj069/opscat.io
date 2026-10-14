@@ -81,7 +81,7 @@ process.env.OPSCAT_SECRET = 'e2e-logstore-secret';
 /* The seeded "Critical → E-Mail" rule fires on the events this harness's lines
  * create. With a key in the environment that is a live outbound call per event
  * — measured in the benchmark session, where it also mailed real people. */
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 const { chk, report, die, onExit, count } = require('./e2e-lib').harness();

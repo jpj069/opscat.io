@@ -71,8 +71,8 @@ OPSCAT_ADMIN_EMAIL=admin@bench.test OPSCAT_ADMIN_PASSWORD=bench-admin-password-1
   node src/index.js
 ```
 
-`RESEND_API_KEY` and `SMTP_HOST` must be **unset**. With a Resend key in the
-environment the seeded "Critical → E-Mail" alert rule fires on every critical
+Mail must be **off** — run with `MAIL_TRANSPORT=off` (or with no mail key and no
+`SMTP_HOST`). With a mail key in the environment the seeded "Critical → E-Mail" alert rule fires on every critical
 event the load test creates: the first run of this benchmark made live outbound
 API calls to Resend, which both distorts the measurement and mails real people.
 
@@ -406,7 +406,8 @@ from scratch afterwards rather than salvaged from around it.
 The first attempt ran with `RESEND_API_KEY` inherited from the shell. The seeded
 `Critical → E-Mail` alert rule fired on every critical event the load test
 created, producing a live outbound HTTPS call per event. Everything in §1 and §3
-was re-measured with the variable unset.
+was re-measured with the variable unset. (Resend has since been removed;
+`MAIL_TRANSPORT=off` is the switch that guarantees no live mail whatever is exported.)
 
 ### 4.4 The agent's probe cycle had no re-entrancy guard — FIXED in agent v0.4.0
 

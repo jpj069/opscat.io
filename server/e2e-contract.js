@@ -267,7 +267,7 @@ async function main() {
   chk('POST /api/oncall/me/methods answers 201 and its schema', method.status === 201, `status ${method.status}`);
   // The one route whose 2xx cannot be produced hermetically: sending a real test
   // notification needs a real transport, and this suite deliberately has none
-  // (e2e-alerts clears RESEND_API_KEY for exactly that reason). So what is
+  // (run-e2e.js sets MAIL_TRANSPORT=off for exactly that reason). So what is
   // asserted is the DECLARED error — the route runs, the gate refuses, and the
   // envelope is the one the spec promises. Saying that is better than a green
   // check implying the success path was tested.

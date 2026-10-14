@@ -6,7 +6,7 @@
 // cannot answer a request out of a half-seeded database.
 const crypto = require('crypto');
 const q = require('../db/shim');
-const { getOrgSetting, setOrgSetting, addMembership } = require('../db');
+const { getOrgSetting, setOrgSetting, setSetting, addMembership } = require('../db');
 const { now, hashPassword, newId, DEFAULT_ORG_ID } = require('../util');
 
 async function seed({ log = console.log } = {}) {
@@ -83,10 +83,27 @@ async function seed({ log = console.log } = {}) {
   await seedSetting('org_name', 'OpsCat');
   await seedSetting('backend_label', 'nbg1 · PRIMARY');
   await seedSetting('status_published', '1');
-  await seedSetting('alert_email_from', process.env.OPSCAT_ALERT_FROM || 'OpsCat Alerts <onboarding@resend.dev>');
+  await seedSetting('alert_email_from', process.env.OPSCAT_ALERT_FROM || 'OpsCat Alerts <alerts@opscat.io>');
   await seedSetting('auth_email_from', process.env.OPSCAT_AUTH_FROM || process.env.OPSCAT_ALERT_FROM ||
-    'OpsCat <onboarding@resend.dev>');
+    'OpsCat <alerts@opscat.io>');
   await seedSetting('retention_logs_days', '7');
+
+  /* Earlier versions seeded (and defaulted to) Resend's sandbox sender,
+   * `onboarding@resend.dev`. That address only ever worked through Resend's
+   * own API, which is gone, so a stored copy of it now fails every send. Only
+   * that exact address is rewritten — the display name is kept, and anything an
+   * admin typed themselves is left alone. Goes through setSetting /
+   * setOrgSetting so the settings cache stays current (see db.js). */
+  const LEGACY_FROM = 'onboarding@resend.dev';
+  const fixFrom = (v) => String(v).split(LEGACY_FROM).join('alerts@opscat.io');
+  for (const r of await q.prepare(`SELECT key, value FROM settings
+      WHERE key IN ('alert_email_from', 'auth_email_from') AND value LIKE ?`).all(`%${LEGACY_FROM}%`)) {
+    await setSetting(r.key, fixFrom(r.value));
+  }
+  for (const r of await q.prepare(`SELECT org_id, key, value FROM org_settings
+      WHERE key IN ('alert_email_from', 'auth_email_from') AND value LIKE ?`).all(`%${LEGACY_FROM}%`)) {
+    await setOrgSetting(r.org_id, r.key, fixFrom(r.value));
+  }
 
   return adminCredentials;
 }

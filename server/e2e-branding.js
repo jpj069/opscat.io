@@ -63,14 +63,10 @@ process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 // A mail transport, because `subscribers.available()` requires one — without it
 // subscribe() returns `unavailable` before it ever reaches the allowance check,
 // and the three subscriber checks below tested a switched-off path (they failed
-// for that reason, not for a product one). Only the PROVIDER call is stubbed, the
-// invite-harness pattern, so everything up to the HTTP request runs for real.
-process.env.RESEND_API_KEY = 're_e2e_stub';
-process.env.MAIL_TRANSPORT = 'resend';
-const realFetch = global.fetch;
-global.fetch = (url, opts) => (String(url).startsWith('https://api.resend.com/')
-  ? Promise.resolve(new Response('{"id":"stub"}', { status: 200 }))
-  : realFetch(url, opts));
+// for that reason, not for a product one). A sink stands in for the provider
+// call, the invite-harness pattern, so everything up to the send runs for real.
+process.env.MAIL_TRANSPORT = 'off';
+require('./src/mailer')._setTestSink(async () => {});
 
 require('./src/index.js');
 

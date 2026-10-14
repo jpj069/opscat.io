@@ -55,7 +55,7 @@
  *     way to 2.
  *
  * Hermetic: throwaway database, own port, no network. The two outbound calls the
- * product really makes — Resend for mail, the EC2 API for a provisioned sensor —
+ * product really makes — the mail transport (captured by a sink), the EC2 API for a provisioned sensor —
  * are intercepted at the HTTP boundary (the e2e-subscribers.js pattern), so the
  * mail and the provisioning path run FOR REAL right up to the socket.
  *   cd server && node e2e-concurrency.js
@@ -76,8 +76,7 @@ process.env.OPSCAT_EDITION = 'cloud';
 process.env.OPSCAT_BASE_URL = 'http://127.0.0.1:3155'; // OAuth `resource` is checked against it
 process.env.OPSCAT_ADMIN_EMAIL = 'admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
-process.env.RESEND_API_KEY = 're_e2e_stub';
-process.env.MAIL_TRANSPORT = 'resend';
+process.env.MAIL_TRANSPORT = 'off'; // the sink below is the only transport
 // The BYO-cloud node cap, lowered so "at the cap" is one seeded row rather than
 // twenty. It is what the provision gate is written against.
 process.env.OPSCAT_MAX_BYO_NODES = '1';
@@ -87,6 +86,7 @@ process.env.OPSCAT_MAX_BYO_NODES = '1';
 // the AWS provider signs a genuine SigV4 request. Only the wire is stubbed.
 const realFetch = global.fetch;
 const MAILS = [];
+require('./src/mailer')._setTestSink(async (msg) => { MAILS.push(msg); });
 const ec2Xml = (body) => (String(body).includes('Action=DescribeImages')
   ? '<DescribeImagesResponse><imagesSet><item><imageId>ami-000000000000000e2</imageId>'
     + '<creationDate>2026-01-01T00:00:00.000Z</creationDate></item></imagesSet></DescribeImagesResponse>'
@@ -94,10 +94,6 @@ const ec2Xml = (body) => (String(body).includes('Action=DescribeImages')
     + '<ipAddress>203.0.113.7</ipAddress></item></instancesSet></RunInstancesResponse>');
 global.fetch = (url, opts = {}) => {
   const u = String(url);
-  if (u.startsWith('https://api.resend.com/')) {
-    MAILS.push(JSON.parse(opts.body));
-    return Promise.resolve(new Response('{"id":"stub"}', { status: 200 }));
-  }
   if (/^https:\/\/ec2\.[a-z0-9-]+\.amazonaws\.com\//.test(u)) {
     return Promise.resolve(new Response(ec2Xml(opts.body), { status: 200 }));
   }

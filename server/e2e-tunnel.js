@@ -61,7 +61,7 @@ process.env.OPSCAT_TUNNEL_PUBKEY = 'oVxLPq9K3sZ8YbN1mT4uJhR7cW2dF6gA0iE5nQpXsUk=
 process.env.OPSCAT_TUNNEL_GATEWAY_KEY = 'oct_e2e_tunnel_gateway_key_0123456789abcdef';
 process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 require('./src/index.js'); // boots the app on :3173

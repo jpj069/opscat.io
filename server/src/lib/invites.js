@@ -50,7 +50,7 @@ async function sendInviteLink(user, { kind = 'invite', orgName = '', invitedBy =
   await insInvite.run(sha256(token), user.id, t, t + INVITE_TTL_MS);
 
   const url = `${config.baseUrl}/app/login?token=${token}`;
-  const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <onboarding@resend.dev>'));
+  const from = getSetting('auth_email_from', getSetting('alert_email_from', 'OpsCat <alerts@opscat.io>'));
   // "to Acme on OpsCat", but just "to OpsCat" when the org IS called OpsCat —
   // otherwise our own instance mails "invited to OpsCat on OpsCat".
   const where = orgName && orgName !== 'OpsCat' ? `${orgName} on OpsCat` : 'OpsCat';

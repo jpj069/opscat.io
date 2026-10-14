@@ -1,6 +1,6 @@
 'use strict';
 // Alert engine: matches pipeline events against rules, honors cooldowns,
-// sends via e-mail (Resend/SMTP, see mailer.js), Microsoft Teams, Slack,
+// sends via e-mail (see mailer.js), Microsoft Teams, Slack,
 // Telegram, Discord, ntfy, Pushover or a generic webhook, records every
 // attempt.
 //
@@ -42,8 +42,8 @@ function severityLabel(s) {
 // plaintext another; that split is exactly how the two e-mail call sites here
 // drifted into two copies of the same `<pre>`.
 async function sendEmail(recipients, mail, orgId = DEFAULT_ORG_ID) {
-  if (!mailer.mailConfigured()) throw new Error('no mail transport configured (RESEND_API_KEY or SMTP_HOST)');
-  const from = getOrgSetting(orgId, 'alert_email_from', 'OpsCat <onboarding@resend.dev>');
+  if (!mailer.mailConfigured()) throw new Error('no mail transport configured (SMTP_HOST)');
+  const from = getOrgSetting(orgId, 'alert_email_from', 'OpsCat <alerts@opscat.io>');
   await mailer.sendMail({ from, to: recipients, subject: mail.subject,
     html: mail.html, text: mail.text, headers: mail.headers });
 }

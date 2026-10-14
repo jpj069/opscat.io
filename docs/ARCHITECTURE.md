@@ -63,7 +63,7 @@ synthetic monitoring (multi-location), server agents, and SNMP polling.
    hits counter + per-minute buckets (sparklines), first/last seen.
 4. Events scoring ≥ 60 auto-open a **case** (C-1xxx). Analysts assign/close/downgrade in the UI.
 5. The **alert engine** matches new/escalated events against **rules**
-   (trigger name, min severity, cooldown) → notifications via **Resend e-mail** or
+   (trigger name, min severity, cooldown) → notifications via **e-mail** or
    **Microsoft Teams/webhook**, all recorded in `notifications`.
 6. The **automation engine** (`engine/automations.js`, Automation page) matches the
    same events against per-org automations: lifecycle auto-close (a clear event
@@ -640,7 +640,7 @@ Page admin screen.
 - Rate limits (in-memory token buckets): auth 10/min/IP, ingest 600 req/min/key, API 300/min/session.
 - App container publishes **no host port**; only Caddy is reachable from outside (fixes the previous `0.0.0.0:3000` exposure).
 - Security headers via Caddy + app (CSP for the UI, no-sniff, frame-deny, HSTS).
-- Secrets only via environment (`OPSCAT_SECRET`, `RESEND_API_KEY`); never logged, never committed.
+- Secrets only via environment (`OPSCAT_SECRET`, `SMTP_PASS`); never logged, never committed.
 
 ## Multi-tenancy & editions
 

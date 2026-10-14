@@ -57,12 +57,12 @@ process.env.OPSCAT_ADMIN_EMAIL = 'seed-admin@e2e.test';
 process.env.OPSCAT_ADMIN_PASSWORD = 'seed-admin-password-1';
 process.env.OPSCAT_ALLOW_PRIVATE_TARGETS = '1';   // the ntfy stub is on loopback
 // Hermetic means hermetic. A developer machine (and the deploy host) may well
-// have RESEND_API_KEY exported, and the e-mail FALLBACK below would then send
+// have a mail key exported, and the e-mail FALLBACK below would then send
 // real mail from a test run — which it did, on the first attempt at this file:
 // the checks failed not because the code was wrong but because a network round
-// trip to Resend outlived the assertion. Cleared here, so "no mail transport
+// trip to the mail provider outlived the assertion. Cleared here, so "no mail transport
 // configured" is the deterministic, instant answer.
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 require('./src/index.js');

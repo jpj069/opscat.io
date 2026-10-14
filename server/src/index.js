@@ -260,6 +260,8 @@ async function boot() {
 
   app.listen(config.port, () => {
     console.log(`OpsCat server listening on :${config.port}`);
+    // Not awaited: a slow or unreachable mail provider must not hold up boot.
+    require('./mailer').describe().then((d) => console.log(`mail transport: ${d}`), () => {});
   });
 }
 

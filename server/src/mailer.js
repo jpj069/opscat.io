@@ -1,10 +1,31 @@
 'use strict';
-// Outbound e-mail behind one interface, with two interchangeable transports:
-//   - Resend HTTP API (RESEND_API_KEY) — default for the hosted cloud
+// Outbound e-mail behind one interface. Transports:
 //   - generic SMTP submission via nodemailer (SMTP_HOST/PORT/USER/PASS/SECURE)
-//     so self-hosters can point at any relay (SES, Mailgun, corporate smarthost)
-// MAIL_TRANSPORT=resend|smtp forces one; unset, Resend wins when both are set.
+//     so self-hosters can point at any relay (SES, Mailgun, Resend's SMTP,
+//     a corporate smarthost)
+//   - the hosted service's own HTTP mail API, which lives in
+//     `src/ee/mail-transport.js` and is therefore absent from the community
+//     build. When that module is present and configured it is the default.
+// MAIL_TRANSPORT=<name>|smtp forces one; MAIL_TRANSPORT=off disables mail
+// entirely (the e2e harnesses use it so an exported key can never send live
+// mail). Unset: the hosted transport when configured, otherwise SMTP when
+// SMTP_HOST is set.
 const config = require('./config');
+
+// Optional private transport. A missing module is the community build; any
+// OTHER load error is a real bug and must not be swallowed as "absent".
+let hosted = null;
+try { hosted = require('./ee/mail-transport'); } catch (e) {
+  if (e.code !== 'MODULE_NOT_FOUND' || !String(e.message).includes('mail-transport')) throw e;
+}
+
+// The Resend HTTP transport was removed. A deployment that still exports only
+// RESEND_API_KEY would otherwise lose mail without a word, so say so once.
+if (process.env.RESEND_API_KEY && !config.smtp.host && !(hosted && hosted.configured())) {
+  console.warn('[mail] RESEND_API_KEY is set but the Resend transport was removed — '
+    + 'configure SMTP instead (Resend: SMTP_HOST=smtp.resend.com SMTP_PORT=465 '
+    + 'SMTP_SECURE=true SMTP_USER=resend SMTP_PASS=<the API key>). Mail is OFF.');
+}
 
 let smtpTransport = null;
 function smtp() {
@@ -20,19 +41,37 @@ function smtp() {
   return smtpTransport;
 }
 
+// Test seam: a harness that wants to see the finished message without any
+// network sets a sink. It takes precedence over every transport (including
+// MAIL_TRANSPORT=off) and receives exactly what a transport would have sent.
+let testSink = null;
+function _setTestSink(fn) { testSink = typeof fn === 'function' ? fn : null; }
+
 function transport() {
-  if (config.mailTransport === 'resend') return config.resendApiKey ? 'resend' : null;
-  if (config.mailTransport === 'smtp') return config.smtp.host ? 'smtp' : null;
-  if (config.resendApiKey) return 'resend';
+  if (testSink) return 'test';
+  const forced = config.mailTransport;
+  if (forced === 'off') return null;
+  if (forced === 'smtp') return config.smtp.host ? 'smtp' : null;
+  if (forced && hosted && forced === hosted.name) return hosted.configured() ? 'hosted' : null;
+  if (hosted && hosted.configured()) return 'hosted';
   if (config.smtp.host) return 'smtp';
   return null;
 }
 
 function mailConfigured() { return transport() !== null; }
 
+// Which transport is active, and — for one with a readiness check — whether its
+// credential is accepted. Logged once at boot; never throws.
+async function describe() {
+  const t = transport();
+  if (t === 'hosted') return `${hosted.name} (key ${hosted.probe ? await hosted.probe() : 'unchecked'})`;
+  if (t === 'smtp') return `smtp (${config.smtp.host}:${config.smtp.port})`;
+  return t || 'none';
+}
+
 // to: array of addresses. Throws with a transport-tagged message on failure.
 //
-// `text` is the plain-text alternative and both transports carry it natively.
+// `text` is the plain-text alternative and every transport carries it.
 // It is optional because the three auth mails are a link and a sentence, but
 // anything a machine sends repeatedly should pass one: a message with no
 // text/plain part scores as bulk with most filters, and it is the only thing a
@@ -40,24 +79,18 @@ function mailConfigured() { return transport() !== null; }
 //
 // `headers` is an object of extra headers. Values must already be header-safe
 // — see `lib/alert-mail.js` `headerSafe()`; a bare CR or LF in one ends the
-// header and begins another, which in a mail is a forged Bcc.
+// header and begins another, which in a mail is a forged Bcc. A transport may
+// carry only a subset of them (the hosted one drops anything outside its
+// provider's allow-list); SMTP carries all of them.
 async function sendMail({ from, to, subject, html, text, headers }) {
   const t = transport();
-  if (!t) throw new Error('no mail transport configured (set RESEND_API_KEY or SMTP_HOST)');
+  if (!t) throw new Error('no mail transport configured (set SMTP_HOST)');
   const extra = headers && Object.keys(headers).length ? headers : undefined;
-  if (t === 'resend') {
-    const resp = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, subject, html, ...(text ? { text } : {}),
-        ...(extra ? { headers: extra } : {}) }),
-    });
-    if (!resp.ok) throw new Error(`resend ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-    return;
-  }
+  const msg = { from, to, subject, html, ...(text ? { text } : {}), ...(extra ? { headers: extra } : {}) };
+  if (t === 'test') { await testSink(msg); return; }
+  if (t === 'hosted') { await hosted.send(msg); return; }
   try {
-    await smtp().sendMail({ from, to, subject, html, ...(text ? { text } : {}),
-      ...(extra ? { headers: extra } : {}) });
+    await smtp().sendMail(msg);
   } catch (e) {
     throw new Error(`smtp: ${String(e.message).slice(0, 200)}`);
   }
@@ -74,4 +107,4 @@ border-radius:5px;text-decoration:none">${cta}</a></p>
   note ? `\n<p style="font-family:sans-serif;font-size:12px;color:#666">${note}</p>` : ''}`;
 }
 
-module.exports = { sendMail, mailConfigured, linkMail };
+module.exports = { sendMail, mailConfigured, describe, linkMail, _setTestSink };

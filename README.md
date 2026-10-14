@@ -15,7 +15,7 @@ edition with `OPSCAT_EDITION=community` (default).
 - **Log ingestion** — open HTTPS endpoints (`/v1/ingest/*`), a dependency-free
   [JS SDK](sdk/js/), OTLP/HTTP (OpenTelemetry logs + traces), Sentry and generic webhooks.
 - **Event engine** — classifies log lines, scores severity 0–100, dedupes into live
-  events, auto-opens cases, drives alert rules (Resend e-mail / Teams / webhooks).
+  events, auto-opens cases, drives alert rules (e-mail / Teams / webhooks).
 - **Server agents** — a single-file [agent](agent/) reporting heartbeat, CPU/RAM/disk/network
   metrics and (optionally) journald logs.
 - **Synthetics** — HTTP/ICMP/DNS/TCP/traceroute checks from the platform host plus any
@@ -95,8 +95,8 @@ docker compose up -d --build  # app (internal only) + Caddy (TLS on 80/443)
 ```
 
 Configuration via environment / `.env` (see `docker-compose.yml`): `OPSCAT_ADMIN_EMAIL`,
-`RESEND_API_KEY` or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE` (e-mail
-via Resend API or any SMTP relay), `OPSCAT_ALERT_FROM`, `OPSCAT_SECRET`, `OPSCAT_BASE_URL`.
+`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE` (e-mail via any SMTP relay;
+Resend users point it at `smtp.resend.com`), `OPSCAT_ALERT_FROM`, `OPSCAT_SECRET`, `OPSCAT_BASE_URL`.
 Deploys run from GitHub Actions on push to `main` (SSH → `docker-compose up -d --build`).
 
 ## Drop your logs here

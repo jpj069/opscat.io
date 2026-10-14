@@ -10,9 +10,9 @@
  *
  * The alert mail was two byte-identical copies of an `<h2>` plus a `<pre>`, in
  * one file, twenty lines apart. Nothing anywhere asserted on the BODY of a
- * mail this product sends: `e2e-alerts` deletes RESEND_API_KEY/SMTP_HOST from
- * the environment on purpose and drives ntfy, `e2e-subscribers` intercepts
- * Resend but asserts on the status-page mails. So every property below was
+ * mail this product sends: `e2e-alerts` switches mail off (MAIL_TRANSPORT=off)
+ * on purpose and drives ntfy, `e2e-subscribers` intercepts
+ * the transport but asserts on the status-page mails. So every property below was
  * true of nothing and enforced by nobody.
  *
  * Three of the checks are for defects the layout change fixed, and they are
@@ -42,7 +42,7 @@ process.env.OPSCAT_BASE_URL = 'https://opscat.test';
 // The mail transport is stubbed below, but an exported key would make
 // `mailConfigured()` true for real on a developer's machine — and the first
 // version of e2e-alerts sent live mail exactly that way.
-delete process.env.RESEND_API_KEY;
+process.env.MAIL_TRANSPORT = 'off'; // no live mail, whatever key or relay is exported
 delete process.env.SMTP_HOST;
 
 const q = require('./src/db/shim');
