@@ -1,0 +1,36 @@
+<clickhouse>
+  <!-- ClickHouse's OWN logs (system.*_log), not the product's. Mounted read-only
+       into config.d/ by docker-compose.yml and docker-compose.community.yml.
+
+       Why it exists, measured on production on 2026-11-19: the system logs held
+       12.6 GiB on a host whose whole log store is a fraction of that, and
+       text_log alone was 8 GiB, because the image's default level is `trace`
+       and every system.*_log table is created WITHOUT a TTL — they only ever
+       grow. Nothing in the product reads them; they are a debugging aid, and a
+       week is plenty for that.
+
+       It was first applied by hand (`docker cp` into the running container),
+       which a recreated container silently forgets. That is why it is here.
+
+       Two things to know before editing:
+
+       * A `<ttl>` here applies when ClickHouse CREATES the table. On an existing
+         server whose table was created with a different definition, ClickHouse
+         notices the mismatch at startup, renames the old table to
+         `<name>_0` (then `_1`, …) and creates a fresh one. So a change here
+         leaves the old data behind in a renamed table — drop it by hand
+         (`DROP TABLE system.text_log_0`) or it keeps its disk forever.
+       * `zz-` sorts it after low-memory.xml and docker_related_config.xml, so it
+         wins if either ever touches the same keys. They do not today. -->
+  <text_log><level>information</level><ttl>event_date + INTERVAL 7 DAY</ttl></text_log>
+  <query_log><ttl>event_date + INTERVAL 7 DAY</ttl></query_log>
+  <part_log><ttl>event_date + INTERVAL 7 DAY</ttl></part_log>
+  <metric_log><ttl>event_date + INTERVAL 7 DAY</ttl></metric_log>
+  <asynchronous_metric_log><ttl>event_date + INTERVAL 7 DAY</ttl></asynchronous_metric_log>
+  <processors_profile_log><ttl>event_date + INTERVAL 7 DAY</ttl></processors_profile_log>
+  <trace_log><ttl>event_date + INTERVAL 7 DAY</ttl></trace_log>
+  <error_log><ttl>event_date + INTERVAL 7 DAY</ttl></error_log>
+  <query_thread_log><ttl>event_date + INTERVAL 7 DAY</ttl></query_thread_log>
+  <query_views_log><ttl>event_date + INTERVAL 7 DAY</ttl></query_views_log>
+  <session_log><ttl>event_date + INTERVAL 7 DAY</ttl></session_log>
+</clickhouse>

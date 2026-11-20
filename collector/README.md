@@ -154,3 +154,21 @@ data, and the gateway groups by that key and forwards each group under it. So:
 | `OPSCAT_MAX_TENANTS` | `1000` | distinct keys tracked; past it, messages are dropped and counted |
 | `OPSCAT_BAD_KEY_MS` | `600000` | how long a key the server refused is ignored before it is tried again |
 | `OPSCAT_FLUSH_MS` | `2000` | how often the shipper wakes |
+
+## Tunnel mode (`OPSCAT_TUNNEL=1`)
+
+OpsCat runs this one too, behind the WireGuard interface; the inner source
+address is the tenant. The peer list comes from the server and is reconciled
+onto the interface:
+
+| Variable | Default | |
+|---|---|---|
+| `OPSCAT_POLL_MS` | `300000` | how often the peer list is reconciled after a SUCCESSFUL poll |
+| `OPSCAT_PEER_RETRY_MS` | `2000` | first retry after a FAILED poll; doubles per consecutive failure |
+| `OPSCAT_PEER_RETRY_MAX_MS` | `60000` | ceiling for that backoff (never longer than `OPSCAT_POLL_MS`) |
+
+The retry exists because the first poll of every boot fails: the gateway starts
+beside the app, which is not listening yet, and before the retry the new
+interface had no peers for a whole `OPSCAT_POLL_MS`. A failed poll logs its
+reason (`fetch failed`, or the HTTP status — `404` means the server runs no
+tunnel), the first success after failures logs `peer poll recovered`.

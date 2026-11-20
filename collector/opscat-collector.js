@@ -79,6 +79,16 @@ const IDLE_MS = num(env.OPSCAT_IDLE_MS, 300000);
 const MAX_TENANTS = num(env.OPSCAT_MAX_TENANTS, 1000);
 const BAD_KEY_MS = num(env.OPSCAT_BAD_KEY_MS, 600000);
 const POLL_MS = num(env.OPSCAT_POLL_MS, 300000);
+/* Tunnel mode: how soon a FAILED peer poll is tried again — doubled per
+ * consecutive failure and capped, then back to POLL_MS once one succeeds.
+ *
+ * Without it a failed poll waited the full POLL_MS. That is not a corner case,
+ * it is every boot: compose starts this container beside `app`, which needs
+ * several seconds before :3000 answers, so the first poll fails with "fetch
+ * failed" and the freshly created interface carries NO peers for five minutes.
+ * Seen on production on 2026-10-28 and 2026-11-19. */
+const PEER_RETRY_MS = num(env.OPSCAT_PEER_RETRY_MS, 2000);
+const PEER_RETRY_MAX_MS = num(env.OPSCAT_PEER_RETRY_MAX_MS, 60000);
 /* How often the shipper wakes. In COLLECTOR mode the server's answer wins when
  * it has one — one endpoint, one opinion — and this is the fallback until it
  * has replied. A gateway serves many endpoints and cannot take any one of their
@@ -417,6 +427,11 @@ function wgCommands(current, desired, iface) {
   return out;
 }
 
+/**
+ * One reconcile pass. Resolves TRUE when the server answered with a peer list
+ * (whatever happened to the individual `wg` calls after that), FALSE when it
+ * did not — which is what `schedulePeers` backs off on.
+ */
 async function reconcilePeers() {
   let peers;
   try {
@@ -427,13 +442,20 @@ async function reconcilePeers() {
       log('FATAL: the tunnel gateway key was refused — check OPSCAT_TUNNEL_GATEWAY_KEY');
       process.exit(3);
     }
-    if (!r.ok) return;
+    if (!r.ok) {
+      /* Used to be a bare `return` — silent. A 404 here means the app runs no
+       * tunnel (no OPSCAT_TUNNEL_GATEWAY_KEY on ITS side) and a 5xx means it is
+       * not ready; either way the interface keeps no peers, and a log line is
+       * the only place an operator can see why. */
+      log(`peer poll failed (keeping the current peers): HTTP ${r.status}`);
+      return false;
+    }
     peers = (await r.json()).peers || [];
   } catch (e) {
     // Keeping the interface as it is beats tearing every tunnel down because
     // one poll failed.
     log('peer poll failed (keeping the current peers):', e.message);
-    return;
+    return false;
   }
   let current = [];
   try {
@@ -441,7 +463,7 @@ async function reconcilePeers() {
       .split('\n').map((l) => l.trim()).filter(Boolean);
   } catch (e) {
     log(`could not read ${TUNNEL_IF} peers:`, e.message);
-    return;
+    return true;
   }
   const cmds = wgCommands(current, peers, TUNNEL_IF);
   let changed = 0;
@@ -457,6 +479,29 @@ async function reconcilePeers() {
     }
   }
   if (changed) log(`tunnel peers reconciled: ${peers.length} configured, ${changed} changed`);
+  return true;
+}
+
+/**
+ * The poll loop: POLL_MS after a success, an exponential backoff after a
+ * failure. One timer chain rather than a setInterval plus a retry timer, so two
+ * passes can never overlap and a slow server cannot stack them up.
+ *
+ * The timers are unref'd: the UDP/TCP listeners are what keep the process
+ * alive, and a pending poll must never hold up the SIGTERM flush.
+ */
+let peerFailures = 0;
+function schedulePeers(ok) {
+  let delay = POLL_MS;
+  if (ok) {
+    if (peerFailures) log(`peer poll recovered after ${peerFailures} failed attempt(s)`);
+    peerFailures = 0;
+  } else {
+    peerFailures += 1;
+    delay = Math.min(PEER_RETRY_MS * 2 ** (peerFailures - 1), PEER_RETRY_MAX_MS, POLL_MS);
+    log(`peer poll: retrying in ${delay}ms (attempt ${peerFailures + 1})`);
+  }
+  setTimeout(async () => schedulePeers(await reconcilePeers()), delay).unref();
 }
 
 // ── listeners ───────────────────────────────────────────────────────────────
@@ -649,8 +694,10 @@ async function main() {
 
   if (TUNNEL) {
     log(`opscat-syslog-tunnel → ${URL_BASE} (${TUNNEL_IF}, bound to ${BIND})`);
-    await reconcilePeers();
-    setInterval(reconcilePeers, POLL_MS).unref();
+    /* The first pass is awaited so a healthy boot has its peers before the
+     * listeners open; a failed one no longer costs a whole POLL_MS — see
+     * PEER_RETRY_MS. */
+    schedulePeers(await reconcilePeers());
     /* UDP and TCP, and NO TLS. Inside the tunnel everything is already
      * encrypted and authenticated by WireGuard, so a second handshake would buy
      * nothing and would exclude precisely the senders this mode exists for —
@@ -723,5 +770,5 @@ async function main() {
 if (require.main === module) main();
 module.exports = {
   onMessage, enqueue, streams, streamFor, newStream, flush, pollConfig,
-  reportDrops, sweepIdle, resolveCertPaths, wgCommands, TOKEN_RE, SD_NAME,
+  reportDrops, sweepIdle, resolveCertPaths, wgCommands, reconcilePeers, TOKEN_RE, SD_NAME,
 };

@@ -37,6 +37,14 @@ ORDER BY (org_id, ts)
 -- express — engine/retention.js still does that work, per org. This exists so
 -- that a sweep which stops running cannot grow the table forever: 400 days is
 -- above the largest plan (365) so it can never delete a row an org paid for.
+--
+-- `e2e-logstore` fails the build if this ever drops below the largest plan's
+-- retentionDays, and also checks that a boot leaves an EXISTING table's TTL
+-- alone: `CREATE TABLE IF NOT EXISTS` never alters a live table, so a TTL an
+-- operator set by hand survives every deploy. Do not add an `ALTER TABLE logs
+-- MODIFY TTL` here "so the repo wins" — that would rewrite a live retention
+-- decision on every boot. A deliberate change to a live TTL is an operator
+-- step, recorded in docs/OPERATIONS.md § ClickHouse retention.
 TTL toDateTime(intDiv(ts, 1000)) + INTERVAL 400 DAY
 SETTINGS index_granularity = 8192
 ;

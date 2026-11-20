@@ -318,6 +318,27 @@ async function mintKey(orgId, name) {
 async function main() {
   let chChecks = 0;
 
+  // ── 0. the table TTL is a CEILING, never a retention policy ─────────────
+  /* `engine/retention.js` deletes per org, at the org's plan ceiling. The
+   * table TTL applies to EVERY tenant at once, so a TTL below the largest
+   * plan's `retentionDays` silently deletes lines a customer pays to keep —
+   * no error, no log line, the Logs page just starts later than promised.
+   * Production carried a hand-set 180 days (2026-11-19) against Enterprise's
+   * 365; this is what turns that into a red build if it is ever committed. No
+   * ClickHouse needed: it reads the file the boot applies. */
+  {
+    const schemaSql = require('node:fs').readFileSync(
+      require('node:path').join(__dirname, 'src', 'clickhouse-schema.sql'), 'utf8')
+      .replace(/^\s*--.*$/gm, '');
+    const ttls = [...schemaSql.matchAll(/INTERVAL\s+(\d+)\s+DAY/gi)].map((m) => Number(m[1]));
+    const maxPlan = Math.max(...Object.values(require('./src/plans').PLANS)
+      .map((p) => p.limits.retentionDays).filter((d) => d > 0));
+    chk('the logs table declares a TTL at all (an empty match would pass the next check vacuously)',
+      ttls.length > 0);
+    chk(`every TTL on the logs table is at least the largest plan retention (${maxPlan} days)`,
+      ttls.length > 0 && ttls.every((d) => d >= maxPlan));
+  }
+
   // ── 1. parity ───────────────────────────────────────────────────────────
   const before = 0;
   await parity(logStore.pgStore, 'postgres', async () => {});
@@ -352,6 +373,20 @@ async function main() {
     await ch.init(client);
     chk('the ClickHouse schema applies TWICE (boot is idempotent)',
       !!(await client.get('SELECT count() AS c FROM logs', {}, { numeric: ['c'] })));
+
+    /* A boot must not undo an operator's TTL. `CREATE TABLE IF NOT EXISTS` is a
+     * no-op on an existing table, so today it cannot — and that is the property
+     * production's hand-set TTL rests on. The day somebody adds an
+     * `ALTER TABLE logs MODIFY TTL` to the schema file "so the repo wins", every
+     * deploy rewrites a live retention decision without a word; this goes red. */
+    await client.exec('ALTER TABLE logs MODIFY TTL toDateTime(intDiv(ts, 1000)) + INTERVAL 999 DAY');
+    await ch.init(client);
+    const engine = await client.get(
+      'SELECT engine_full AS e FROM system.tables WHERE database = {db:String} AND name = {t:String}',
+      { db: CH_DB, t: 'logs' });
+    chk('a boot leaves an existing table\'s TTL alone (no silent rewrite of a live decision)',
+      !!engine && /toIntervalDay\(999\)/.test(engine.e));
+    await client.exec('ALTER TABLE logs MODIFY TTL toDateTime(intDiv(ts, 1000)) + INTERVAL 400 DAY');
 
     chStore = logStore.chStore;
     const n0 = 0;

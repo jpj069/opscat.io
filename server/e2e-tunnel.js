@@ -38,6 +38,7 @@
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
+const http = require('http');
 const path = require('path');
 const dgram = require('dgram');
 const { spawn } = require('child_process');
@@ -436,6 +437,41 @@ function sendUdp(from, host, msg) {
   chk('being both gateways at once refuses to start', bothModes.out.code === 2);
   const noKey = await startTunnel({ OPSCAT_TUNNEL_GATEWAY_KEY: null }, true);
   chk('and no gateway key at all', noKey.out.code === 2);
+
+  // ── 9b. a server that is not up yet at boot ──────────────────────────────
+  /* Every production boot: compose starts the gateway beside `app`, the first
+   * peer poll fails with "fetch failed", and the interface stayed EMPTY until
+   * the next POLL_MS — five minutes, seen on 2026-10-28 and 2026-11-19. So the
+   * poll interval here is set far beyond the harness's runtime: the only way a
+   * peer can reach the stub `wg` in time is the retry path. The "server" is a
+   * stub that starts listening only after the gateway has already failed once. */
+  const LATE_PORT = 3174;
+  const lateKey = peerKey();
+  const late = await startTunnel({
+    OPSCAT_URL: `http://127.0.0.1:${LATE_PORT}`,
+    OPSCAT_TUNNEL_IF: 'late0',
+    OPSCAT_UDP_PORT: '6716', OPSCAT_TCP_PORT: '6717',
+    OPSCAT_POLL_MS: '600000',
+    OPSCAT_PEER_RETRY_MS: '100',
+  });
+  chk('a gateway whose server is not up yet still starts its listeners',
+    late.out.code === null && /listening tcp/.test(late.out.text));
+  chk('...and says the first peer poll failed',
+    /peer poll failed/.test(late.out.text) && /retrying in \d+ms/.test(late.out.text));
+  const lateServer = http.createServer((req, res) => {
+    const ok = req.url === '/v1/tunnel/peers' && req.headers.authorization === `Bearer ${GW_KEY}`;
+    res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(ok ? { peers: [{ ip: '127.0.0.9', publicKey: lateKey }] } : {}));
+  });
+  await new Promise((r) => lateServer.listen(LATE_PORT, '127.0.0.1', r));
+  onExit(() => lateServer.close());
+  const lateApplied = await untilAsync(async () => wgRan().some((l) =>
+    l === `set late0 peer ${lateKey} allowed-ips 127.0.0.9/32`), 5000);
+  chk('once the server answers, the peer is applied WITHOUT waiting a full poll interval',
+    !!lateApplied);
+  chk('...and the recovery is logged', /peer poll recovered/.test(late.out.text));
+  late.child.kill('SIGKILL');
+  lateServer.close();
 
   // ── 10. an instance with no tunnel does not have this door ───────────────
   /* 404 rather than 401: an instance running no gateway should look like one

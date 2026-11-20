@@ -259,6 +259,10 @@ services:
       # — mark_cache alone defaults to 5 GiB. This file caps the four that
       # matter and records which two knobs broke the server when they were tried.
       - ./ch-config/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      # ClickHouse's own system.*_log tables: 7 days, text_log from `information`
+      # up. Without it they grow without bound — 12.6 GiB on production before it
+      # was set by hand on 2026-11-19. See the file.
+      - ./ch-config/zz-system-log-ttl.xml:/etc/clickhouse-server/config.d/zz-system-log-ttl.xml:ro
       - opscat_chdata:/var/lib/clickhouse
     expose:
       - "8123"
